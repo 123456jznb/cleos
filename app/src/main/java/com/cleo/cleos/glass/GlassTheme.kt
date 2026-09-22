@@ -106,12 +106,12 @@ object GlassPalettes {
                 surface = GlassStyle(
                     blur = 14.dp, refraction = 12.dp, bevel = 12.dp, dispersion = 0.2f,
                     tint = Color.White.copy(alpha = 0.62f), saturation = 1.3f, lift = 0f,
-                    highlight = 0.6f, shadowAlpha = 0.07f,
+                    highlight = 0.6f, shadowAlpha = 0.07f, shadowRadius = 12.dp, shadowOffsetY = 3.dp,
                 ),
                 accentSurface = GlassStyle(
                     blur = 14.dp, refraction = 12.dp, bevel = 12.dp, dispersion = 0.2f,
                     tint = accent.copy(alpha = 0.9f), saturation = 1.2f, lift = 0f,
-                    highlight = 0.55f, shadowAlpha = 0.08f,
+                    highlight = 0.55f, shadowAlpha = 0.08f, shadowRadius = 12.dp, shadowOffsetY = 3.dp,
                 ),
                 lensRest = GlassStyle(
                     blur = 0.dp, refraction = 10.dp, bevel = 12.dp, dispersion = 0.3f,

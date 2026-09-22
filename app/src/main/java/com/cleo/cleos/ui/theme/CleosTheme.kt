@@ -66,7 +66,7 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
             GlassPalettes.build(dark)
         }
     }
-    val wallpaperBackdrop = rememberBackdrop()
+    val wallpaperBackdrop = rememberBackdrop(flat = true)
 
     val view = LocalView.current
     if (!view.isInEditMode) {

@@ -168,7 +168,11 @@ private class LiquidGlassNode(
         // NESTED_MARGIN: this layer is also where any glass *inside the backdrop* gets
         // rendered again, and that glass cannot see past this layer's edge either. The
         // margin keeps its reach inside the layer (e.g. the bar seen through the tab lens).
-        val pad = ceil(max(reach, shadowReach) + max(swellX, swellY) + blurPx * 2f + NESTED_MARGIN.toPx() + 2f).toInt()
+        // A flat backdrop has no glass in it, so nothing to make room for.
+        val nested = if (backdrop.flat) 0f else NESTED_MARGIN.toPx()
+        // 1.5x the blur radius covers the kernel (sigma is about 0.58 x radius, and 3 sigma
+        // is where the tail stops mattering) without paying for 2x.
+        val pad = ceil(max(reach, shadowReach) + max(swellX, swellY) + blurPx * 1.5f + nested + 2f).toInt()
         val layerSize = IntSize(ceil(w).toInt() + pad * 2, ceil(h).toInt() + pad * 2)
 
         l.topLeft = IntOffset(-pad, -pad)

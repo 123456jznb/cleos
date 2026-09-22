@@ -40,7 +40,14 @@ import kotlin.math.roundToInt
  * glass… Chrome that floats over a list therefore lives beside the list, not in it.
  */
 @Stable
-class Backdrop {
+class Backdrop(
+    /**
+     * True when nothing recorded here is glass (the wallpaper). Glass reading a flat
+     * backdrop can skip the extra margin that nested glass needs (see LiquidGlass), which
+     * matters because that is most glass: every bubble and card reads the wallpaper.
+     */
+    val flat: Boolean = false,
+) {
     internal var layer: GraphicsLayer? = null
     internal var coordinates: LayoutCoordinates? = null
 
@@ -54,7 +61,7 @@ class Backdrop {
 }
 
 @Composable
-fun rememberBackdrop(): Backdrop = remember { Backdrop() }
+fun rememberBackdrop(flat: Boolean = false): Backdrop = remember(flat) { Backdrop(flat) }
 
 /**
  * Records this node's content (everything drawn inside it) for glass elsewhere to read.
