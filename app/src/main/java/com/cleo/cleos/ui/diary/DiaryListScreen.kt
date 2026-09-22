@@ -106,10 +106,17 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () ->
     ) {
         val list = rows
         if (list != null && list.isEmpty()) {
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("还没有日记", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.size(6.dp))
-                Text("点右下角的笔，写第一篇", color = palette.contentSecondary, fontSize = 14.sp)
+            GlassSurface(
+                modifier = Modifier.align(Alignment.Center),
+                style = palette.notice,
+                shape = GlassShape.Rounded(22.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("还没有日记", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.size(6.dp))
+                    Text("点右下角的笔，写第一篇", color = palette.contentSecondary, fontSize = 14.sp)
+                }
             }
         }
         LazyColumn(

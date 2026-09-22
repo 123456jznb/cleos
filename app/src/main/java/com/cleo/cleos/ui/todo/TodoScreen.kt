@@ -200,10 +200,17 @@ fun TodoTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
         },
     ) {
         if (state.loaded && state.pending.isEmpty() && state.done.isEmpty()) {
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("还没有待办", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.size(6.dp))
-                Text("在下面写一件要做的事", color = palette.contentSecondary, fontSize = 14.sp)
+            GlassSurface(
+                modifier = Modifier.align(Alignment.Center),
+                style = palette.notice,
+                shape = GlassShape.Rounded(22.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("还没有待办", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.size(6.dp))
+                    Text("在下面写一件要做的事", color = palette.contentSecondary, fontSize = 14.sp)
+                }
             }
         }
         val barTop = barBottom + with(density) { barHeight.toDp() }
@@ -300,7 +307,7 @@ private fun TodoRow(
                     val date = LocalDate.ofEpochDay(day)
                     val overdue = !todo.done && date.isBefore(Dates.today())
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
-                        val color = if (overdue) Color(0xFFE5484D) else palette.accentContent
+                        val color = if (overdue) palette.error else palette.accentContent
                         Icon(Icons.Rounded.Event, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text(Dates.due(date), color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)

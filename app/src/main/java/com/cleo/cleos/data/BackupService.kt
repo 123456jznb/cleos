@@ -34,6 +34,8 @@ data class BackupSettings(
     val wallpaperDark: Boolean?,
     val wallpaperHue: Float?,
     val wallpaperChroma: Float?,
+    val wallpaperTrough: Float? = null,
+    val wallpaperPeak: Float? = null,
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -126,6 +128,8 @@ class BackupService(
                 wallpaperDark = s.wallpaperDark,
                 wallpaperHue = s.wallpaperHue,
                 wallpaperChroma = s.wallpaperChroma,
+                wallpaperTrough = s.wallpaperTrough,
+                wallpaperPeak = s.wallpaperPeak,
             ),
             conversations = db.conversations().all(),
             messages = db.messages().all(),
@@ -215,6 +219,8 @@ class BackupService(
                     wallpaperDark = bs.wallpaperDark,
                     wallpaperHue = bs.wallpaperHue,
                     wallpaperChroma = bs.wallpaperChroma,
+                    wallpaperTrough = bs.wallpaperTrough,
+                    wallpaperPeak = bs.wallpaperPeak,
                 )
             }
             settings.setCurrentConversation(null)

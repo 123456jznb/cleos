@@ -59,9 +59,15 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
         GlassMode.Dark -> true
         GlassMode.Auto -> if (custom != null) settings.wallpaperDark ?: systemDark else systemDark
     }
-    val palette = remember(dark, custom, settings.wallpaperHue, settings.wallpaperChroma) {
+    val palette = remember(dark, custom, settings.wallpaperHue, settings.wallpaperChroma, settings.wallpaperTrough, settings.wallpaperPeak) {
         if (custom != null && settings.wallpaperHue != null) {
-            GlassPalettes.build(dark, settings.wallpaperHue, WallpaperAnalyzer.chromaScale(settings.wallpaperChroma))
+            GlassPalettes.build(
+                dark = dark,
+                hue = settings.wallpaperHue,
+                chromaScale = WallpaperAnalyzer.chromaScale(settings.wallpaperChroma),
+                trough = settings.wallpaperTrough,
+                peak = settings.wallpaperPeak,
+            )
         } else {
             GlassPalettes.build(dark)
         }

@@ -29,6 +29,8 @@ data class AppSettings(
     val wallpaperDark: Boolean? = null,
     val wallpaperHue: Float? = null,
     val wallpaperChroma: Float? = null,
+    val wallpaperTrough: Float? = null,
+    val wallpaperPeak: Float? = null,
 )
 
 data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
@@ -60,6 +62,8 @@ class SettingsRepository(private val context: Context) {
         val wallpaperDark = stringPreferencesKey("wallpaper_dark")
         val wallpaperHue = floatPreferencesKey("wallpaper_hue")
         val wallpaperChroma = floatPreferencesKey("wallpaper_chroma")
+        val wallpaperTrough = floatPreferencesKey("wallpaper_trough")
+        val wallpaperPeak = floatPreferencesKey("wallpaper_peak")
         val currentConversation = stringPreferencesKey("current_conversation")
     }
 
@@ -81,6 +85,8 @@ class SettingsRepository(private val context: Context) {
             wallpaperDark = this[Keys.wallpaperDark]?.toBooleanStrictOrNull(),
             wallpaperHue = this[Keys.wallpaperHue],
             wallpaperChroma = this[Keys.wallpaperChroma],
+            wallpaperTrough = this[Keys.wallpaperTrough],
+            wallpaperPeak = this[Keys.wallpaperPeak],
         )
     }
 
@@ -98,6 +104,8 @@ class SettingsRepository(private val context: Context) {
             if (next.wallpaperDark != null) prefs[Keys.wallpaperDark] = next.wallpaperDark.toString() else prefs.remove(Keys.wallpaperDark)
             if (next.wallpaperHue != null) prefs[Keys.wallpaperHue] = next.wallpaperHue else prefs.remove(Keys.wallpaperHue)
             if (next.wallpaperChroma != null) prefs[Keys.wallpaperChroma] = next.wallpaperChroma else prefs.remove(Keys.wallpaperChroma)
+            if (next.wallpaperTrough != null) prefs[Keys.wallpaperTrough] = next.wallpaperTrough else prefs.remove(Keys.wallpaperTrough)
+            if (next.wallpaperPeak != null) prefs[Keys.wallpaperPeak] = next.wallpaperPeak else prefs.remove(Keys.wallpaperPeak)
         }
     }
 

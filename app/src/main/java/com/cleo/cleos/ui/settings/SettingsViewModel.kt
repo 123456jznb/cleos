@@ -152,6 +152,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                         wallpaperDark = tone?.dark,
                         wallpaperHue = tone?.hue,
                         wallpaperChroma = tone?.chroma,
+                        wallpaperTrough = tone?.trough,
+                        wallpaperPeak = tone?.peak,
                     )
                 }
                 if (old != null && old != stored.file) c.images.delete(listOf(old))
@@ -166,7 +168,16 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun resetWallpaper() {
         viewModelScope.launch {
             val old = settings.value.wallpaper
-            c.settings.update { it.copy(wallpaper = null, wallpaperDark = null, wallpaperHue = null, wallpaperChroma = null) }
+            c.settings.update {
+                it.copy(
+                    wallpaper = null,
+                    wallpaperDark = null,
+                    wallpaperHue = null,
+                    wallpaperChroma = null,
+                    wallpaperTrough = null,
+                    wallpaperPeak = null,
+                )
+            }
             if (old != null) c.images.delete(listOf(old))
         }
     }

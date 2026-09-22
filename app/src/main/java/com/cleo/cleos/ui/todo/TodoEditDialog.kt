@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.cleo.cleos.data.db.TodoEntity
+import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.ui.common.Dates
 import java.time.Instant
 import java.time.LocalDate
@@ -87,7 +88,7 @@ fun TodoEditDialog(
         },
         dismissButton = {
             Row {
-                TextButton(onClick = onDelete) { Text("删除", color = Color(0xFFE5484D)) }
+                TextButton(onClick = onDelete) { Text("删除", color = LocalGlassPalette.current.error) }
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
         },

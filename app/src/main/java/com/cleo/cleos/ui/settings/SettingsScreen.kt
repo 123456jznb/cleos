@@ -182,7 +182,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     }
                     if (settings.wallpaper != null) Chip("用回默认", selected = false) { vm.resetWallpaper() }
                 }
-                vm.wallpaperError?.let { Text(it, color = Color(0xFFE5484D), fontSize = 13.sp) }
+                vm.wallpaperError?.let { Text(it, color = palette.error, fontSize = 13.sp) }
                 Text("玻璃", color = palette.content, fontSize = 14.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("跟随壁纸", selected = settings.glassMode == GlassMode.Auto) { vm.setGlassMode(GlassMode.Auto) }
@@ -300,17 +300,18 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
     }
 }
 
+/** The title lives inside the card: above it, it would be bare text on the wallpaper. */
 @Composable
 private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
     val palette = LocalGlassPalette.current
-    Column {
-        Text(title, color = palette.content, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp, bottom = 6.dp))
-        GlassSurface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = GlassShape.Rounded(24.dp),
-            contentPadding = PaddingValues(16.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = GlassShape.Rounded(24.dp),
+        contentPadding = PaddingValues(16.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, color = palette.accentContent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            content()
         }
     }
 }

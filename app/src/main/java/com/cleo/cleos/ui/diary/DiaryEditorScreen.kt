@@ -175,7 +175,7 @@ fun DiaryEditorScreen(id: Long, onBack: () -> Unit, onOpenImage: (String) -> Uni
                 TextButton(onClick = {
                     confirmDelete = false
                     vm.delete(onBack)
-                }) { Text("删除", color = Color(0xFFE5484D)) }
+                }) { Text("删除", color = LocalGlassPalette.current.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
         )

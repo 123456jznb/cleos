@@ -203,12 +203,18 @@ fun ChatTab(
         if (state.loaded && !state.hasApiKey && state.messages.isEmpty()) {
             NoKeyCard(onOpenSettings, Modifier.align(Alignment.Center).padding(horizontal = 28.dp))
         } else if (state.loaded && state.messages.isEmpty() && state.streaming == null) {
-            Text(
-                if (state.aiName.isBlank()) "说点什么吧" else "和${state.aiName}说点什么吧",
-                color = palette.contentSecondary,
-                fontSize = 15.sp,
+            GlassSurface(
                 modifier = Modifier.align(Alignment.Center),
-            )
+                style = palette.notice,
+                shape = GlassShape.Capsule,
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 9.dp),
+            ) {
+                Text(
+                    if (state.aiName.isBlank()) "说点什么吧" else "和${state.aiName}说点什么吧",
+                    color = palette.contentSecondary,
+                    fontSize = 15.sp,
+                )
+            }
         }
     }
 }
@@ -290,35 +296,41 @@ private fun MessageBubble(
         }
         val error = message.error
         if (error != null) {
-            Row(
-                Modifier.padding(horizontal = 6.dp, vertical = 4.dp).widthIn(max = bubbleMaxWidth()),
-                verticalAlignment = Alignment.CenterVertically,
+            // On its own capsule: this line sits between bubbles, i.e. straight on the
+            // wallpaper, and red text over a dark photo is unreadable.
+            GlassSurface(
+                modifier = Modifier.padding(top = 4.dp).widthIn(max = bubbleMaxWidth()),
+                style = palette.notice,
+                shape = GlassShape.Rounded(14.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                Text(
-                    error,
-                    color = if (error == ChatRepository.STOPPED) palette.contentSecondary else Color(0xFFE5484D),
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (canRetry && !mine) {
-                    Spacer(Modifier.width(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "重试",
-                        color = palette.accentContent,
+                        error,
+                        color = if (error == ChatRepository.STOPPED) palette.contentSecondary else palette.error,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.combinedClickable(onClick = onRetry),
+                        lineHeight = 18.sp,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
-                }
-                if (message.content.isEmpty()) {
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        "删除",
-                        color = palette.contentSecondary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.combinedClickable(onClick = onDelete),
-                    )
+                    if (canRetry && !mine) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "重试",
+                            color = palette.accentContent,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.combinedClickable(onClick = onRetry),
+                        )
+                    }
+                    if (message.content.isEmpty()) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "删除",
+                            color = palette.contentSecondary,
+                            fontSize = 13.sp,
+                            modifier = Modifier.combinedClickable(onClick = onDelete),
+                        )
+                    }
                 }
             }
         }
