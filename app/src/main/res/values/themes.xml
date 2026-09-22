@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose draws everything; the window theme only matters for the first frame
+         and the system splash, so it just needs the right background colour. -->
+    <style name="Theme.Cleos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowSplashScreenBackground">@color/window_background</item>
+    </style>
+
+    <color name="window_background">#FFF3EEF6</color>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets the emulator reach a mock model server on the host machine
+     (10.0.2.2 is the emulator's name for the host) over plain HTTP. Release builds keep
+     the platform default, which refuses cleartext, so an API key is never sent unencrypted. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

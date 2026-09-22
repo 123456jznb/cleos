@@ -1,0 +1,13 @@
+# Keep LF in the repo and in the working tree. Windows' core.autocrlf=true would
+# otherwise hand us CRLF files, and a CRLF-only edit then shows up as a whole-file
+# rewrite in the diff.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.jar binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.ttf binary
+*.otf binary

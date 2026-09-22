@@ -1,0 +1,44 @@
+# Cleos
+
+一个安卓原生（Kotlin + Jetpack Compose）的陪伴聊天 App，界面是自己写的液态玻璃。
+除了和 TA 聊天（自己填 API），也能写日记（可以贴图）、记待办。数据都只存在手机上。
+
+- **聊天**：OpenAI 兼容接口（DeepSeek / OpenAI / 硅基流动 / Kimi / OpenRouter……），流式输出、可停止、失败可重试。可以有多段对话。
+- **日记**：文字和图片按写的顺序排，图插在光标处；边写边自动保存。
+- **待办**：可加日期和备注，完成的收起来，长按删除可撤销。
+
+需要 Android 10 以上；液态玻璃的折射要 Android 13 以上，12 只有模糊，更早的只有半透明。
+
+## 液态玻璃是怎么做的
+
+全在 `app/src/main/java/com/cleo/cleos/glass/`。
+
+1. **背景录下来**（`Backdrop.kt`）：页面内容在画的时候同时录进一个 `GraphicsLayer`。玻璃再把这层画一遍（画的是 RenderNode 引用，不是拷像素），所以列表一滚，玻璃后面同一帧就跟着变。
+2. **一个 AGSL 着色器做完所有事**（`GlassShader.kt`）：圆角矩形的 SDF 算出每个像素离边多远；边缘按四分之一圆的斜面弯折采样点（折射）；红蓝两个通道弯得不一样多（色散）；再加饱和度、着色、沿边的高光、手指按下处的光、外面的阴影。模糊在它之前做（`RenderEffect` 链）。
+3. **按下会鼓起来**：不是把控件放大（那样背景也跟着放大，对不上），而是在着色器里把轮廓长出去。
+4. **Tab 栏的透镜**（`GlassTabBar.kt`）：选中的那块本身是一块玻璃，看的是 Tab 栏自己。按住它会变大、变清、放大下面的字，拖动时按速度拉长，松手弹到最近的一格。
+5. **设置 → 玻璃实验室** 可以拖一块玻璃、调每个参数看效果。
+
+几条踩过的坑写在代码注释里（为什么要 overscan、为什么采样点要夹在屏幕内、为什么背景副本只录不画、为什么页面切换用淡入淡出不用滑动）。
+
+## 构建
+
+用 Android Studio 自带的 JDK（21）：
+
+```
+./gradlew assembleRelease
+```
+
+签名读根目录的 `keystore.properties`（已在 `.gitignore` 里，别提交）：
+
+```
+storeFile=/path/to/upload-keystore.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+有这个文件时 debug 和 release **用同一把钥匙签**：换钥匙装不上，唯一的办法是卸载，而卸载会清掉 App 里的全部数据。
+
+国内网络拉 Google Maven（dl.google.com）要代理，可以在命令行加
+`-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890`。
