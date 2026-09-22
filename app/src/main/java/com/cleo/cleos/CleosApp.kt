@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.data.BackupService
 import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
@@ -44,4 +45,5 @@ class AppContainer(context: Context) {
 
     val chatClient = ChatClient(http)
     val chat = ChatRepository(db, settings, secrets, chatClient, appScope)
+    val backup = BackupService(context, db, settings, images)
 }

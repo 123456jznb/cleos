@@ -36,6 +36,12 @@ interface ConversationDao {
 
     @Query("SELECT * FROM conversations")
     suspend fun all(): List<ConversationEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<ConversationEntity>)
+
+    @Query("DELETE FROM conversations")
+    suspend fun clear()
 }
 
 @Dao
@@ -58,6 +64,12 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages")
     suspend fun all(): List<MessageEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<MessageEntity>)
+
+    @Query("DELETE FROM messages")
+    suspend fun clear()
 }
 
 @Dao
@@ -79,6 +91,12 @@ interface DiaryDao {
 
     @Query("SELECT * FROM diary_entries")
     suspend fun all(): List<DiaryEntryEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<DiaryEntryEntity>)
+
+    @Query("DELETE FROM diary_entries")
+    suspend fun clear()
 }
 
 @Dao
@@ -98,4 +116,10 @@ interface TodoDao {
 
     @Query("SELECT * FROM todos")
     suspend fun all(): List<TodoEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<TodoEntity>)
+
+    @Query("DELETE FROM todos")
+    suspend fun clear()
 }

@@ -75,6 +75,14 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
     val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.setWallpaper(uri)
     }
+    var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+    var confirmUndo by remember { mutableStateOf(false) }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) vm.exportBackup(uri)
+    }
+    val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pendingRestore = uri
+    }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
@@ -196,6 +204,27 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 }
             }
 
+            Section("数据") {
+                Text(
+                    "把聊天、日记、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip(if (vm.backupBusy) "正在处理…" else "导出备份", selected = false) {
+                        if (!vm.backupBusy) exportPicker.launch("cleos-备份-${java.time.LocalDate.now()}.zip")
+                    }
+                    Chip("从备份恢复", selected = false) {
+                        if (!vm.backupBusy) restorePicker.launch(arrayOf("application/zip", "application/octet-stream"))
+                    }
+                }
+                if (vm.canUndoRestore) {
+                    Chip("撤销上次恢复", selected = false) { confirmUndo = true }
+                }
+                vm.backupMessage?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+            }
+
             Section("关于") {
                 val context = LocalContext.current
                 val version = remember {
@@ -210,6 +239,38 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 )
             }
         }
+    }
+
+    pendingRestore?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text("用这份备份替换现在的内容？") },
+            text = {
+                Text("现在的聊天、日记和待办会被备份里的全部替换掉。恢复之前会自动把现在的留一份，恢复完可以撤销。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRestore = null
+                    vm.restoreBackup(uri)
+                }) { Text("恢复") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("取消") } },
+        )
+    }
+
+    if (confirmUndo) {
+        AlertDialog(
+            onDismissRequest = { confirmUndo = false },
+            title = { Text("撤销上次恢复？") },
+            text = { Text("回到恢复之前的聊天、日记和待办。恢复之后新写的会没有。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUndo = false
+                    vm.undoRestore()
+                }) { Text("撤销") }
+            },
+            dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text("取消") } },
+        )
     }
 
     if (pickingModel) {

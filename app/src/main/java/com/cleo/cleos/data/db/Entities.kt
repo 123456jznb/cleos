@@ -4,7 +4,9 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
+@Serializable
 @Entity(tableName = "conversations")
 data class ConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -13,6 +15,7 @@ data class ConversationEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(
     tableName = "messages",
     indices = [Index("conversationId")],
@@ -39,6 +42,7 @@ data class MessageEntity(
     val error: String? = null,
 )
 
+@Serializable
 @Entity(tableName = "diary_entries", indices = [Index("day")])
 data class DiaryEntryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -51,6 +55,7 @@ data class DiaryEntryEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "todos")
 data class TodoEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

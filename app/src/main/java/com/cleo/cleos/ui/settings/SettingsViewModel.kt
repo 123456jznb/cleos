@@ -175,6 +175,38 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch { c.settings.update { it.copy(glassMode = mode) } }
     }
 
+    var backupBusy by mutableStateOf(false)
+        private set
+    var backupMessage by mutableStateOf<String?>(null)
+        private set
+    var canUndoRestore by mutableStateOf(c.backup.hasSnapshot)
+        private set
+
+    fun exportBackup(uri: Uri) = runBackup("导出了") { c.backup.export(uri) }
+
+    fun restoreBackup(uri: Uri) = runBackup("恢复了") { c.backup.restore(uri) }
+
+    fun undoRestore() = runBackup("撤销了，回到恢复前：") { c.backup.undoRestore() }
+
+    // App scope: a restore half done because the screen was closed is the worst outcome.
+    private fun runBackup(done: String, action: suspend () -> Any) {
+        if (backupBusy) return
+        backupBusy = true
+        backupMessage = null
+        c.appScope.launch {
+            val message = try {
+                "$done ${action()}"
+            } catch (e: Exception) {
+                (e as? com.cleo.cleos.data.BackupException)?.message ?: "出错了：${e.message ?: e.javaClass.simpleName}"
+            }
+            withContext(Dispatchers.Main) {
+                backupMessage = message
+                backupBusy = false
+                canUndoRestore = c.backup.hasSnapshot
+            }
+        }
+    }
+
     override fun onCleared() {
         val pendingKey = keyInput.trim()
         c.appScope.launch {
