@@ -47,6 +47,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -87,17 +89,31 @@ import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassSurface
 import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.glass.liquidGlass
+import com.cleo.cleos.ui.common.Avatar
 import com.cleo.cleos.ui.common.Dates
 import com.cleo.cleos.ui.common.GlassPage
 import com.cleo.cleos.ui.common.GlassTopBar
 import com.cleo.cleos.ui.common.TopBarHeight
 import com.cleo.cleos.ui.common.appViewModel
+import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /** A gap longer than this between two messages gets a time line between them. */
 private const val TIME_GAP_MS = 10 * 60 * 1000L
+
+private data class Face(val file: String?, val letter: String)
+
+/** Whose picture goes beside which bubbles; null when the chat shows no avatars. */
+private data class Faces(val me: Face, val ai: Face)
+
+private val LocalFaces = compositionLocalOf<Faces?> { null }
+private val AvatarSize = 34.dp
+private val AvatarGap = 8.dp
+
+/** What a row gives up on the avatar's side, so lines without one still line up. */
+private val AvatarSlot = AvatarSize + AvatarGap
 
 private sealed interface ChatRow {
     val key: Any
@@ -149,6 +165,14 @@ fun ChatTab(
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
     val inputBottom = if (imeBottom > bottomInset) imeBottom + 8.dp else bottomInset
     val rows = remember(state.messages) { buildRows(state.messages) }
+    val faces = if (!state.chatAvatars) {
+        null
+    } else {
+        Faces(
+            me = Face(state.userAvatar, avatarLetter(state.userName, "我")),
+            ai = Face(state.aiAvatar, avatarLetter(state.aiName, "TA")),
+        )
+    }
 
     // Follow new messages, unless the user has scrolled up to read something older.
     LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty(), state.streaming?.activity) {
@@ -185,46 +209,48 @@ fun ChatTab(
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
-        LazyColumn(
-            state = listState,
-            reverseLayout = true,
-            modifier = Modifier
-                .fillMaxSize()
-                .fadeUnderTopBar(statusTop + TopBarHeight, bottom = inputTop),
-            contentPadding = PaddingValues(
-                start = 12.dp,
-                end = 12.dp,
-                top = statusTop + TopBarHeight + 8.dp,
-                bottom = inputTop + 12.dp,
-            ),
-            // Bottom: a short conversation should sit just above the input, where the
-            // newest message is, not float up under the title. spacedBy without an
-            // alignment would put it at the top even in a reversed list.
-            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
-        ) {
-            state.streaming?.let { live ->
-                item(key = "live") { LiveBubble(live) }
-            }
-            items(rows, key = { it.key }) { row ->
-                when (row) {
-                    is ChatRow.Stamp -> TimeStamp(row.at)
-                    is ChatRow.Message -> {
-                        val m = row.message
-                        val note = m.note
-                        when {
-                            m.role == "tool" || m.role == "note" ->
-                                ToolNote(note.orEmpty(), if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome)
-                            m.role == "request" -> RequestCard(m, state.aiName, enabled = !state.replying) { grant ->
-                                vm.answerSecret(m.id, grant)
+        CompositionLocalProvider(LocalFaces provides faces) {
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .fadeUnderTopBar(statusTop + TopBarHeight, bottom = inputTop),
+                contentPadding = PaddingValues(
+                    start = 12.dp,
+                    end = 12.dp,
+                    top = statusTop + TopBarHeight + 8.dp,
+                    bottom = inputTop + 12.dp,
+                ),
+                // Bottom: a short conversation should sit just above the input, where the
+                // newest message is, not float up under the title. spacedBy without an
+                // alignment would put it at the top even in a reversed list.
+                verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
+            ) {
+                state.streaming?.let { live ->
+                    item(key = "live") { LiveBubble(live) }
+                }
+                items(rows, key = { it.key }) { row ->
+                    when (row) {
+                        is ChatRow.Stamp -> TimeStamp(row.at)
+                        is ChatRow.Message -> {
+                            val m = row.message
+                            val note = m.note
+                            when {
+                                m.role == "tool" || m.role == "note" ->
+                                    ToolNote(note.orEmpty(), if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome)
+                                m.role == "request" -> RequestCard(m, state.aiName, enabled = !state.replying) { grant ->
+                                    vm.answerSecret(m.id, grant)
+                                }
+                                // The person's answer to a request: their turn, drawn as a line on their side.
+                                m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
+                                else -> MessageBubble(
+                                    message = m,
+                                    canRetry = row.isLast && !state.replying,
+                                    onRetry = { vm.retry(m.id) },
+                                    onDelete = { vm.delete(m.id) },
+                                )
                             }
-                            // The person's answer to a request: their turn, drawn as a line on their side.
-                            m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
-                            else -> MessageBubble(
-                                message = m,
-                                canRetry = row.isLast && !state.replying,
-                                onRetry = { vm.retry(m.id) },
-                                onDelete = { vm.delete(m.id) },
-                            )
                         }
                     }
                 }
@@ -251,7 +277,12 @@ fun ChatTab(
 }
 
 @Composable
-private fun bubbleMaxWidth(): Dp = (LocalConfiguration.current.screenWidthDp * 0.78f).dp
+private fun bubbleMaxWidth(): Dp {
+    val width = LocalConfiguration.current.screenWidthDp
+    // With avatars: the list's side padding, an avatar on one side, and as much space
+    // left open on the other, so a long bubble never runs up against the far edge.
+    return if (LocalFaces.current != null) width.dp - 24.dp - AvatarSlot * 2 else (width * 0.78f).dp
+}
 
 @Composable
 private fun TimeStamp(at: Long) {
@@ -280,90 +311,98 @@ private fun MessageBubble(
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    val faces = LocalFaces.current
 
-    Column(
-        Modifier.fillMaxWidth(),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
-    ) {
-        if (message.content.isNotEmpty()) {
-            Box {
-                GlassSurface(
-                    modifier = Modifier
-                        .widthIn(max = bubbleMaxWidth())
-                        .combinedClickable(
-                            interactionSource = null,
-                            indication = null,
-                            onClick = {},
-                            onLongClick = { menu = true },
-                        ),
-                    style = if (mine) palette.bubbleMine else palette.bubble,
-                    shape = GlassShape.Rounded(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                ) {
-                    Text(
-                        message.content,
-                        color = if (mine) Color.White else palette.content,
-                        fontSize = 16.sp,
-                        lineHeight = 23.sp,
-                    )
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("复制") }, onClick = {
-                        menu = false
-                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
-                    })
-                    if (!mine && canRetry) {
-                        DropdownMenuItem(text = { Text("重新回答") }, onClick = {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+        if (faces != null && !mine) {
+            Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
+            Spacer(Modifier.width(AvatarGap))
+        }
+        Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+            if (message.content.isNotEmpty()) {
+                Box {
+                    GlassSurface(
+                        modifier = Modifier
+                            .widthIn(max = bubbleMaxWidth())
+                            .combinedClickable(
+                                interactionSource = null,
+                                indication = null,
+                                onClick = {},
+                                onLongClick = { menu = true },
+                            ),
+                        style = if (mine) palette.bubbleMine else palette.bubble,
+                        shape = GlassShape.Rounded(20.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            message.content,
+                            color = if (mine) Color.White else palette.content,
+                            fontSize = 16.sp,
+                            lineHeight = 23.sp,
+                        )
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("复制") }, onClick = {
                             menu = false
-                            onRetry()
+                            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
+                        })
+                        if (!mine && canRetry) {
+                            DropdownMenuItem(text = { Text("重新回答") }, onClick = {
+                                menu = false
+                                onRetry()
+                            })
+                        }
+                        DropdownMenuItem(text = { Text("删除") }, onClick = {
+                            menu = false
+                            onDelete()
                         })
                     }
-                    DropdownMenuItem(text = { Text("删除") }, onClick = {
-                        menu = false
-                        onDelete()
-                    })
+                }
+            }
+            val error = message.error
+            if (error != null) {
+                // On its own capsule: this line sits between bubbles, i.e. straight on the
+                // wallpaper, and red text over a dark photo is unreadable.
+                GlassSurface(
+                    modifier = Modifier.padding(top = 4.dp).widthIn(max = bubbleMaxWidth()),
+                    style = palette.notice,
+                    shape = GlassShape.Rounded(14.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            error,
+                            color = if (error == ChatRepository.STOPPED) palette.contentSecondary else palette.error,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (canRetry && !mine) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "重试",
+                                color = palette.accentContent,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.combinedClickable(onClick = onRetry),
+                            )
+                        }
+                        if (message.content.isEmpty()) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "删除",
+                                color = palette.contentSecondary,
+                                fontSize = 13.sp,
+                                modifier = Modifier.combinedClickable(onClick = onDelete),
+                            )
+                        }
+                    }
                 }
             }
         }
-        val error = message.error
-        if (error != null) {
-            // On its own capsule: this line sits between bubbles, i.e. straight on the
-            // wallpaper, and red text over a dark photo is unreadable.
-            GlassSurface(
-                modifier = Modifier.padding(top = 4.dp).widthIn(max = bubbleMaxWidth()),
-                style = palette.notice,
-                shape = GlassShape.Rounded(14.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        error,
-                        color = if (error == ChatRepository.STOPPED) palette.contentSecondary else palette.error,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (canRetry && !mine) {
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "重试",
-                            color = palette.accentContent,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.combinedClickable(onClick = onRetry),
-                        )
-                    }
-                    if (message.content.isEmpty()) {
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "删除",
-                            color = palette.contentSecondary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.combinedClickable(onClick = onDelete),
-                        )
-                    }
-                }
-            }
+        if (faces != null && mine) {
+            Spacer(Modifier.width(AvatarGap))
+            Avatar(faces.me.file, faces.me.letter, AvatarSize)
         }
     }
 }
@@ -371,28 +410,35 @@ private fun MessageBubble(
 @Composable
 private fun LiveBubble(live: StreamingReply) {
     val palette = LocalGlassPalette.current
+    val faces = LocalFaces.current
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (live.text.isNotEmpty() || live.activity == null) {
-            GlassSurface(
-                modifier = Modifier.widthIn(max = bubbleMaxWidth()),
-                style = palette.bubble,
-                shape = GlassShape.Rounded(20.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-            ) {
-                if (live.text.isEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TypingDots()
-                        if (live.thinking) {
-                            Spacer(Modifier.width(8.dp))
-                            Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+            Row {
+                if (faces != null) {
+                    Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
+                    Spacer(Modifier.width(AvatarGap))
+                }
+                GlassSurface(
+                    modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+                    style = palette.bubble,
+                    shape = GlassShape.Rounded(20.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    if (live.text.isEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TypingDots()
+                            if (live.thinking) {
+                                Spacer(Modifier.width(8.dp))
+                                Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+                            }
                         }
+                    } else {
+                        Text(live.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
                     }
-                } else {
-                    Text(live.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
                 }
             }
         }
@@ -408,7 +454,13 @@ private fun LiveBubble(live: StreamingReply) {
 @Composable
 private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, mine: Boolean = false) {
     val palette = LocalGlassPalette.current
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+    val slot = if (LocalFaces.current != null) AvatarSlot else 0.dp
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = if (mine) 0.dp else slot, end = if (mine) slot else 0.dp),
+        contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
+    ) {
         GlassSurface(
             modifier = Modifier.widthIn(max = bubbleMaxWidth()),
             style = palette.notice,
@@ -439,7 +491,9 @@ private fun RequestCard(message: MessageEntity, aiName: String, enabled: Boolean
     val request = remember(message.content) { SecretRequests.decode(message.content) } ?: return
     val who = aiName.ifBlank { "TA" }
     GlassSurface(
-        modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+        modifier = Modifier
+            .padding(start = if (LocalFaces.current != null) AvatarSlot else 0.dp)
+            .widthIn(max = bubbleMaxWidth()),
         style = palette.bubble,
         shape = GlassShape.Rounded(20.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),

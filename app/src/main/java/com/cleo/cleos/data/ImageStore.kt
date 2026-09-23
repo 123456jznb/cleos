@@ -34,8 +34,17 @@ class ImageStore(context: Context) {
      * becomes JPEG, whose missing alpha would otherwise turn transparent pixels black.
      */
     suspend fun import(uri: Uri, maxEdge: Int = 2048, prefix: String = ""): StoredImage = withContext(Dispatchers.IO) {
+        val bitmap = decode(uri, maxEdge)
+        StoredImage(write(bitmap, prefix), bitmap.width, bitmap.height).also { bitmap.recycle() }
+    }
+
+    /**
+     * Decodes [uri] upright and at most [maxEdge] on its longer side, into memory the app
+     * can crop and redraw (a hardware bitmap can be drawn but not cut).
+     */
+    suspend fun decode(uri: Uri, maxEdge: Int = 2048): Bitmap = withContext(Dispatchers.IO) {
         val source = ImageDecoder.createSource(resolver, uri)
-        val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             val w = info.size.width
             val h = info.size.height
             val scale = min(1f, maxEdge / max(w, h).toFloat())
@@ -44,15 +53,20 @@ class ImageStore(context: Context) {
             }
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
         }
+    }
+
+    /** Stores a picture the app made itself (a cropped avatar) and returns its name. */
+    suspend fun save(bitmap: Bitmap, prefix: String = ""): String = withContext(Dispatchers.IO) { write(bitmap, prefix) }
+
+    private fun write(bitmap: Bitmap, prefix: String): String {
         val png = bitmap.hasAlpha()
         val name = prefix + UUID.randomUUID().toString() + if (png) ".png" else ".jpg"
-        val out = File(dir, name)
         val tmp = File(dir, "$name.tmp")
         tmp.outputStream().use {
             bitmap.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 88, it)
         }
-        tmp.renameTo(out)
-        StoredImage(name, bitmap.width, bitmap.height).also { bitmap.recycle() }
+        tmp.renameTo(File(dir, name))
+        return name
     }
 
     fun delete(names: Collection<String>) {

@@ -232,6 +232,7 @@ class ToolBoxTest {
 private class FakeTodos : TodoDao {
     val rows = mutableListOf<TodoEntity>()
     override fun observeAll(): Flow<List<TodoEntity>> = flowOf(rows.toList())
+    override fun observeDoneCount(): Flow<Int> = flowOf(rows.count { it.done })
     override suspend fun get(id: Long) = rows.firstOrNull { it.id == id }
     override suspend fun insert(todo: TodoEntity): Long {
         val id = (rows.maxOfOrNull { it.id } ?: 0) + 1
@@ -256,6 +257,7 @@ private class FakeDiary : DiaryDao {
     val rows = mutableListOf<DiaryEntryEntity>()
     private val newest get() = rows.sortedWith(compareByDescending<DiaryEntryEntity> { it.day }.thenByDescending { it.createdAt })
     override fun observeAll(): Flow<List<DiaryEntryEntity>> = flowOf(newest)
+    override fun observeCount(): Flow<Int> = flowOf(rows.size)
     override suspend fun get(id: Long) = rows.firstOrNull { it.id == id }
 
     // The same visibility as the real queries: never a secret, only the given authors.

@@ -3,8 +3,10 @@ package com.cleo.cleos.data
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.cleo.cleos.ai.ToolGroup
@@ -44,6 +46,13 @@ data class AppSettings(
     val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Weather),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",
+    /** File names inside ImageStore, or null for the lettered circle. */
+    val userAvatar: String? = null,
+    val aiAvatar: String? = null,
+    /** Avatars beside the bubbles in the chat. */
+    val chatAvatars: Boolean = true,
+    /** LocalDate.toEpochDay() the home page counts from; null counts from the first message. */
+    val knownSince: Long? = null,
 )
 
 data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
@@ -80,6 +89,10 @@ class SettingsRepository(private val context: Context) {
         val glassTuning = stringPreferencesKey("glass_tuning")
         val tools = stringPreferencesKey("tools")
         val weatherCity = stringPreferencesKey("weather_city")
+        val userAvatar = stringPreferencesKey("user_avatar")
+        val aiAvatar = stringPreferencesKey("ai_avatar")
+        val chatAvatars = booleanPreferencesKey("chat_avatars")
+        val knownSince = longPreferencesKey("known_since")
         val currentConversation = stringPreferencesKey("current_conversation")
     }
 
@@ -106,6 +119,10 @@ class SettingsRepository(private val context: Context) {
             glassTuning = decodeTuning(this[Keys.glassTuning]),
             tools = this[Keys.tools]?.let(::decodeTools) ?: d.tools,
             weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
+            userAvatar = this[Keys.userAvatar],
+            aiAvatar = this[Keys.aiAvatar],
+            chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
+            knownSince = this[Keys.knownSince],
         )
     }
 
@@ -129,6 +146,10 @@ class SettingsRepository(private val context: Context) {
             // Always written, even when empty: "none" must not read back as "never set".
             prefs[Keys.tools] = encodeTools(next.tools)
             prefs[Keys.weatherCity] = next.weatherCity
+            if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
+            if (next.aiAvatar != null) prefs[Keys.aiAvatar] = next.aiAvatar else prefs.remove(Keys.aiAvatar)
+            prefs[Keys.chatAvatars] = next.chatAvatars
+            if (next.knownSince != null) prefs[Keys.knownSince] = next.knownSince else prefs.remove(Keys.knownSince)
         }
     }
 

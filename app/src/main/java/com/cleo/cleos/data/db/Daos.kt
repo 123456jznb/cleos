@@ -52,6 +52,18 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun get(id: Long): MessageEntity?
 
+    // For the home page: the first thing the person said, and how much was said. Lines
+    // shown instead of bubbles (notes, answers to requests) are not things said.
+
+    @Query("SELECT MIN(createdAt) FROM messages WHERE role = 'user' AND note IS NULL")
+    fun observeFirstSaid(): Flow<Long?>
+
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE role IN ('user', 'assistant') AND note IS NULL " +
+            "AND error IS NULL AND content != ''",
+    )
+    fun observeSaidCount(): Flow<Int>
+
     /** Every request to see a secret, in any conversation, oldest first. */
     @Query("SELECT * FROM messages WHERE role = 'request' ORDER BY createdAt, id")
     suspend fun requests(): List<MessageEntity>
@@ -89,6 +101,9 @@ interface DiaryDao {
 
     @Query("SELECT * FROM diary_entries WHERE id = :id")
     suspend fun get(id: Long): DiaryEntryEntity?
+
+    @Query("SELECT COUNT(*) FROM diary_entries")
+    fun observeCount(): Flow<Int>
 
     // What the model may read: never a secret, and only entries by the [authors] it is
     // allowed (its own, and the person's when reading the diary is switched on).
@@ -147,6 +162,9 @@ interface TodoDao {
 
     @Query("SELECT * FROM todos WHERE id = :id")
     suspend fun get(id: Long): TodoEntity?
+
+    @Query("SELECT COUNT(*) FROM todos WHERE done = 1")
+    fun observeDoneCount(): Flow<Int>
 
     @Insert
     suspend fun insert(todo: TodoEntity): Long

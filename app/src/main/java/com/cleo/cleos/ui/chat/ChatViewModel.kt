@@ -24,6 +24,10 @@ data class ChatUiState(
     val replying: Boolean = false,
     val hasApiKey: Boolean = true,
     val aiName: String = "",
+    val userName: String = "",
+    val aiAvatar: String? = null,
+    val userAvatar: String? = null,
+    val chatAvatars: Boolean = false,
     val model: String = "",
     val loaded: Boolean = false,
 )
@@ -65,6 +69,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 replying = live != null && !live.finished,
                 hasApiKey = hasKey,
                 aiName = s.aiName,
+                userName = s.userName,
+                aiAvatar = s.aiAvatar,
+                userAvatar = s.userAvatar,
+                chatAvatars = s.chatAvatars,
                 model = s.apiModel,
                 loaded = true,
             )

@@ -41,6 +41,11 @@ data class BackupSettings(
     /** Tool groups by name, comma-separated; absent in backups from before tools. */
     val tools: String? = null,
     val weatherCity: String = "",
+    /** File names under images/; absent in backups from before the home page. */
+    val userAvatar: String? = null,
+    val aiAvatar: String? = null,
+    val chatAvatars: Boolean = true,
+    val knownSince: Long? = null,
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -138,6 +143,10 @@ class BackupService(
                 glassTuning = s.glassTuning.takeIf { it.isNotEmpty() }?.let { encodeTuning(it) },
                 tools = encodeTools(s.tools),
                 weatherCity = s.weatherCity,
+                userAvatar = s.userAvatar,
+                aiAvatar = s.aiAvatar,
+                chatAvatars = s.chatAvatars,
+                knownSince = s.knownSince,
             ),
             conversations = db.conversations().all(),
             messages = db.messages().all(),
@@ -145,7 +154,7 @@ class BackupService(
             todos = db.todos().all(),
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
-            listOfNotNull(s.wallpaper)).toSet()
+            listOfNotNull(s.wallpaper, s.userAvatar, s.aiAvatar)).toSet()
 
         var written = 0
         ZipOutputStream(BufferedOutputStream(raw)).use { zip ->
@@ -232,6 +241,10 @@ class BackupService(
                     glassTuning = decodeTuning(bs.glassTuning),
                     tools = bs.tools?.let(::decodeTools) ?: AppSettings().tools,
                     weatherCity = bs.weatherCity,
+                    userAvatar = bs.userAvatar?.takeIf { name -> images.file(name).exists() },
+                    aiAvatar = bs.aiAvatar?.takeIf { name -> images.file(name).exists() },
+                    chatAvatars = bs.chatAvatars,
+                    knownSince = bs.knownSince,
                 )
             }
             settings.setCurrentConversation(null)

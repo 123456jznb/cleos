@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,6 +42,7 @@ import com.cleo.cleos.glass.backdropSource
 import com.cleo.cleos.glass.rememberBackdrop
 import com.cleo.cleos.ui.chat.ChatTab
 import com.cleo.cleos.ui.diary.DiaryTab
+import com.cleo.cleos.ui.home.HomeTab
 import com.cleo.cleos.ui.todo.TodoTab
 
 /**
@@ -66,6 +69,7 @@ fun MainScreen(
             GlassTab("聊天", Icons.Outlined.ChatBubbleOutline, Icons.Rounded.ChatBubble),
             GlassTab("日记", Icons.Outlined.AutoStories, Icons.Rounded.AutoStories),
             GlassTab("待办", Icons.Outlined.TaskAlt, Icons.Rounded.TaskAlt),
+            GlassTab("主页", Icons.Outlined.Home, Icons.Rounded.Home),
         )
     }
 
@@ -79,7 +83,8 @@ fun MainScreen(
                 when (tab) {
                     0 -> ChatTab(bottomInset, onOpenSettings, onOpenConversations)
                     1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
-                    else -> TodoTab(bottomInset, onOpenSettings)
+                    2 -> TodoTab(bottomInset, onOpenSettings)
+                    else -> HomeTab(bottomInset, onOpenSettings)
                 }
             }
         }
