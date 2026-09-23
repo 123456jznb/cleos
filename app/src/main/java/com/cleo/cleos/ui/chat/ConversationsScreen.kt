@@ -58,7 +58,11 @@ import kotlinx.coroutines.launch
 fun ConversationsScreen(onBack: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
-    val conversations by remember { c.db.conversations().observeAll() }.collectAsStateWithLifecycle(emptyList())
+    // Only the current TA's: each TA's conversations are theirs alone.
+    val ta by remember { c.companions.current }.collectAsStateWithLifecycle(null)
+    val conversations by remember(ta?.id) {
+        ta?.let { c.db.conversations().observeFor(it.id) } ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsStateWithLifecycle(emptyList())
     val current by remember { c.settings.currentConversation }.collectAsStateWithLifecycle(null)
     var confirm by remember { mutableStateOf<ConversationEntity?>(null) }
 
@@ -68,14 +72,14 @@ fun ConversationsScreen(onBack: () -> Unit) {
     GlassPage(
         overlay = { page ->
             GlassTopBar(
-                title = "对话记录",
+                title = ta?.name?.takeIf { it.isNotBlank() }?.let { "和${it}的对话" } ?: "对话记录",
                 subtitle = "长按可以删除",
                 backdrop = page,
                 leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回", onBack, page) },
                 trailing = {
                     GlassIconButton(Icons.Rounded.AddComment, "新对话", {
-                        c.appScope.launch {
-                            c.settings.setCurrentConversation(c.chat.newConversation())
+                        ta?.let { t ->
+                            c.appScope.launch { c.settings.setCurrentConversation(c.chat.newConversation(t.id)) }
                         }
                         onBack()
                     }, page)

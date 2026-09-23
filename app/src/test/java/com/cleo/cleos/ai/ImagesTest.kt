@@ -3,6 +3,7 @@ package com.cleo.cleos.ai
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -19,6 +20,7 @@ import java.time.ZonedDateTime
 class ImagesTest {
     private val now = ZonedDateTime.of(2026, 9, 23, 21, 0, 0, 0, ZoneId.of("Asia/Shanghai"))
     private var nextId = 0L
+    private val ta = CompanionEntity(id = 1, apiBaseUrl = "", apiModel = "", createdAt = 0)
 
     private fun said(text: String, vararg files: String) = MessageEntity(
         id = ++nextId,
@@ -46,7 +48,7 @@ class ImagesTest {
     @Test
     fun theTextNamesEachPictureSoTheModelCanPointAtOne() {
         val m = said("今天的晚霞", "a.jpg", "b.jpg")
-        val out = Prompt.messages(AppSettings(), listOf(m), now, images = true)
+        val out = Prompt.messages(AppSettings(), ta, listOf(m), now, images = true)
         val user = out.last()
         assertEquals(listOf("a.jpg", "b.jpg"), user.images)
         assertTrue(user.content, user.content.contains("（附图 #${m.id}-1 #${m.id}-2）\n今天的晚霞"))
@@ -59,7 +61,7 @@ class ImagesTest {
         val new = said("还有这些", "4.jpg", "5.jpg")
         val newer = reply("嗯")
         val newest = said("最后一张", "6.jpg")
-        val out = Prompt.messages(AppSettings(), listOf(old, mid, new, newer, newest), now, images = true)
+        val out = Prompt.messages(AppSettings(), ta, listOf(old, mid, new, newer, newest), now, images = true)
         val users = out.filter { it.role == "user" }
         // 6 + 4,5 fit in MAX_IMAGES (4); the three older ones would not, so they are named only.
         assertEquals(emptyList<String>(), users[0].images)
@@ -70,7 +72,7 @@ class ImagesTest {
 
     @Test
     fun aModelThatCantSeeIsToldSo() {
-        val out = Prompt.messages(AppSettings(), listOf(said("", "a.jpg")), now, images = false)
+        val out = Prompt.messages(AppSettings(), ta, listOf(said("", "a.jpg")), now, images = false)
         assertTrue(out.last().images.isEmpty())
         assertTrue(out.last().content.contains("你这边看不到图片"))
     }
@@ -90,18 +92,28 @@ class ImagesTest {
         val port = object : SelfAvatar {
             var used: String? = null
             var emoji: String? = null
+            val whose = mutableSetOf<Long>()
             override suspend fun picture(conversationId: Long, ref: String) = if (ref == "latest") "chat-1.jpg" else null
-            override suspend fun usePicture(file: String): Boolean { used = file; return true }
-            override suspend fun useEmoji(emoji: String) { this.emoji = emoji }
+            override suspend fun usePicture(companionId: Long, file: String): Boolean {
+                whose += companionId
+                used = file
+                return true
+            }
+            override suspend fun useEmoji(companionId: Long, emoji: String) {
+                whose += companionId
+                this.emoji = emoji
+            }
         }
         val box = ToolBox(NoTodos, NoDiary, NoWeather, avatar = port)
         val all = AppSettings(tools = ToolGroup.entries.toSet())
-        fun call(args: String) = runBlocking { box.run(ToolCall("c", "set_my_avatar", args), all, conversationId = 1) }
+        // TA 2 is the one talking: only their avatar may change.
+        fun call(args: String) = runBlocking { box.run(ToolCall("c", "set_my_avatar", args), all, conversationId = 1, companionId = 2) }
 
         assertEquals("换了新头像", call("""{"image":"latest"}""").note)
         assertEquals("chat-1.jpg", port.used)
         assertEquals("换了新头像：🌙", call("""{"emoji":"🌙"}""").note)
         assertEquals("🌙", port.emoji)
+        assertEquals(setOf(2L), port.whose)
         assertEquals("换头像没成：找不到那张图", call("""{"image":"#9-9"}""").note)
         assertEquals("换头像没成：表情太长了", call("""{"emoji":"this is a whole sentence"}""").note)
         assertEquals("换头像没成：没说换成什么", call("{}").note)

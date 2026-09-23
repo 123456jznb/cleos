@@ -9,15 +9,45 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
+interface CompanionDao {
+    @Query("SELECT * FROM companions ORDER BY createdAt, id")
+    fun observeAll(): Flow<List<CompanionEntity>>
+
+    @Query("SELECT * FROM companions ORDER BY createdAt, id")
+    suspend fun all(): List<CompanionEntity>
+
+    @Query("SELECT * FROM companions WHERE id = :id")
+    suspend fun get(id: Long): CompanionEntity?
+
+    @Insert
+    suspend fun insert(companion: CompanionEntity): Long
+
+    @Update
+    suspend fun update(companion: CompanionEntity)
+
+    @Query("DELETE FROM companions WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Insert
+    suspend fun insertAll(items: List<CompanionEntity>)
+
+    @Query("DELETE FROM companions")
+    suspend fun clear()
+}
+
+@Dao
 interface ConversationDao {
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
-    fun observeAll(): Flow<List<ConversationEntity>>
+    @Query("SELECT * FROM conversations WHERE companionId = :companionId ORDER BY updatedAt DESC")
+    fun observeFor(companionId: Long): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE companionId = :companionId ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun latestFor(companionId: Long): ConversationEntity?
+
+    @Query("SELECT id FROM conversations WHERE companionId = :companionId")
+    suspend fun idsFor(companionId: Long): List<Long>
 
     @Query("SELECT * FROM conversations WHERE id = :id")
     fun observe(id: Long): Flow<ConversationEntity?>
-
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC LIMIT 1")
-    suspend fun latest(): ConversationEntity?
 
     @Query("SELECT * FROM conversations WHERE id = :id")
     suspend fun get(id: Long): ConversationEntity?
@@ -63,21 +93,28 @@ interface MessageDao {
     )
     suspend fun latestWithImages(conversationId: Long): MessageEntity?
 
-    // For the home page: the first thing the person said, and how much was said. Lines
-    // shown instead of bubbles (notes, answers to requests) are not things said.
-
-    @Query("SELECT MIN(createdAt) FROM messages WHERE role = 'user' AND note IS NULL")
-    fun observeFirstSaid(): Flow<Long?>
+    // For the home page, with one TA: the first thing the person said to them, and how
+    // much was said. Lines shown instead of bubbles (notes, answers) are not things said.
 
     @Query(
-        "SELECT COUNT(*) FROM messages WHERE role IN ('user', 'assistant') AND note IS NULL " +
-            "AND error IS NULL AND content != ''",
+        "SELECT MIN(m.createdAt) FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role = 'user' AND m.note IS NULL",
     )
-    fun observeSaidCount(): Flow<Int>
+    fun observeFirstSaid(companionId: Long): Flow<Long?>
 
-    /** Every request to see a secret, in any conversation, oldest first. */
-    @Query("SELECT * FROM messages WHERE role = 'request' ORDER BY createdAt, id")
-    suspend fun requests(): List<MessageEntity>
+    @Query(
+        "SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role IN ('user', 'assistant') AND m.note IS NULL " +
+            "AND m.error IS NULL AND m.content != ''",
+    )
+    fun observeSaidCount(companionId: Long): Flow<Int>
+
+    /** One TA's requests to see a secret, from any of their conversations, oldest first. */
+    @Query(
+        "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role = 'request' ORDER BY m.createdAt, m.id",
+    )
+    suspend fun requestsBy(companionId: Long): List<MessageEntity>
 
     @Query("UPDATE messages SET content = :content WHERE id = :id")
     suspend fun setContent(id: Long, content: String)
@@ -113,20 +150,29 @@ interface DiaryDao {
     @Query("SELECT * FROM diary_entries WHERE id = :id")
     suspend fun get(id: Long): DiaryEntryEntity?
 
-    @Query("SELECT COUNT(*) FROM diary_entries")
-    fun observeCount(): Flow<Int>
+    /** How many entries one TA has written. */
+    @Query("SELECT COUNT(*) FROM diary_entries WHERE author = 'ai' AND companionId = :companionId")
+    fun observeWrittenBy(companionId: Long): Flow<Int>
 
-    // What the model may read: never a secret, and only entries by the [authors] it is
-    // allowed (its own, and the person's when reading the diary is switched on).
+    @Query("DELETE FROM diary_entries WHERE author = 'ai' AND companionId = :companionId")
+    suspend fun deleteWrittenBy(companionId: Long)
 
-    @Query("SELECT * FROM diary_entries WHERE day = :day AND secret = 0 AND author IN (:authors) ORDER BY createdAt")
-    suspend fun onDay(day: Long, authors: List<String>): List<DiaryEntryEntity>
+    // What a TA may read: never a secret; the person's entries when [mine] (reading the
+    // diary is switched on); of the TAs' entries only [own]'s, pass -1 for none. Another
+    // TA's diary is never among them.
 
     @Query(
-        "SELECT * FROM diary_entries WHERE secret = 0 AND author IN (:authors) " +
+        "SELECT * FROM diary_entries WHERE day = :day AND secret = 0 " +
+            "AND ((:mine AND author = 'me') OR (author = 'ai' AND companionId = :own)) ORDER BY createdAt",
+    )
+    suspend fun onDay(day: Long, mine: Boolean, own: Long): List<DiaryEntryEntity>
+
+    @Query(
+        "SELECT * FROM diary_entries WHERE secret = 0 " +
+            "AND ((:mine AND author = 'me') OR (author = 'ai' AND companionId = :own)) " +
             "ORDER BY day DESC, createdAt DESC LIMIT :limit",
     )
-    suspend fun recent(authors: List<String>, limit: Int): List<DiaryEntryEntity>
+    suspend fun recent(mine: Boolean, own: Long, limit: Int): List<DiaryEntryEntity>
 
     /**
      * Candidates for a keyword, newest first. [pattern] is a LIKE pattern with `!` as the
@@ -134,11 +180,12 @@ interface DiaryDao {
      * so callers check the plain text again.
      */
     @Query(
-        "SELECT * FROM diary_entries WHERE secret = 0 AND author IN (:authors) " +
+        "SELECT * FROM diary_entries WHERE secret = 0 " +
+            "AND ((:mine AND author = 'me') OR (author = 'ai' AND companionId = :own)) " +
             "AND (title LIKE :pattern ESCAPE '!' OR blocks LIKE :pattern ESCAPE '!') " +
             "ORDER BY day DESC, createdAt DESC LIMIT :limit",
     )
-    suspend fun search(pattern: String, authors: List<String>, limit: Int): List<DiaryEntryEntity>
+    suspend fun search(pattern: String, mine: Boolean, own: Long, limit: Int): List<DiaryEntryEntity>
 
     @Query("SELECT * FROM diary_entries WHERE secret = 1 ORDER BY day DESC, createdAt DESC")
     suspend fun secrets(): List<DiaryEntryEntity>

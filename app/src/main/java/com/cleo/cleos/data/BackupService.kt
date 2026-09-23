@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
 import com.cleo.cleos.data.db.AppDatabase
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.MessageEntity
@@ -21,6 +22,11 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+/**
+ * The settings in a backup. apiBaseUrl through knownSince described the one TA of before
+ * there could be several; a newer backup fills them from the first TA and restores all of
+ * them from [BackupFile.companions].
+ */
 @Serializable
 data class BackupSettings(
     val apiBaseUrl: String,
@@ -61,6 +67,8 @@ data class BackupFile(
     val messages: List<MessageEntity>,
     val diary: List<DiaryEntryEntity>,
     val todos: List<TodoEntity>,
+    /** Absent in backups from before there could be several TAs. */
+    val companions: List<CompanionEntity> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "cleos-backup"
@@ -68,8 +76,8 @@ data class BackupFile(
     }
 }
 
-data class BackupSummary(val conversations: Int, val messages: Int, val diary: Int, val todos: Int, val images: Int) {
-    override fun toString() = "$conversations 段对话（$messages 条消息）、$diary 篇日记、$todos 条待办、$images 张图"
+data class BackupSummary(val tas: Int, val conversations: Int, val messages: Int, val diary: Int, val todos: Int, val images: Int) {
+    override fun toString() = "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$todos 条待办、$images 张图"
 }
 
 class BackupException(message: String) : Exception(message)
@@ -123,16 +131,18 @@ class BackupService(
 
     private suspend fun write(raw: OutputStream): BackupSummary {
         val s = settings.current()
+        val companions = db.companions().all()
+        val lead = companions.firstOrNull()
         val data = BackupFile(
             format = BackupFile.FORMAT,
             version = BackupFile.VERSION,
             exportedAt = System.currentTimeMillis(),
             settings = BackupSettings(
-                apiBaseUrl = s.apiBaseUrl,
-                apiModel = s.apiModel,
-                aiName = s.aiName,
+                apiBaseUrl = lead?.apiBaseUrl ?: ApiPresets.DeepSeek.baseUrl,
+                apiModel = lead?.apiModel ?: ApiPresets.DeepSeek.defaultModel,
+                aiName = lead?.name.orEmpty(),
                 userName = s.userName,
-                persona = s.persona,
+                persona = lead?.persona.orEmpty(),
                 historySize = s.historySize,
                 wallpaper = s.wallpaper,
                 glassMode = s.glassMode.name,
@@ -145,19 +155,21 @@ class BackupService(
                 tools = encodeTools(s.tools),
                 weatherCity = s.weatherCity,
                 userAvatar = s.userAvatar,
-                aiAvatar = s.aiAvatar,
-                aiAvatarEmoji = s.aiAvatarEmoji,
+                aiAvatar = lead?.avatar,
+                aiAvatarEmoji = lead?.avatarEmoji,
                 chatAvatars = s.chatAvatars,
-                knownSince = s.knownSince,
+                knownSince = lead?.knownSince,
             ),
             conversations = db.conversations().all(),
             messages = db.messages().all(),
             diary = db.diary().all(),
             todos = db.todos().all(),
+            companions = companions,
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
             data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
-            listOfNotNull(s.wallpaper, s.userAvatar, s.aiAvatar)).toSet()
+            companions.mapNotNull { it.avatar } +
+            listOfNotNull(s.wallpaper, s.userAvatar)).toSet()
 
         var written = 0
         ZipOutputStream(BufferedOutputStream(raw)).use { zip ->
@@ -173,7 +185,7 @@ class BackupService(
                 written++
             }
         }
-        return BackupSummary(data.conversations.size, data.messages.size, data.diary.size, data.todos.size, written)
+        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.todos.size, written)
     }
 
     private suspend fun restoreFrom(input: InputStream, takeSnapshot: Boolean): BackupSummary {
@@ -215,24 +227,43 @@ class BackupService(
                 val dest = images.file(f.name)
                 if (!dest.exists()) f.copyTo(dest)
             }
+            val bs = d.settings
+            fun picture(name: String?) = name?.takeIf { images.file(it).exists() }
+            // A backup from before there could be several TAs has one, described in its settings.
+            val companions = d.companions.ifEmpty {
+                listOf(
+                    CompanionEntity(
+                        id = Companions.FIRST,
+                        name = bs.aiName,
+                        persona = bs.persona,
+                        apiBaseUrl = bs.apiBaseUrl,
+                        apiModel = bs.apiModel,
+                        avatar = bs.aiAvatar,
+                        avatarEmoji = bs.aiAvatarEmoji,
+                        knownSince = bs.knownSince,
+                        createdAt = d.exportedAt,
+                    ),
+                )
+            }.map { it.copy(avatar = picture(it.avatar)) }
+            // TA entries in such a backup carry no owner: they were all TA 1's.
+            val diary = d.diary.map {
+                if (it.author == DiaryEntryEntity.AUTHOR_AI && it.companionId == null) it.copy(companionId = Companions.FIRST) else it
+            }
             db.withTransaction {
                 db.messages().clear()
                 db.conversations().clear()
                 db.diary().clear()
                 db.todos().clear()
+                db.companions().clear()
+                db.companions().insertAll(companions)
                 db.conversations().insertAll(d.conversations)
                 db.messages().insertAll(d.messages)
-                db.diary().insertAll(d.diary)
+                db.diary().insertAll(diary)
                 db.todos().insertAll(d.todos)
             }
-            val bs = d.settings
             settings.update {
                 it.copy(
-                    apiBaseUrl = bs.apiBaseUrl,
-                    apiModel = bs.apiModel,
-                    aiName = bs.aiName,
                     userName = bs.userName,
-                    persona = bs.persona,
                     historySize = bs.historySize,
                     wallpaper = bs.wallpaper?.takeIf { name -> images.file(name).exists() },
                     glassMode = runCatching { GlassMode.valueOf(bs.glassMode) }.getOrDefault(GlassMode.Auto),
@@ -244,15 +275,13 @@ class BackupService(
                     glassTuning = decodeTuning(bs.glassTuning),
                     tools = bs.tools?.let(::decodeTools) ?: AppSettings().tools,
                     weatherCity = bs.weatherCity,
-                    userAvatar = bs.userAvatar?.takeIf { name -> images.file(name).exists() },
-                    aiAvatar = bs.aiAvatar?.takeIf { name -> images.file(name).exists() },
-                    aiAvatarEmoji = bs.aiAvatarEmoji,
+                    userAvatar = picture(bs.userAvatar),
                     chatAvatars = bs.chatAvatars,
-                    knownSince = bs.knownSince,
                 )
             }
+            settings.setCurrentCompanion(companions.first().id)
             settings.setCurrentConversation(null)
-            return BackupSummary(d.conversations.size, d.messages.size, d.diary.size, d.todos.size, pictures.size)
+            return BackupSummary(companions.size, d.conversations.size, d.messages.size, d.diary.size, d.todos.size, pictures.size)
         } finally {
             staging.deleteRecursively()
         }

@@ -17,8 +17,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,6 +33,8 @@ data class ChatUiState(
     /** A reply is under way here (the stop button), including while its tools run. */
     val replying: Boolean = false,
     val hasApiKey: Boolean = true,
+    /** The TA this conversation is with. */
+    val companionId: Long = 0,
     val aiName: String = "",
     val userName: String = "",
     val aiAvatar: String? = null,
@@ -44,9 +49,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val conversationId = MutableStateFlow<Long?>(null)
 
     init {
+        // The conversation shown is always the current TA's: switching TA opens their latest.
         viewModelScope.launch {
-            c.settings.currentConversation.collect { remembered ->
-                val id = c.chat.resolveConversation(remembered)
+            combine(c.settings.currentConversation, c.companions.current.map { it.id }.distinctUntilChanged()) { remembered, ta ->
+                remembered to ta
+            }.collect { (remembered, ta) ->
+                val id = c.chat.resolveConversation(remembered, ta)
                 if (id != remembered) c.settings.setCurrentConversation(id)
                 conversationId.value = id
             }
@@ -55,12 +63,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<ChatUiState> = conversationId.filterNotNull().flatMapLatest { id ->
+        // The TA of the conversation on screen. Right after a switch that is still the
+        // previous TA, until their latest conversation has been found.
+        val ta = combine(c.db.conversations().observe(id), c.companions.all) { conversation, list ->
+            list.firstOrNull { it.id == conversation?.companionId } ?: list.firstOrNull()
+        }.filterNotNull()
         combine(
             c.db.messages().observe(id),
             c.chat.streaming,
-            c.secrets.hasApiKey,
+            ta,
+            ta.map { it.apiBaseUrl }.distinctUntilChanged().flatMapLatest { c.secrets.hasKey(it) },
             c.settings.settings,
-        ) { messages, streaming, hasKey, s ->
+        ) { messages, streaming, ta, hasKey, s ->
             val live = streaming?.takeIf { it.conversationId == id }
             // Once the stored copy of the live text is in the list, the live one steps
             // aside: all of it when the reply is over, only the text while tools still run.
@@ -76,13 +90,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 },
                 replying = live != null && !live.finished,
                 hasApiKey = hasKey,
-                aiName = s.aiName,
+                companionId = ta.id,
+                aiName = ta.name,
                 userName = s.userName,
-                aiAvatar = s.aiAvatar,
-                aiAvatarEmoji = s.aiAvatarEmoji,
+                aiAvatar = ta.avatar,
+                aiAvatarEmoji = ta.avatarEmoji,
                 userAvatar = s.userAvatar,
                 chatAvatars = s.chatAvatars,
-                model = s.apiModel,
+                model = ta.apiModel,
                 loaded = true,
             )
         }
@@ -140,7 +155,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun newConversation() {
         viewModelScope.launch {
             if (state.value.messages.isEmpty() && conversationId.value != null) return@launch
-            c.settings.setCurrentConversation(c.chat.newConversation())
+            c.settings.setCurrentConversation(c.chat.newConversation(c.companions.current.first().id))
+        }
+    }
+
+    fun switchTo(companionId: Long) {
+        viewModelScope.launch { c.companions.select(companionId) }
+    }
+
+    /** A new TA, chosen right away; [then] opens their settings to name them and pick a model. */
+    fun addCompanion(then: () -> Unit) {
+        viewModelScope.launch {
+            c.companions.add()
+            then()
         }
     }
 }

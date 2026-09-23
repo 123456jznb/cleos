@@ -70,7 +70,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassButton
 import com.cleo.cleos.glass.GlassIconButton
@@ -95,8 +94,9 @@ private val ToolbarHeight = 52.dp
 fun DiaryEditorScreen(id: Long, startSecret: Boolean = false, onBack: () -> Unit, onOpenImage: (String) -> Unit) {
     val vm = appViewModel(key = "diary-$id") { DiaryEditorViewModel(it, id, startSecret) }
     val c = appContainer()
-    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
-    val ai = settings.aiName.trim().ifEmpty { "TA" }
+    // A TA's entry is labelled with that TA; a secret is kept from every TA.
+    val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
+    val ai = companions.firstOrNull { it.id == vm.companionId }?.name?.trim()?.ifEmpty { null } ?: "TA"
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current

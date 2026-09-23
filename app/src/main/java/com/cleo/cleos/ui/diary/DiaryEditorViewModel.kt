@@ -55,6 +55,10 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long, startSe
     var author by mutableStateOf(DiaryEntryEntity.AUTHOR_ME)
         private set
 
+    /** For a TA's entry, which TA. */
+    var companionId by mutableStateOf<Long?>(null)
+        private set
+
     /** The model's own entries are read, not edited: they are its words. */
     val readOnly: Boolean get() = author == DiaryEntryEntity.AUTHOR_AI
     val blocks = mutableStateListOf<EditorBlock>()
@@ -82,6 +86,7 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long, startSe
                     createdAt = e.createdAt
                     secret = e.secret
                     author = e.author
+                    companionId = e.companionId
                     DiaryBlocks.decode(e.blocks).forEach { b ->
                         when (b) {
                             is DiaryBlock.Text -> blocks += EditorBlock.Text(nextKey++, TextFieldValue(b.text))
@@ -161,6 +166,7 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long, startSe
                 updatedAt = System.currentTimeMillis(),
                 author = author,
                 secret = secret,
+                companionId = companionId,
             )
             if (entryId == 0L) entryId = c.db.diary().insert(entity) else c.db.diary().update(entity)
         }

@@ -83,6 +83,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
     }
     var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) vm.exportBackup(uri)
     }
@@ -111,7 +112,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 .padding(start = 14.dp, end = 14.dp, top = statusTop + TopBarHeight + 8.dp, bottom = navBottom + 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Section("模型") {
+            val ta = vm.aiName.trim().ifEmpty { "TA" }
+            Section("${ta}的模型") {
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -138,6 +140,12 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                         Chip("清除", selected = false) { vm.clearKey() }
                     }
                 }
+                Text(
+                    "每个 TA 用自己的模型。Key 跟着接口地址存：同一个地址的几个 TA 共用一个 Key，填一次就够。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
                 Field("模型", vm.model, { vm.model = it })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Chip(if (vm.checking) "正在连接…" else "测试并列出模型", selected = false) { if (!vm.checking) vm.check() }
@@ -177,6 +185,9 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                 )
+                if (vm.companionCount > 1) {
+                    Chip("删除$ta", selected = false) { confirmDelete = true }
+                }
             }
 
             Section("TA 能做的事") {
@@ -249,7 +260,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
 
             Section("数据") {
                 Text(
-                    "把聊天、日记、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
+                    "把每个 TA、聊天、日记、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
@@ -289,7 +300,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
             onDismissRequest = { pendingRestore = null },
             title = { Text("用这份备份替换现在的内容？") },
             text = {
-                Text("现在的聊天、日记和待办会被备份里的全部替换掉。恢复之前会自动把现在的留一份，恢复完可以撤销。")
+                Text("现在的 TA、聊天、日记和待办会被备份里的全部替换掉。恢复之前会自动把现在的留一份，恢复完可以撤销。")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -301,11 +312,27 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
         )
     }
 
+    if (confirmDelete) {
+        val ta = vm.aiName.trim().ifEmpty { "这个 TA" }
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除$ta？") },
+            text = { Text("和${ta}的所有对话、${ta}写的日记会一起删掉，删了找不回来。你自己的日记和待办不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    vm.deleteCompanion(onBack)
+                }) { Text("删除", color = palette.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        )
+    }
+
     if (confirmUndo) {
         AlertDialog(
             onDismissRequest = { confirmUndo = false },
             title = { Text("撤销上次恢复？") },
-            text = { Text("回到恢复之前的聊天、日记和待办。恢复之后新写的会没有。") },
+            text = { Text("回到恢复之前的 TA、聊天、日记和待办。恢复之后新写的会没有。") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmUndo = false

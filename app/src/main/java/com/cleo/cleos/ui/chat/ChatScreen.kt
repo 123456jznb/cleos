@@ -44,11 +44,13 @@ import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
@@ -181,6 +183,9 @@ fun ChatTab(
 ) {
     val vm = appViewModel { ChatViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val c = appContainer()
+    val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
+    var switching by remember { mutableStateOf(false) }
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -210,14 +215,40 @@ fun ChatTab(
 
     GlassPage(
         overlay = { page ->
+            // The title is the TA; tapping it switches to another one or adds one.
             GlassTopBar(
                 title = state.aiName.ifBlank { "聊天" },
-                subtitle = state.model.takeIf { it.isNotBlank() },
+                subtitle = state.model.takeIf { it.isNotBlank() }?.let { "$it ▾" },
                 backdrop = page,
                 leading = { GlassIconButton(Icons.Rounded.Forum, "对话记录", onOpenConversations, page) },
                 trailing = {
                     GlassIconButton(Icons.Rounded.AddComment, "新对话", vm::newConversation, page)
                     GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page)
+                },
+                onTitleClick = { switching = true },
+                titleMenu = {
+                    DropdownMenu(expanded = switching, onDismissRequest = { switching = false }) {
+                        companions.forEach { ta ->
+                            val here = ta.id == state.companionId
+                            DropdownMenuItem(
+                                text = { Text(ta.name.ifBlank { "TA" }, fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal) },
+                                leadingIcon = { Avatar(ta.avatar, ta.avatarEmoji ?: avatarLetter(ta.name, "TA"), 28.dp) },
+                                trailingIcon = if (here) ({ Icon(Icons.Rounded.Check, contentDescription = "正在聊") }) else null,
+                                onClick = {
+                                    switching = false
+                                    if (!here) vm.switchTo(ta.id)
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("添加一个 TA") },
+                            leadingIcon = { Icon(Icons.Rounded.PersonAdd, contentDescription = null) },
+                            onClick = {
+                                switching = false
+                                vm.addCompanion(onOpenSettings)
+                            },
+                        )
+                    }
                 },
             )
             ChatInputBar(

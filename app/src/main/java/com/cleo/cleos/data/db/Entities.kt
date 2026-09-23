@@ -7,13 +7,37 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
+/**
+ * One TA: who they are and which model speaks for them. Each has their own conversations
+ * and their own diary entries; they don't see each other's.
+ */
 @Serializable
-@Entity(tableName = "conversations")
+@Entity(tableName = "companions")
+data class CompanionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String = "",
+    /** Written by the person, sent as-is. Empty means no persona at all. */
+    val persona: String = "",
+    val apiBaseUrl: String,
+    val apiModel: String,
+    /** A picture in ImageStore; or an emoji TA picked for itself; neither means the initial. */
+    val avatar: String? = null,
+    val avatarEmoji: String? = null,
+    /** LocalDate.toEpochDay() the home page counts from; null counts from the first message. */
+    val knownSince: Long? = null,
+    val createdAt: Long,
+)
+
+@Serializable
+@Entity(tableName = "conversations", indices = [Index("companionId")])
 data class ConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
     val createdAt: Long,
     val updatedAt: Long,
+    /** Whose conversation it is. Everything from before there were several TAs is TA 1's. */
+    @ColumnInfo(defaultValue = "1")
+    val companionId: Long = 1,
 )
 
 @Serializable
@@ -86,6 +110,8 @@ data class DiaryEntryEntity(
      */
     @ColumnInfo(defaultValue = "0")
     val secret: Boolean = false,
+    /** For [AUTHOR_AI]: which TA wrote it. Null for the person's own entries. */
+    val companionId: Long? = null,
 ) {
     companion object {
         const val AUTHOR_ME = "me"

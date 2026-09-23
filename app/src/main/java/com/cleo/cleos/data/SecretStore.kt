@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.cleo.cleos.ai.ApiEndpoint
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -20,7 +21,9 @@ import javax.crypto.spec.GCMParameterSpec
 private val Context.secretsStore by preferencesDataStore(name = "secrets")
 
 /**
- * The API key, encrypted with an AES key that lives in the Android Keystore.
+ * API keys, encrypted with an AES key that lives in the Android Keystore. They are filed
+ * by service address, not by TA: two TAs on the same service share one key, and a TA moved
+ * back to a service used before finds its key still there.
  *
  * The keystore key cannot be exported, so the stored ciphertext is useless anywhere but
  * this install on this phone. That is also why the file is excluded from backups (see
@@ -29,21 +32,33 @@ private val Context.secretsStore by preferencesDataStore(name = "secrets")
  * app crashing.
  */
 class SecretStore(private val context: Context) {
-    private val apiKeyPref = stringPreferencesKey("api_key")
+    /** The one key of before there were several TAs; [adoptLegacyKey] files it under its address. */
+    private val legacyPref = stringPreferencesKey("api_key")
 
-    val hasApiKey: Flow<Boolean> = context.secretsStore.data.map { !it[apiKeyPref].isNullOrEmpty() }
+    private fun pref(baseUrl: String) = stringPreferencesKey("api_key:" + addressOf(baseUrl))
 
-    suspend fun apiKey(): String? {
-        val stored = context.secretsStore.data.first()[apiKeyPref] ?: return null
+    fun hasKey(baseUrl: String): Flow<Boolean> = context.secretsStore.data.map { !it[pref(baseUrl)].isNullOrEmpty() }
+
+    suspend fun key(baseUrl: String): String? {
+        val stored = context.secretsStore.data.first()[pref(baseUrl)] ?: return null
         return runCatching { decrypt(stored) }
             .onFailure { Log.w(TAG, "stored API key could not be decrypted; treating as unset", it) }
             .getOrNull()
     }
 
-    suspend fun setApiKey(value: String?) {
+    suspend fun setKey(baseUrl: String, value: String?) {
         val trimmed = value?.trim().orEmpty()
         context.secretsStore.edit {
-            if (trimmed.isEmpty()) it.remove(apiKeyPref) else it[apiKeyPref] = encrypt(trimmed)
+            if (trimmed.isEmpty()) it.remove(pref(baseUrl)) else it[pref(baseUrl)] = encrypt(trimmed)
+        }
+    }
+
+    /** Files the one key of before under the address it was used with; the ciphertext moves as is. */
+    suspend fun adoptLegacyKey(baseUrl: String) {
+        context.secretsStore.edit { prefs ->
+            val old = prefs[legacyPref] ?: return@edit
+            if (prefs[pref(baseUrl)] == null) prefs[pref(baseUrl)] = old
+            prefs.remove(legacyPref)
         }
     }
 
@@ -85,3 +100,6 @@ class SecretStore(private val context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
+
+/** An address the way keys are filed: the chat URL, lower-cased, so ".../v1" and ".../v1/" are one. */
+internal fun addressOf(baseUrl: String): String = ApiEndpoint(baseUrl, "", "").chatUrl.lowercase()

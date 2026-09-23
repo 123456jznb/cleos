@@ -1,5 +1,6 @@
 package com.cleo.cleos.ui.common
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -72,6 +73,9 @@ fun GlassTopBar(
     subtitle: String? = null,
     leading: @Composable RowScope.() -> Unit = {},
     trailing: @Composable RowScope.() -> Unit = {},
+    /** Makes the title a button; [titleMenu] is drawn next to it, e.g. a menu it opens. */
+    onTitleClick: (() -> Unit)? = null,
+    titleMenu: @Composable () -> Unit = {},
 ) {
     val palette = LocalGlassPalette.current
     CompositionLocalProvider(LocalGlassChrome provides palette.topBar) {
@@ -89,6 +93,9 @@ fun GlassTopBar(
             Box(
                 Modifier
                     .liquidGlass(backdrop, palette.topBarTitle, GlassShape.Capsule)
+                    .then(
+                        if (onTitleClick == null) Modifier else Modifier.clickable(interactionSource = null, indication = null, onClick = onTitleClick),
+                    )
                     .padding(horizontal = 18.dp, vertical = if (subtitle == null) 10.dp else 6.dp),
             ) {
                 androidx.compose.foundation.layout.Column {
@@ -104,6 +111,7 @@ fun GlassTopBar(
                         Text(subtitle, color = palette.contentSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
+                titleMenu()
             }
         }
         Spacer(Modifier.width(10.dp))

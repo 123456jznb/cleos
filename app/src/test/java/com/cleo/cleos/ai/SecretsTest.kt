@@ -3,6 +3,7 @@ package com.cleo.cleos.ai
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.MessageEntity
 import org.junit.Assert.assertEquals
@@ -58,7 +59,8 @@ class SecretsTest {
                 content = "（我没给你看 2026-09-23 的那个小秘密）", note = "没给Song看9月23日的小秘密",
             ),
         )
-        val out = Prompt.messages(AppSettings(), history, now, setOf(ToolGroup.Secrets))
+        val ta = CompanionEntity(id = 1, apiBaseUrl = "", apiModel = "", createdAt = 0)
+        val out = Prompt.messages(AppSettings(), ta, history, now, setOf(ToolGroup.Secrets))
         assertEquals(listOf("system", "user", "assistant", "user"), out.map { it.role })
         assertTrue(out.last().content.endsWith("（我没给你看 2026-09-23 的那个小秘密）"))
         assertFalse(out.any { it.content.contains("标题只给人看") || it.content.contains("没给Song看") })

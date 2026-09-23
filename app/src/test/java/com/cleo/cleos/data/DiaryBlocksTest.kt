@@ -2,6 +2,7 @@ package com.cleo.cleos.data
 
 import com.cleo.cleos.ai.ApiEndpoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class DiaryBlocksTest {
@@ -34,5 +35,13 @@ class ApiEndpointTest {
         assertEquals("https://api.openai.com/v1/chat/completions", ApiEndpoint("https://api.openai.com/v1/", "k", "m").chatUrl)
         assertEquals("https://x.io/v1/chat/completions", ApiEndpoint(" https://x.io/v1/chat/completions ", "k", "m").chatUrl)
         assertEquals("https://x.io/v1/models", ApiEndpoint("https://x.io/v1/chat/completions", "k", "m").modelsUrl)
+    }
+
+    @Test
+    fun keysAreFiledByAddressHoweverItIsWritten() {
+        val a = addressOf("https://api.deepseek.com")
+        assertEquals(a, addressOf(" https://API.DeepSeek.com/ "))
+        assertEquals(a, addressOf("https://api.deepseek.com/chat/completions"))
+        assertNotEquals(a, addressOf("https://api.openai.com/v1"))
     }
 }

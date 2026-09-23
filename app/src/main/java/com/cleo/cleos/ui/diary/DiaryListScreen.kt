@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.glass.GlassIconButton
@@ -73,7 +72,8 @@ private data class DiaryCard(
     val excerpt: String,
     val cover: File?,
     val imageCount: Int,
-    val byAi: Boolean,
+    /** The TA who wrote it; null for the person's own. */
+    val byTa: Long?,
     val secret: Boolean,
 )
 
@@ -108,8 +108,9 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit, 
             .map { entries -> toRows(entries.filter(filter::accepts)) { c.images.file(it) } }
             .flowOn(Dispatchers.Default)
     }.collectAsStateWithLifecycle(null)
-    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
-    val ai = settings.aiName.trim().ifEmpty { "TA" }
+    // Which TA wrote which entry, by name: the book holds every TA's pages.
+    val names by remember { c.companions.all.map { list -> list.associate { it.id to it.name.trim().ifEmpty { "TA" } } } }
+        .collectAsStateWithLifecycle(emptyMap())
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val count = rows?.count { it is DiaryRow.Entry } ?: 0
 
@@ -168,7 +169,9 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit, 
             }) { row ->
                 when (row) {
                     is DiaryRow.Month -> MonthHeader(row.month)
-                    is DiaryRow.Entry -> DiaryCardView(row.card, ai) { onOpenEntry(row.card.id, false) }
+                    is DiaryRow.Entry -> DiaryCardView(row.card, row.card.byTa?.let { names[it] ?: "TA" }) {
+                        onOpenEntry(row.card.id, false)
+                    }
                 }
             }
         }
@@ -195,7 +198,7 @@ private fun toRows(entries: List<DiaryEntryEntity>, file: (String) -> File): Lis
                 excerpt = DiaryBlocks.plainText(blocks).replace(Regex("\\s+"), " ").take(160),
                 cover = images.firstOrNull()?.let { file(it.file) },
                 imageCount = images.size,
-                byAi = e.author == DiaryEntryEntity.AUTHOR_AI,
+                byTa = if (e.author == DiaryEntryEntity.AUTHOR_AI) e.companionId ?: 0L else null,
                 secret = e.secret,
             ),
         )
@@ -252,7 +255,7 @@ private fun CardTag(icon: ImageVector, text: String) {
 }
 
 @Composable
-private fun DiaryCardView(card: DiaryCard, ai: String, onClick: () -> Unit) {
+private fun DiaryCardView(card: DiaryCard, ta: String?, onClick: () -> Unit) {
     val palette = LocalGlassPalette.current
     GlassSurface(
         modifier = Modifier.fillMaxWidth().clickable(interactionSource = null, indication = null, onClick = onClick),
@@ -268,7 +271,7 @@ private fun DiaryCardView(card: DiaryCard, ai: String, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 when {
                     card.secret -> CardTag(Icons.Rounded.Lock, "小秘密")
-                    card.byAi -> CardTag(Icons.Rounded.AutoAwesome, "${ai}写的")
+                    ta != null -> CardTag(Icons.Rounded.AutoAwesome, "${ta}写的")
                 }
                 if (card.title.isNotBlank()) {
                     Text(card.title, color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
@@ -53,6 +54,7 @@ class ChatRepository(
     private val client: ChatClient,
     private val tools: ToolBox,
     private val images: ImageStore,
+    private val companions: Companions,
     private val scope: CoroutineScope,
 ) {
     private val _streaming = MutableStateFlow<StreamingReply?>(null)
@@ -70,16 +72,25 @@ class ChatRepository(
 
     val busy: Boolean get() = job?.isActive == true
 
-    suspend fun newConversation(): Long {
+    suspend fun newConversation(companionId: Long): Long {
         val now = System.currentTimeMillis()
-        return db.conversations().insert(ConversationEntity(title = DEFAULT_TITLE, createdAt = now, updatedAt = now))
+        return db.conversations().insert(
+            ConversationEntity(title = DEFAULT_TITLE, createdAt = now, updatedAt = now, companionId = companionId),
+        )
     }
 
-    /** The conversation to show: the remembered one if it still exists, else the latest, else a new one. */
-    suspend fun resolveConversation(remembered: Long?): Long {
-        if (remembered != null && db.conversations().get(remembered) != null) return remembered
-        return db.conversations().latest()?.id ?: newConversation()
+    /**
+     * The conversation to show with TA [companionId]: the remembered one if it is still
+     * there and theirs, else their latest, else a new one.
+     */
+    suspend fun resolveConversation(remembered: Long?, companionId: Long): Long {
+        if (remembered != null && db.conversations().get(remembered)?.companionId == companionId) return remembered
+        return db.conversations().latestFor(companionId)?.id ?: newConversation(companionId)
     }
+
+    /** The TA a conversation is with (the first one if the conversation is gone). */
+    private suspend fun taOf(conversationId: Long) =
+        db.conversations().get(conversationId)?.companionId?.let { companions.get(it) } ?: companions.current()
 
     fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()) {
         if (busy) return
@@ -145,7 +156,7 @@ class ChatRepository(
         job = scope.launch {
             val row = db.messages().get(requestMessageId) ?: return@launch
             val request = SecretRequests.decode(row.content)?.takeIf { it.status == SecretRequest.PENDING } ?: return@launch
-            val ai = settings.current().aiName.trim().ifEmpty { "TA" }
+            val ai = taOf(conversationId).name.trim().ifEmpty { "TA" }
             val day = LocalDate.ofEpochDay(request.day)
             val entry = db.diary().get(request.diaryId)
             if (grant && entry == null) {
@@ -173,7 +184,8 @@ class ChatRepository(
 
     private suspend fun reply(conversationId: Long) {
         val s = settings.current()
-        val key = secrets.apiKey()
+        val ta = taOf(conversationId)
+        val key = secrets.key(ta.apiBaseUrl)
         if (key.isNullOrBlank()) {
             db.messages().insert(
                 MessageEntity(
@@ -186,13 +198,13 @@ class ChatRepository(
             )
             return
         }
-        val endpoint = ApiEndpoint(s.apiBaseUrl, key, s.apiModel)
+        val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
         val endpointKey = endpoint.chatUrl + "|" + endpoint.model
         val history = db.messages().newest(conversationId, s.historySize).reversed()
         val now = ZonedDateTime.now()
         var groups = if (endpointKey in refusesTools) emptySet() else s.tools
         var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
-        var messages = prepare(Prompt.messages(s, history, now, groups, withImages))
+        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages))
         var rounds = 0
         // What the last refusal made this reply leave out, and when.
         var leftOut: LeftOut? = null
@@ -213,7 +225,7 @@ class ChatRepository(
                         // Pictures go first: many more models take tools than take pictures.
                         leftOut = LeftOut(images = withImages, at = System.currentTimeMillis())
                         if (withImages) withImages = false else groups = emptySet()
-                        messages = prepare(Prompt.messages(s, history, now, groups, withImages))
+                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages))
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
@@ -221,7 +233,7 @@ class ChatRepository(
                             _streaming.value = null
                             return
                         }
-                        messages = messages + step.message + runTools(conversationId, step, s)
+                        messages = messages + step.message + runTools(conversationId, step, s, ta.id)
                         rounds++
                     }
                 }
@@ -318,7 +330,7 @@ class ChatRepository(
     }
 
     /** Runs the calls in order, storing each result with its line for the chat. */
-    private suspend fun runTools(conversationId: Long, step: Step.Called, s: AppSettings): List<ApiMessage> {
+    private suspend fun runTools(conversationId: Long, step: Step.Called, s: AppSettings, companionId: Long): List<ApiMessage> {
         val said = step.message.content
         val results = ArrayList<ApiMessage>(step.message.toolCalls.size)
         for (call in step.message.toolCalls) {
@@ -332,7 +344,7 @@ class ChatRepository(
                 activity = tools.activity(call.name),
             )
             val outcome = try {
-                tools.run(call, s, conversationId)
+                tools.run(call, s, conversationId, companionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

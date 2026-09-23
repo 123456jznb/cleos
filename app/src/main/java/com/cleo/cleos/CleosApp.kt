@@ -10,6 +10,7 @@ import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
 import com.cleo.cleos.data.BackupService
+import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
@@ -17,6 +18,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -47,14 +49,20 @@ class AppContainer(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    val companions = Companions(db, settings, secrets, images)
     val chatClient = ChatClient(http)
     val tools = ToolBox(
         db.todos(),
         db.diary(),
         OpenMeteo(http),
-        requests = { db.messages().requests().mapNotNull { SecretRequests.decode(it.content) } },
-        avatar = AiSelfAvatar(db, images, settings),
+        requests = { id -> db.messages().requestsBy(id).mapNotNull { SecretRequests.decode(it.content) } },
+        avatar = AiSelfAvatar(db, images, companions),
     )
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, appScope)
+    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, appScope)
     val backup = BackupService(context, db, settings, images)
+
+    init {
+        // The first TA is made from the old settings before anything asks who is being talked to.
+        appScope.launch { companions.ensure() }
+    }
 }

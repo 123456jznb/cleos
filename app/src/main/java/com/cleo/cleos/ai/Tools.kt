@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryDao
@@ -213,10 +214,10 @@ interface SelfAvatar {
     /** The file of the picture [ref] names in this conversation ("latest", "#45-1"), if there is one. */
     suspend fun picture(conversationId: Long, ref: String): String?
 
-    /** Crops [file] and makes it the avatar; false when the picture can't be read. */
-    suspend fun usePicture(file: String): Boolean
+    /** Crops [file] and makes it TA [companionId]'s avatar; false when the picture can't be read. */
+    suspend fun usePicture(companionId: Long, file: String): Boolean
 
-    suspend fun useEmoji(emoji: String)
+    suspend fun useEmoji(companionId: Long, emoji: String)
 }
 
 /**
@@ -228,8 +229,8 @@ class ToolBox(
     private val todos: TodoDao,
     private val diary: DiaryDao,
     private val weather: WeatherSource,
-    /** Every request to see a secret so far, oldest first, from any conversation. */
-    private val requests: suspend () -> List<SecretRequest> = { emptyList() },
+    /** One TA's requests to see a secret so far, oldest first, from any of their conversations. */
+    private val requests: suspend (companionId: Long) -> List<SecretRequest> = { emptyList() },
     private val avatar: SelfAvatar? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
@@ -240,7 +241,13 @@ class ToolBox(
 
     fun action(name: String): String = ToolSpecs.byName[name]?.action ?: "用工具"
 
-    suspend fun run(call: ToolCall, settings: AppSettings, conversationId: Long = 0): ToolOutcome {
+    /** [companionId]: the TA making the call; what it can read and change is theirs. */
+    suspend fun run(
+        call: ToolCall,
+        settings: AppSettings,
+        conversationId: Long = 0,
+        companionId: Long = Companions.FIRST,
+    ): ToolOutcome {
         val spec = ToolSpecs.byName[call.name]
             ?: return ToolOutcome("没有叫 ${call.name} 的工具。", "想用的工具不存在：${call.name}")
         if (spec.groups.none { it in settings.tools }) {
@@ -254,11 +261,11 @@ class ToolBox(
                 ToolSpecs.addTodo.name -> addTodo(args, today)
                 ToolSpecs.listTodos.name -> listTodos(args, today)
                 ToolSpecs.updateTodo.name -> updateTodo(args, today)
-                ToolSpecs.readDiary.name -> readDiary(args, today, settings.tools)
-                ToolSpecs.writeDiary.name -> writeDiary(args, today)
-                ToolSpecs.listSecrets.name -> listSecrets(today)
-                ToolSpecs.requestSecret.name -> requestSecret(args)
-                ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId)
+                ToolSpecs.readDiary.name -> readDiary(args, today, settings.tools, companionId)
+                ToolSpecs.writeDiary.name -> writeDiary(args, today, companionId)
+                ToolSpecs.listSecrets.name -> listSecrets(today, companionId)
+                ToolSpecs.requestSecret.name -> requestSecret(args, companionId)
+                ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId, companionId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
@@ -333,31 +340,30 @@ class ToolBox(
         return ToolOutcome("已更新：" + describe(t, today), note)
     }
 
-    private suspend fun readDiary(a: JsonObject, today: LocalDate, groups: Set<ToolGroup>): ToolOutcome {
-        // The person's entries only with their permission; the model's own always. Secrets
-        // are kept out by the queries themselves, not by a filter here that could be missed.
-        val authors = buildList {
-            if (ToolGroup.Diary in groups) add(DiaryEntryEntity.AUTHOR_ME)
-            if (ToolGroup.AiDiary in groups) add(DiaryEntryEntity.AUTHOR_AI)
-        }
+    private suspend fun readDiary(a: JsonObject, today: LocalDate, groups: Set<ToolGroup>, companionId: Long): ToolOutcome {
+        // The person's entries only with their permission; this TA's own always, and no
+        // other TA's. Secrets are kept out by the queries themselves, not by a filter here
+        // that could be missed.
+        val mine = ToolGroup.Diary in groups
+        val own = if (ToolGroup.AiDiary in groups) companionId else -1L
         val date = ToolArgs.optionalDay(a, "date", today)
         val query = ToolArgs.text(a, "query").orEmpty().trim()
         val limit = (ToolArgs.int(a["limit"]) ?: 3).coerceIn(1, 10)
         val entries = when {
-            date != null -> diary.onDay(date.toEpochDay(), authors).take(limit)
-            query.isNotEmpty() -> diary.search(ToolArgs.likePattern(query), authors, SEARCH_CANDIDATES)
+            date != null -> diary.onDay(date.toEpochDay(), mine, own).take(limit)
+            query.isNotEmpty() -> diary.search(ToolArgs.likePattern(query), mine, own, SEARCH_CANDIDATES)
                 .filter { Describe.diaryContains(it, query) }
                 .take(limit)
-            else -> diary.recent(authors, limit)
+            else -> diary.recent(mine, own, limit)
         }
         // A secret written that day is mentioned, never shown: the model can't ask about
         // what it doesn't know is there.
         val locked = if (date != null && ToolGroup.Secrets in groups) diary.secretsOnDay(date.toEpochDay()) else 0
         val lockedLine = if (locked > 0) "这天对方还写了 $locked 个小秘密，锁着，你看不到。" else ""
         if (entries.isEmpty()) {
-            val nobody = when (authors) {
-                listOf(DiaryEntryEntity.AUTHOR_ME) -> "对方"
-                listOf(DiaryEntryEntity.AUTHOR_AI) -> "你"
+            val nobody = when {
+                mine && own < 0 -> "对方"
+                !mine -> "你"
                 else -> ""
             }
             return when {
@@ -378,7 +384,7 @@ class ToolBox(
         return ToolOutcome(text, note)
     }
 
-    private suspend fun writeDiary(a: JsonObject, today: LocalDate): ToolOutcome {
+    private suspend fun writeDiary(a: JsonObject, today: LocalDate, companionId: Long): ToolOutcome {
         val text = ToolArgs.text(a, "text").orEmpty().trim().take(DIARY_MAX)
         if (text.isEmpty()) throw ToolFailure("缺少 text。", "没有内容")
         val title = ToolArgs.text(a, "title").orEmpty().trim().take(TITLE_MAX)
@@ -391,6 +397,7 @@ class ToolBox(
                 createdAt = now,
                 updatedAt = now,
                 author = DiaryEntryEntity.AUTHOR_AI,
+                companionId = companionId,
             ),
         )
         return ToolOutcome(
@@ -399,11 +406,11 @@ class ToolBox(
         )
     }
 
-    private suspend fun listSecrets(today: LocalDate): ToolOutcome {
+    private suspend fun listSecrets(today: LocalDate, companionId: Long): ToolOutcome {
         val secrets = diary.secrets()
         if (secrets.isEmpty()) return ToolOutcome("对方现在没有小秘密。", "数了数你的小秘密：还没有")
         // The latest request about each one: later ones replace earlier ones.
-        val asked = requests().associateBy { it.diaryId }
+        val asked = requests(companionId).associateBy { it.diaryId }
         val text = buildString {
             append("对方有 ${secrets.size} 个小秘密，标题和内容你都看不到；想看就用 request_secret 问。")
             for (e in secrets) {
@@ -418,12 +425,12 @@ class ToolBox(
         return ToolOutcome(text, "数了数你的小秘密：${secrets.size} 个")
     }
 
-    private suspend fun requestSecret(a: JsonObject): ToolOutcome {
+    private suspend fun requestSecret(a: JsonObject, companionId: Long): ToolOutcome {
         val id = ToolArgs.id(a["id"]) ?: throw ToolFailure("缺少 id。先用 list_secrets 看看有哪些。", "不知道是哪一个")
         val entry = diary.get(id)?.takeIf { it.secret }
             ?: throw ToolFailure("#$id 不是小秘密。先用 list_secrets 看看有哪些。", "没找到这个小秘密")
         // One card per secret at a time: asking again while the first card waits is nagging.
-        if (requests().any { it.diaryId == id && it.status == SecretRequest.PENDING }) {
+        if (requests(companionId).any { it.diaryId == id && it.status == SecretRequest.PENDING }) {
             return ToolOutcome("这个你已经问过了，对方还没决定，先别再问。", "")
         }
         val reason = ToolArgs.text(a, "reason").orEmpty().trim().take(REASON_MAX)
@@ -434,7 +441,7 @@ class ToolBox(
         )
     }
 
-    private suspend fun setMyAvatar(a: JsonObject, conversationId: Long): ToolOutcome {
+    private suspend fun setMyAvatar(a: JsonObject, conversationId: Long, companionId: Long): ToolOutcome {
         val port = avatar ?: throw ToolFailure("现在换不了头像。", "这里换不了")
         val image = ToolArgs.text(a, "image")?.trim().orEmpty()
         val emoji = ToolArgs.text(a, "emoji")?.trim().orEmpty()
@@ -442,13 +449,13 @@ class ToolBox(
             image.isNotEmpty() -> {
                 val file = port.picture(conversationId, image)
                     ?: throw ToolFailure("找不到「$image」这张图。用对方发来的图的编号（像 #45-1），或者写 latest。", "找不到那张图")
-                if (!port.usePicture(file)) throw ToolFailure("这张图读不出来，换一张。", "那张图读不出来")
+                if (!port.usePicture(companionId, file)) throw ToolFailure("这张图读不出来，换一张。", "那张图读不出来")
                 ToolOutcome("换好了：现在的头像是对方发来的那张图。", "换了新头像")
             }
             emoji.isNotEmpty() -> {
                 // An emoji is a few code points at most (a family, a flag); a sentence is not an avatar.
                 if (emoji.codePointCount(0, emoji.length) > EMOJI_MAX) throw ToolFailure("emoji 只放一个表情。", "表情太长了")
-                port.useEmoji(emoji)
+                port.useEmoji(companionId, emoji)
                 ToolOutcome("换好了：现在的头像是 $emoji。", "换了新头像：$emoji")
             }
             else -> throw ToolFailure("image 和 emoji 给一个。", "没说换成什么")

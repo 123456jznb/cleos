@@ -19,13 +19,12 @@ import kotlinx.serialization.json.Json
 
 enum class GlassMode { Auto, Light, Dark }
 
+/**
+ * Settings for the whole app and for the person. Each TA's own (name, persona, model,
+ * avatar) lives in their CompanionEntity.
+ */
 data class AppSettings(
-    val apiBaseUrl: String = ApiPresets.DeepSeek.baseUrl,
-    val apiModel: String = ApiPresets.DeepSeek.defaultModel,
-    val aiName: String = "",
     val userName: String = "",
-    /** Written by the user, sent as-is. Empty means no persona at all. */
-    val persona: String = "",
     /** How many recent messages go to the model with each turn. */
     val historySize: Int = 40,
     /** File name inside ImageStore, or null for the built-in wallpaper. */
@@ -46,15 +45,24 @@ data class AppSettings(
     val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Avatar, ToolGroup.Weather),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",
-    /** File names inside ImageStore, or null for the lettered circle. */
+    /** A file name inside ImageStore, or null for the lettered circle. */
     val userAvatar: String? = null,
-    val aiAvatar: String? = null,
-    /** An emoji the model picked for itself, shown in place of the initial when there is no picture. */
-    val aiAvatarEmoji: String? = null,
     /** Avatars beside the bubbles in the chat. */
     val chatAvatars: Boolean = true,
-    /** LocalDate.toEpochDay() the home page counts from; null counts from the first message. */
-    val knownSince: Long? = null,
+)
+
+/**
+ * The one TA there was before there could be several, as the settings kept them. Read once,
+ * to make that TA's CompanionEntity; nothing writes these keys any more.
+ */
+data class LegacyTa(
+    val name: String,
+    val persona: String,
+    val baseUrl: String,
+    val model: String,
+    val avatar: String?,
+    val avatarEmoji: String?,
+    val knownSince: Long?,
 )
 
 data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
@@ -75,11 +83,16 @@ private val Context.settingsStore by preferencesDataStore(name = "settings")
 
 class SettingsRepository(private val context: Context) {
     private object Keys {
+        // The one TA of before (see LegacyTa).
         val apiBaseUrl = stringPreferencesKey("api_base_url")
         val apiModel = stringPreferencesKey("api_model")
         val aiName = stringPreferencesKey("ai_name")
-        val userName = stringPreferencesKey("user_name")
         val persona = stringPreferencesKey("persona")
+        val aiAvatar = stringPreferencesKey("ai_avatar")
+        val aiAvatarEmoji = stringPreferencesKey("ai_avatar_emoji")
+        val knownSince = longPreferencesKey("known_since")
+
+        val userName = stringPreferencesKey("user_name")
         val historySize = intPreferencesKey("history_size")
         val wallpaper = stringPreferencesKey("wallpaper")
         val glassMode = stringPreferencesKey("glass_mode")
@@ -92,11 +105,9 @@ class SettingsRepository(private val context: Context) {
         val tools = stringPreferencesKey("tools")
         val weatherCity = stringPreferencesKey("weather_city")
         val userAvatar = stringPreferencesKey("user_avatar")
-        val aiAvatar = stringPreferencesKey("ai_avatar")
-        val aiAvatarEmoji = stringPreferencesKey("ai_avatar_emoji")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
-        val knownSince = longPreferencesKey("known_since")
         val currentConversation = stringPreferencesKey("current_conversation")
+        val currentCompanion = longPreferencesKey("current_companion")
     }
 
     val settings: Flow<AppSettings> = context.settingsStore.data.map { it.toSettings() }
@@ -106,11 +117,7 @@ class SettingsRepository(private val context: Context) {
     private fun Preferences.toSettings(): AppSettings {
         val d = AppSettings()
         return AppSettings(
-            apiBaseUrl = this[Keys.apiBaseUrl] ?: d.apiBaseUrl,
-            apiModel = this[Keys.apiModel] ?: d.apiModel,
-            aiName = this[Keys.aiName] ?: d.aiName,
             userName = this[Keys.userName] ?: d.userName,
-            persona = this[Keys.persona] ?: d.persona,
             historySize = this[Keys.historySize] ?: d.historySize,
             wallpaper = this[Keys.wallpaper],
             glassMode = this[Keys.glassMode]?.let { runCatching { GlassMode.valueOf(it) }.getOrNull() } ?: d.glassMode,
@@ -123,21 +130,14 @@ class SettingsRepository(private val context: Context) {
             tools = this[Keys.tools]?.let(::decodeTools) ?: d.tools,
             weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
             userAvatar = this[Keys.userAvatar],
-            aiAvatar = this[Keys.aiAvatar],
-            aiAvatarEmoji = this[Keys.aiAvatarEmoji],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
-            knownSince = this[Keys.knownSince],
         )
     }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.settingsStore.edit { prefs ->
             val next = transform(prefs.toSettings())
-            prefs[Keys.apiBaseUrl] = next.apiBaseUrl
-            prefs[Keys.apiModel] = next.apiModel
-            prefs[Keys.aiName] = next.aiName
             prefs[Keys.userName] = next.userName
-            prefs[Keys.persona] = next.persona
             prefs[Keys.historySize] = next.historySize
             prefs[Keys.glassMode] = next.glassMode.name
             if (next.wallpaper != null) prefs[Keys.wallpaper] = next.wallpaper else prefs.remove(Keys.wallpaper)
@@ -151,11 +151,28 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.tools] = encodeTools(next.tools)
             prefs[Keys.weatherCity] = next.weatherCity
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
-            if (next.aiAvatar != null) prefs[Keys.aiAvatar] = next.aiAvatar else prefs.remove(Keys.aiAvatar)
-            if (next.aiAvatarEmoji != null) prefs[Keys.aiAvatarEmoji] = next.aiAvatarEmoji else prefs.remove(Keys.aiAvatarEmoji)
             prefs[Keys.chatAvatars] = next.chatAvatars
-            if (next.knownSince != null) prefs[Keys.knownSince] = next.knownSince else prefs.remove(Keys.knownSince)
         }
+    }
+
+    suspend fun legacyTa(): LegacyTa {
+        val p = context.settingsStore.data.first()
+        return LegacyTa(
+            name = p[Keys.aiName].orEmpty(),
+            persona = p[Keys.persona].orEmpty(),
+            baseUrl = p[Keys.apiBaseUrl] ?: ApiPresets.DeepSeek.baseUrl,
+            model = p[Keys.apiModel] ?: ApiPresets.DeepSeek.defaultModel,
+            avatar = p[Keys.aiAvatar],
+            avatarEmoji = p[Keys.aiAvatarEmoji],
+            knownSince = p[Keys.knownSince],
+        )
+    }
+
+    /** The TA being talked to; null before there has been a choice (the first one then). */
+    val currentCompanion: Flow<Long?> = context.settingsStore.data.map { it[Keys.currentCompanion] }
+
+    suspend fun setCurrentCompanion(id: Long) {
+        context.settingsStore.edit { it[Keys.currentCompanion] = id }
     }
 
     suspend fun setGlassTuning(part: GlassPart, tuning: GlassTuning?) = update {

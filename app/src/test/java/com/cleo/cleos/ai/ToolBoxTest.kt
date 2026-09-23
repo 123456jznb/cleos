@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryDao
@@ -32,12 +33,20 @@ class ToolBoxTest {
             return WeatherReport(city, "地点：$city\n现在：晴")
         }
     }
-    private val asked = mutableListOf<SecretRequest>()
-    private val box = ToolBox(todos, diary, weather, requests = { asked.toList() }, clock = { nowMillis }, zone = { zone })
+    /** Requests to see a secret, with the TA who asked. */
+    private val asked = mutableListOf<Pair<Long, SecretRequest>>()
+    private val box = ToolBox(
+        todos,
+        diary,
+        weather,
+        requests = { ta -> asked.filter { it.first == ta }.map { it.second } },
+        clock = { nowMillis },
+        zone = { zone },
+    )
     private val all = AppSettings(tools = ToolGroup.entries.toSet())
 
-    private fun run(name: String, args: String, settings: AppSettings = all) =
-        runBlocking { box.run(ToolCall("c", name, args), settings) }
+    private fun run(name: String, args: String, settings: AppSettings = all, companionId: Long = Companions.FIRST) =
+        runBlocking { box.run(ToolCall("c", name, args), settings, companionId = companionId) }
 
     @Test
     fun addTodoStoresItAndSaysWhere() {
@@ -116,6 +125,22 @@ class ToolBoxTest {
     }
 
     @Test
+    fun oneTaNeverReadsAnothersDiary() {
+        diary.rows += entry(1, today, "今天", "去了河边")
+        diary.rows += entry(2, today, "沐的", "今天聊到了河边", author = DiaryEntryEntity.AUTHOR_AI, companionId = 1)
+        diary.rows += entry(3, today, "星的", "今天一起听了雨", author = DiaryEntryEntity.AUTHOR_AI, companionId = 2)
+        for (args in listOf("{}", """{"date":"2026-09-23"}""", """{"query":"今天"}""")) {
+            val second = run("read_diary", args, companionId = 2).result
+            assertTrue("the person's diary: the same rules for every TA", second.contains("去了河边"))
+            assertTrue(second.contains("听了雨"))
+            assertFalse(args, second.contains("聊到了河边") || second.contains("沐的"))
+            val first = run("read_diary", args).result
+            assertTrue(first.contains("聊到了河边"))
+            assertFalse(args, first.contains("听了雨") || first.contains("星的"))
+        }
+    }
+
+    @Test
     fun aSecretIsNeverReadButItsDayMentionsIt() {
         diary.rows += entry(1, today, "今天", "去了河边")
         diary.rows += entry(2, today, "不能说", "其实我有点想哭", secret = true)
@@ -132,10 +157,13 @@ class ToolBoxTest {
         val out = run("write_diary", """{"title":"下雨天","text":"今天记了待办，我也想记点什么。"}""")
         val e = diary.rows.single()
         assertEquals(DiaryEntryEntity.AUTHOR_AI, e.author)
+        assertEquals(Companions.FIRST, e.companionId)
         assertEquals(today.toEpochDay(), e.day)
         assertFalse(e.secret)
         assertEquals("写了一篇日记「下雨天」", out.note)
         assertEquals("写日记没成：没有内容", run("write_diary", """{"title":"空的"}""").note)
+        run("write_diary", """{"text":"第一次写。"}""", companionId = 2)
+        assertEquals(2L, diary.rows.last().companionId)
     }
 
     @Test
@@ -143,13 +171,17 @@ class ToolBoxTest {
         diary.rows += entry(4, today.minusDays(1), "昨天的事", "内容", secret = true)
         diary.rows += entry(7, today, "今天的事", "内容", secret = true)
         diary.rows += entry(9, today, "不是秘密", "内容")
-        asked += SecretRequest(diaryId = 4, day = today.minusDays(1).toEpochDay(), status = SecretRequest.DECLINED)
+        asked += Companions.FIRST to SecretRequest(diaryId = 4, day = today.minusDays(1).toEpochDay(), status = SecretRequest.DECLINED)
         val out = run("list_secrets", "{}")
         assertTrue(out.result.contains("对方有 2 个小秘密"))
         assertTrue(out.result.contains("#4 2026-09-22（周二，昨天） · 你问过，对方没给看"))
         assertTrue(out.result.contains("#7 2026-09-23"))
         assertFalse(out.result.contains("事"))
         assertEquals("数了数你的小秘密：2 个", out.note)
+        // Another TA sees the same secrets, but not what the first one asked.
+        val second = run("list_secrets", "{}", companionId = 2).result
+        assertTrue(second.contains("对方有 2 个小秘密"))
+        assertFalse(second.contains("你问过"))
     }
 
     @Test
@@ -163,9 +195,10 @@ class ToolBoxTest {
         assertEquals(SecretRequest.PENDING, card.status)
         assertEquals("", out.note)
         assertFalse(out.result.contains("今天的事") || out.result.contains("想哭"))
-        // Asking again while the card waits makes no second card.
-        asked += card
+        // Asking again while the card waits makes no second card; another TA can still ask.
+        asked += Companions.FIRST to card
         assertNull(run("request_secret", """{"id":7}""").request)
+        assertEquals(7L, run("request_secret", """{"id":7}""", companionId = 2).request?.diaryId)
     }
 
     @Test
@@ -217,6 +250,7 @@ class ToolBoxTest {
         text: String,
         author: String = DiaryEntryEntity.AUTHOR_ME,
         secret: Boolean = false,
+        companionId: Long? = if (author == DiaryEntryEntity.AUTHOR_AI) Companions.FIRST else null,
     ) = DiaryEntryEntity(
         id = id,
         day = day.toEpochDay(),
@@ -226,6 +260,7 @@ class ToolBoxTest {
         updatedAt = id,
         author = author,
         secret = secret,
+        companionId = companionId,
     )
 }
 
@@ -257,18 +292,24 @@ private class FakeDiary : DiaryDao {
     val rows = mutableListOf<DiaryEntryEntity>()
     private val newest get() = rows.sortedWith(compareByDescending<DiaryEntryEntity> { it.day }.thenByDescending { it.createdAt })
     override fun observeAll(): Flow<List<DiaryEntryEntity>> = flowOf(newest)
-    override fun observeCount(): Flow<Int> = flowOf(rows.size)
+    private fun writtenBy(e: DiaryEntryEntity, ta: Long) = e.author == DiaryEntryEntity.AUTHOR_AI && e.companionId == ta
+    override fun observeWrittenBy(companionId: Long): Flow<Int> = flowOf(rows.count { writtenBy(it, companionId) })
+    override suspend fun deleteWrittenBy(companionId: Long) {
+        rows.removeAll { writtenBy(it, companionId) }
+    }
     override suspend fun get(id: Long) = rows.firstOrNull { it.id == id }
 
-    // The same visibility as the real queries: never a secret, only the given authors.
-    private fun readable(e: DiaryEntryEntity, authors: List<String>) = !e.secret && e.author in authors
-    override suspend fun onDay(day: Long, authors: List<String>) = rows.filter { it.day == day && readable(it, authors) }
-    override suspend fun recent(authors: List<String>, limit: Int) = newest.filter { readable(it, authors) }.take(limit)
+    // The same visibility as the real queries: never a secret; the person's when [mine];
+    // of the TAs' entries, only [own]'s.
+    private fun readable(e: DiaryEntryEntity, mine: Boolean, own: Long) =
+        !e.secret && ((mine && e.author == DiaryEntryEntity.AUTHOR_ME) || writtenBy(e, own))
+    override suspend fun onDay(day: Long, mine: Boolean, own: Long) = rows.filter { it.day == day && readable(it, mine, own) }
+    override suspend fun recent(mine: Boolean, own: Long, limit: Int) = newest.filter { readable(it, mine, own) }.take(limit)
 
     /** LIKE '%q%' with ! as the escape character, as the real query. */
-    override suspend fun search(pattern: String, authors: List<String>, limit: Int): List<DiaryEntryEntity> {
+    override suspend fun search(pattern: String, mine: Boolean, own: Long, limit: Int): List<DiaryEntryEntity> {
         val q = pattern.removePrefix("%").removeSuffix("%").replace("!%", "%").replace("!_", "_").replace("!!", "!")
-        return newest.filter { readable(it, authors) && (it.title.contains(q, ignoreCase = true) || it.blocks.contains(q, ignoreCase = true)) }
+        return newest.filter { readable(it, mine, own) && (it.title.contains(q, ignoreCase = true) || it.blocks.contains(q, ignoreCase = true)) }
             .take(limit)
     }
     override suspend fun secrets() = newest.filter { it.secret }

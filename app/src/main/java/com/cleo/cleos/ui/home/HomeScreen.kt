@@ -4,7 +4,10 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,12 +20,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -30,6 +36,7 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Switch
@@ -41,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.AppContainer
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassSurface
@@ -67,6 +76,7 @@ import com.cleo.cleos.ui.common.TopBarHeight
 import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -76,18 +86,24 @@ import java.time.temporal.ChronoUnit
 private enum class Who { Me, Ai }
 
 /**
- * The two of them: their pictures and names, and how long they have known each other.
- * The wording stays out of saying what they are to each other; the app doesn't decide that.
+ * The person and the TA being talked to: their pictures and names, and how long they have
+ * known each other. A row at the top switches between TAs and adds one. The wording stays
+ * out of saying what they are to each other; the app doesn't decide that.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
+    val scope = rememberCoroutineScope()
     val settings by c.settings.settings.collectAsStateWithLifecycle(null)
-    val firstSaid by remember { c.db.messages().observeFirstSaid() }.collectAsStateWithLifecycle(null)
-    val said by remember { c.db.messages().observeSaidCount() }.collectAsStateWithLifecycle(0)
-    val diaries by remember { c.db.diary().observeCount() }.collectAsStateWithLifecycle(0)
+    val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
+    val current by remember { c.companions.current }.collectAsStateWithLifecycle(null)
+    val taId = current?.id
+    val firstSaid by remember(taId) { taId?.let { c.db.messages().observeFirstSaid(it) } ?: flowOf(null) }
+        .collectAsStateWithLifecycle(null)
+    val said by remember(taId) { taId?.let { c.db.messages().observeSaidCount(it) } ?: flowOf(0) }.collectAsStateWithLifecycle(0)
+    val written by remember(taId) { taId?.let { c.db.diary().observeWrittenBy(it) } ?: flowOf(0) }.collectAsStateWithLifecycle(0)
     val done by remember { c.db.todos().observeDoneCount() }.collectAsStateWithLifecycle(0)
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
@@ -116,9 +132,10 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
         },
     ) {
         val s = settings ?: return@GlassPage
+        val ta = current ?: return@GlassPage
         val me = s.userName.trim().ifEmpty { "我" }
-        val ai = s.aiName.trim().ifEmpty { "TA" }
-        val since = s.knownSince?.let(LocalDate::ofEpochDay) ?: firstSaid?.let(Dates::dateOf)
+        val ai = ta.name.trim().ifEmpty { "TA" }
+        val since = ta.knownSince?.let(LocalDate::ofEpochDay) ?: firstSaid?.let(Dates::dateOf)
         Column(
             Modifier
                 .fillMaxSize()
@@ -127,6 +144,19 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                 .padding(start = 14.dp, end = 14.dp, top = statusTop + TopBarHeight + 8.dp, bottom = bottomInset + 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            TaRow(
+                tas = companions,
+                currentId = ta.id,
+                onSelect = { id -> scope.launch { c.companions.select(id) } },
+                // A new TA opens straight into their settings, to be named and given a model.
+                onAdd = {
+                    scope.launch {
+                        c.companions.add()
+                        onOpenSettings()
+                    }
+                },
+            )
+
             GlassSurface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = GlassShape.Rounded(28.dp),
@@ -143,7 +173,7 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                             onAvatar = { if (s.userAvatar == null) pick(Who.Me) else menuFor = Who.Me },
                             onName = { naming = Who.Me },
                             onChange = { menuFor = null; pick(Who.Me) },
-                            onReset = { menuFor = null; c.appScope.launch { setAvatar(c, Who.Me, null) } },
+                            onReset = { menuFor = null; c.appScope.launch { setAvatar(c, Who.Me, null, ta.id) } },
                             onMenuDismiss = { menuFor = null },
                         )
                         Text(
@@ -153,15 +183,15 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 34.dp),
                         )
                         Person(
-                            file = s.aiAvatar,
+                            file = ta.avatar,
                             name = ai,
-                            letter = s.aiAvatarEmoji ?: avatarLetter(s.aiName, "TA"),
-                            label = if (s.aiName.isBlank()) null else "TA",
+                            letter = ta.avatarEmoji ?: avatarLetter(ta.name, "TA"),
+                            label = if (ta.name.isBlank()) null else "TA",
                             menuOpen = menuFor == Who.Ai,
-                            onAvatar = { if (s.aiAvatar == null && s.aiAvatarEmoji == null) pick(Who.Ai) else menuFor = Who.Ai },
+                            onAvatar = { if (ta.avatar == null && ta.avatarEmoji == null) pick(Who.Ai) else menuFor = Who.Ai },
                             onName = { naming = Who.Ai },
                             onChange = { menuFor = null; pick(Who.Ai) },
-                            onReset = { menuFor = null; c.appScope.launch { setAvatar(c, Who.Ai, null) } },
+                            onReset = { menuFor = null; c.appScope.launch { setAvatar(c, Who.Ai, null, ta.id) } },
                             onMenuDismiss = { menuFor = null },
                         )
                     }
@@ -185,7 +215,7 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                     Spacer(Modifier.height(20.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         Stat(said, "句话")
-                        Stat(diaries, "篇日记")
+                        Stat(written, "篇 TA 的日记")
                         Stat(done, "件做完的事")
                     }
                 }
@@ -235,7 +265,7 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                 onDismiss = { cropping = null },
                 onCropped = { bitmap ->
                     cropping = null
-                    c.appScope.launch { setAvatar(c, who, c.images.save(bitmap, prefix = "avatar-")) }
+                    c.appScope.launch { setAvatar(c, who, c.images.save(bitmap, prefix = "avatar-"), ta.id) }
                 },
             )
         }
@@ -243,12 +273,12 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
         naming?.let { who ->
             NameDialog(
                 title = if (who == Who.Me) "你的名字" else "TA 的名字",
-                initial = if (who == Who.Me) s.userName else s.aiName,
+                initial = if (who == Who.Me) s.userName else ta.name,
                 onDismiss = { naming = null },
                 onSave = { name ->
                     naming = null
                     c.appScope.launch {
-                        c.settings.update { if (who == Who.Me) it.copy(userName = name) else it.copy(aiName = name) }
+                        if (who == Who.Me) c.settings.update { it.copy(userName = name) } else c.companions.update(ta.id) { it.copy(name = name) }
                     }
                 },
             )
@@ -270,22 +300,86 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                         dating = false
                         state.selectedDateMillis?.let { millis ->
                             val day = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toEpochDay()
-                            c.appScope.launch { c.settings.update { it.copy(knownSince = day) } }
+                            c.appScope.launch { c.companions.update(ta.id) { it.copy(knownSince = day) } }
                         }
                     }) { Text("确定") }
                 },
                 dismissButton = {
                     Row {
-                        if (s.knownSince != null) {
+                        if (ta.knownSince != null) {
                             TextButton(onClick = {
                                 dating = false
-                                c.appScope.launch { c.settings.update { it.copy(knownSince = null) } }
+                                c.appScope.launch { c.companions.update(ta.id) { it.copy(knownSince = null) } }
                             }) { Text("按第一句话算") }
                         }
                         TextButton(onClick = { dating = false }) { Text("取消") }
                     }
                 },
             ) { DatePicker(state) }
+        }
+    }
+}
+
+/** Every TA, the current one ringed; the last circle adds one. */
+@Composable
+private fun TaRow(tas: List<CompanionEntity>, currentId: Long, onSelect: (Long) -> Unit, onAdd: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    GlassSurface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = GlassShape.Rounded(24.dp),
+        contentPadding = PaddingValues(vertical = 12.dp),
+    ) {
+        Row(
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            tas.forEach { t ->
+                val here = t.id == currentId
+                Column(
+                    Modifier
+                        .width(58.dp)
+                        .clickable(onClickLabel = "和${t.name.ifBlank { "TA" }}聊", onClick = { onSelect(t.id) }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(54.dp)
+                            .then(if (here) Modifier.border(2.dp, palette.accent, CircleShape) else Modifier)
+                            .padding(4.dp),
+                    ) {
+                        Avatar(t.avatar, t.avatarEmoji ?: avatarLetter(t.name, "TA"), 46.dp)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        t.name.ifBlank { "TA" },
+                        color = if (here) palette.accentContent else palette.contentSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Column(
+                Modifier
+                    .width(58.dp)
+                    .clickable(onClick = onAdd),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    Modifier
+                        .size(54.dp)
+                        .padding(4.dp)
+                        .background(palette.content.copy(alpha = 0.08f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = "添加一个 TA", tint = palette.contentSecondary)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("添加", color = palette.contentSecondary, fontSize = 12.sp)
+            }
         }
     }
 }
@@ -363,10 +457,14 @@ private fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, on
 }
 
 /** Swaps the picture and removes the one it replaces: nothing else points at an old avatar. */
-private suspend fun setAvatar(c: AppContainer, who: Who, file: String?) {
-    val old = c.settings.current().let { if (who == Who.Me) it.userAvatar else it.aiAvatar }
-    // A picture chosen here replaces an emoji TA picked for itself, and so does going back to the default.
-    c.settings.update { if (who == Who.Me) it.copy(userAvatar = file) else it.copy(aiAvatar = file, aiAvatarEmoji = null) }
+private suspend fun setAvatar(c: AppContainer, who: Who, file: String?, taId: Long) {
+    if (who == Who.Ai) {
+        // A picture chosen here replaces an emoji TA picked for itself, and so does going back to the default.
+        c.companions.setAvatar(taId, file, emoji = null)
+        return
+    }
+    val old = c.settings.current().userAvatar
+    c.settings.update { it.copy(userAvatar = file) }
     if (old != null && old != file) c.images.delete(listOf(old))
 }
 

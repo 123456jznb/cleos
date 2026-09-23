@@ -2,6 +2,7 @@ package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -34,10 +35,10 @@ object Prompt {
      */
     const val MAX_IMAGES = 4
 
-    fun system(settings: AppSettings, tools: Set<ToolGroup> = emptySet()): String = buildList {
-        if (settings.aiName.isNotBlank()) add("你叫${settings.aiName.trim()}。")
+    fun system(settings: AppSettings, ta: CompanionEntity, tools: Set<ToolGroup> = emptySet()): String = buildList {
+        if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
-        if (settings.persona.isNotBlank()) add(settings.persona.trim())
+        if (ta.persona.isNotBlank()) add(ta.persona.trim())
         toolRule(tools)?.let(::add)
         add(FORMAT_RULE)
     }.joinToString("\n\n")
@@ -70,6 +71,7 @@ object Prompt {
      */
     fun messages(
         settings: AppSettings,
+        ta: CompanionEntity,
         history: List<MessageEntity>,
         now: ZonedDateTime,
         tools: Set<ToolGroup> = emptySet(),
@@ -105,7 +107,7 @@ object Prompt {
         if (lastUser >= 0) {
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
         }
-        return listOf(ApiMessage("system", system(settings, tools))) + merged
+        return listOf(ApiMessage("system", system(settings, ta, tools))) + merged
     }
 
     /** Ids of the messages whose pictures go along: the newest, whole messages, up to [MAX_IMAGES]. */

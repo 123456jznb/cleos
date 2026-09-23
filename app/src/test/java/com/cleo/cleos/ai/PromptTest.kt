@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,9 +26,12 @@ class PromptTest {
 
     private val add = ToolCall("c1", "add_todo", """{"title":"交报告"}""")
 
+    private fun ta(name: String = "", persona: String = "") =
+        CompanionEntity(id = 1, name = name, persona = persona, apiBaseUrl = "", apiModel = "", createdAt = 0)
+
     @Test
     fun systemHasNamesButNoTimeAndNoInventedRelationship() {
-        val s = Prompt.system(AppSettings(aiName = "沐", userName = "Cleo"))
+        val s = Prompt.system(AppSettings(userName = "Cleo"), ta(name = "沐"))
         assertTrue(s.contains("你叫沐。"))
         assertTrue(s.contains("和你说话的人叫Cleo。"))
         assertFalse("time must stay out of the cached prefix", s.contains("现在是"))
@@ -36,7 +40,7 @@ class PromptTest {
 
     @Test
     fun withoutToolsTheOnlyAddedLineIsTheFormatRule() {
-        val s = Prompt.system(AppSettings())
+        val s = Prompt.system(AppSettings(), ta())
         assertFalse(s.contains("你叫"))
         assertFalse(s.contains("工具"))
         assertTrue(s.contains("Markdown"))
@@ -44,24 +48,36 @@ class PromptTest {
 
     @Test
     fun toolRulesComeOnlyForToolsOffered() {
-        val todosOnly = Prompt.system(AppSettings(), setOf(ToolGroup.Todos))
+        val todosOnly = Prompt.system(AppSettings(), ta(), setOf(ToolGroup.Todos))
         assertTrue(todosOnly.contains("没有调用工具，就不要说已经做好了"))
         assertFalse(todosOnly.contains("日记"))
-        assertTrue(Prompt.system(AppSettings(), setOf(ToolGroup.Diary)).contains("只在对方提起或问到日记里写过的事时"))
+        assertTrue(Prompt.system(AppSettings(), ta(), setOf(ToolGroup.Diary)).contains("只在对方提起或问到日记里写过的事时"))
     }
 
     @Test
     fun itsOwnDiaryAndTheSecretsComeWithTheirRules() {
-        val s = Prompt.system(AppSettings(), setOf(ToolGroup.AiDiary, ToolGroup.Secrets))
+        val s = Prompt.system(AppSettings(), ta(), setOf(ToolGroup.AiDiary, ToolGroup.Secrets))
         assertTrue(s.contains("不是替对方写"))
         assertTrue(s.contains("被拒绝了就别追着要"))
         assertFalse("reading the person's diary is a separate permission", s.contains("只在对方提起或问到日记里写过的事时"))
     }
 
     @Test
+    fun eachTaIsToldOnlyTheirOwnNameAndPersona() {
+        val settings = AppSettings(userName = "Cleo")
+        val first = Prompt.system(settings, ta("沐", "你喜欢下雨天。"))
+        val second = Prompt.system(settings, ta("星", "说话很短。"))
+        assertTrue(first.contains("你叫沐。") && first.contains("你喜欢下雨天。"))
+        assertTrue(second.contains("你叫星。") && second.contains("说话很短。"))
+        assertFalse(second.contains("沐") || second.contains("下雨天"))
+        assertTrue("the person is the same for every TA", second.contains("和你说话的人叫Cleo。"))
+    }
+
+    @Test
     fun timeRidesOnTheLastUserMessageOnlyAndCarriesTheYear() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(msg("user", "早"), msg("assistant", "早呀"), msg("user", "今天好累")),
             now,
         )
@@ -75,6 +91,7 @@ class PromptTest {
     fun failedRepliesAreLeftOutAndTheUserTurnsAroundThemMerged() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(msg("user", "第一句"), msg("assistant", "说到一半", error = "网络出错"), msg("user", "第二句")),
             now,
         )
@@ -87,6 +104,7 @@ class PromptTest {
     fun aToolRoundGoesBackAsCallThenResult() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(
                 msg("user", "明天交报告，帮我记一下"),
                 calling("", add, reasoning = "要记待办"),
@@ -108,6 +126,7 @@ class PromptTest {
         // A retry after the final answer failed: the calls already ran and are not redone.
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(msg("user", "记一下"), calling("", add, reasoning = "要记待办"), result("c1", "已添加")),
             now,
             allTools,
@@ -120,6 +139,7 @@ class PromptTest {
     fun unansweredCallsAndStrayResultsAreDropped() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(
                 result("gone", "the window cut its call off"),
                 msg("user", "查天气"),
@@ -139,6 +159,7 @@ class PromptTest {
     fun withoutToolsOnlyWhatWasSaidRemains() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(msg("user", "记一下"), calling("好", add), result("c1", "已添加"), msg("assistant", "记好了"), msg("user", "嗯")),
             now,
         )
@@ -151,6 +172,7 @@ class PromptTest {
     fun notesAreNeverSentAndTheWindowStartsAtAUserTurn() {
         val out = Prompt.messages(
             AppSettings(),
+            ta(),
             listOf(
                 msg("assistant", "the window starts here, mid-exchange"),
                 msg("user", "你好"),

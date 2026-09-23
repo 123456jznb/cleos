@@ -3,6 +3,7 @@ package com.cleo.cleos.ui.settings
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -17,11 +18,13 @@ import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.ui.wallpaper.WallpaperAnalyzer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,8 +35,16 @@ const val PERSONA_LIMIT = 2000
  * Text fields are edited locally and written back after a short pause (and once more
  * on leaving), so typing does not hit the disk on every keystroke. The API key is the
  * exception: it is only ever written, encrypted, and never read back into a field.
+ *
+ * The model, the TA's name and persona belong to the TA that was current when the screen
+ * opened; the rest is the person's and the app's.
  */
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
+    var companionId by mutableLongStateOf(0L)
+        private set
+    var companionCount by mutableIntStateOf(1)
+        private set
+    private var deleted = false
     var baseUrl by mutableStateOf("")
     var model by mutableStateOf("")
     var aiName by mutableStateOf("")
@@ -55,17 +66,24 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var wallpaperError by mutableStateOf<String?>(null)
         private set
 
-    val hasKey: StateFlow<Boolean> = c.secrets.hasApiKey.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** Whether the address being edited has a key yet: keys are filed by address. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val hasKey: StateFlow<Boolean> = snapshotFlow { baseUrl }
+        .flatMapLatest { c.secrets.hasKey(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
     init {
+        viewModelScope.launch { c.companions.all.collect { companionCount = it.size } }
         viewModelScope.launch {
             val s = c.settings.current()
-            baseUrl = s.apiBaseUrl
-            model = s.apiModel
-            aiName = s.aiName
+            val ta = c.companions.current()
+            companionId = ta.id
+            baseUrl = ta.apiBaseUrl
+            model = ta.apiModel
+            aiName = ta.name
             userName = s.userName
-            persona = s.persona
+            persona = ta.persona
             historySize = s.historySize
             weatherCity = s.weatherCity
             loaded = true
@@ -82,17 +100,20 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     private suspend fun persist() {
-        if (!loaded) return
-        c.settings.update {
-            it.copy(
-                apiBaseUrl = baseUrl.trim(),
-                apiModel = model.trim(),
-                aiName = aiName.trim(),
-                userName = userName.trim(),
-                persona = persona.take(PERSONA_LIMIT),
-                historySize = historySize,
-                weatherCity = weatherCity.trim(),
-            )
+        if (!loaded || deleted) return
+        c.companions.update(companionId) {
+            it.copy(apiBaseUrl = baseUrl.trim(), apiModel = model.trim(), name = aiName.trim(), persona = persona.take(PERSONA_LIMIT))
+        }
+        c.settings.update { it.copy(userName = userName.trim(), historySize = historySize, weatherCity = weatherCity.trim()) }
+    }
+
+    /** Removes this TA with their conversations and diary; [then] leaves the screen. */
+    fun deleteCompanion(then: () -> Unit) {
+        deleted = true
+        val id = companionId
+        viewModelScope.launch {
+            c.companions.delete(id)
+            then()
         }
     }
 
@@ -113,13 +134,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val k = keyInput.trim()
         if (k.isEmpty()) return
         viewModelScope.launch {
-            c.secrets.setApiKey(k)
+            c.secrets.setKey(baseUrl, k)
             keyInput = ""
         }
     }
 
     fun clearKey() {
-        viewModelScope.launch { c.secrets.setApiKey(null) }
+        viewModelScope.launch { c.secrets.setKey(baseUrl, null) }
     }
 
     /** Lists the endpoint's models; that the list comes back at all is the connection test. */
@@ -127,7 +148,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             checking = true
             checkResult = null
-            val key = keyInput.trim().ifEmpty { c.secrets.apiKey().orEmpty() }
+            val key = keyInput.trim().ifEmpty { c.secrets.key(baseUrl).orEmpty() }
             if (key.isEmpty()) {
                 checkResult = "先填 API Key"
                 checking = false
@@ -230,9 +251,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     override fun onCleared() {
         val pendingKey = keyInput.trim()
+        val address = baseUrl
         c.appScope.launch {
             persist()
-            if (pendingKey.isNotEmpty()) c.secrets.setApiKey(pendingKey)
+            if (pendingKey.isNotEmpty() && !deleted) c.secrets.setKey(address, pendingKey)
         }
     }
 }
