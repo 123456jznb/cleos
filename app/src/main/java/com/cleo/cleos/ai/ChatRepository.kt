@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
 
@@ -104,6 +105,41 @@ class ChatRepository(
 
     fun deleteMessage(id: Long) {
         scope.launch { db.messages().delete(id) }
+    }
+
+    /**
+     * The person's answer to a request card: show that secret this once, or don't. Either
+     * way it is their turn in the conversation, so the model answers it.
+     */
+    fun answerSecretRequest(conversationId: Long, requestMessageId: Long, grant: Boolean) {
+        if (busy) return
+        job = scope.launch {
+            val row = db.messages().get(requestMessageId) ?: return@launch
+            val request = SecretRequests.decode(row.content)?.takeIf { it.status == SecretRequest.PENDING } ?: return@launch
+            val ai = settings.current().aiName.trim().ifEmpty { "TA" }
+            val day = LocalDate.ofEpochDay(request.day)
+            val entry = db.diary().get(request.diaryId)
+            if (grant && entry == null) {
+                db.messages().setContent(row.id, SecretRequests.encode(request.copy(status = SecretRequest.GONE)))
+                note(conversationId, "这个小秘密已经删掉了，没法给${ai}看")
+                return@launch
+            }
+            val status = if (grant) SecretRequest.GRANTED else SecretRequest.DECLINED
+            db.messages().setContent(row.id, SecretRequests.encode(request.copy(status = status)))
+            val now = System.currentTimeMillis()
+            val today = LocalDate.now()
+            db.messages().insert(
+                MessageEntity(
+                    conversationId = conversationId,
+                    role = "user",
+                    content = if (entry != null && grant) SecretRequests.shared(entry, today) else SecretRequests.declined(day, today),
+                    createdAt = now,
+                    note = (if (grant) "给${ai}看了" else "没给${ai}看") + "${Describe.monthDay(day)}的小秘密",
+                ),
+            )
+            db.conversations().touch(conversationId, now)
+            reply(conversationId)
+        }
     }
 
     private suspend fun reply(conversationId: Long) {
@@ -263,16 +299,22 @@ class ChatRepository(
             // The tool has acted (a todo exists now), so its result is stored even if
             // stop was pressed meanwhile: the history should match what happened.
             withContext(NonCancellable) {
+                val at = System.currentTimeMillis()
                 db.messages().insert(
                     MessageEntity(
                         conversationId = conversationId,
                         role = "tool",
                         content = outcome.result,
-                        createdAt = System.currentTimeMillis(),
+                        createdAt = at,
                         toolCallId = call.id,
                         note = outcome.note,
                     ),
                 )
+                outcome.request?.let {
+                    db.messages().insert(
+                        MessageEntity(conversationId = conversationId, role = "request", content = SecretRequests.encode(it), createdAt = at),
+                    )
+                }
             }
             results += ApiMessage("tool", outcome.result, toolCallId = call.id)
         }

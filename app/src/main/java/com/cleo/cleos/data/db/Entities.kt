@@ -1,5 +1,6 @@
 package com.cleo.cleos.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -32,8 +33,10 @@ data class MessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val conversationId: Long,
     /**
-     * "user", "assistant", "tool" (what a tool call returned, answering [toolCallId]) or
-     * "note" (a line shown in the chat that is never sent to the model).
+     * "user", "assistant", "tool" (what a tool call returned, answering [toolCallId]),
+     * "note" (a line shown in the chat that is never sent to the model) or "request" (the
+     * model asking to see a little secret; [content] is a SecretRequest as JSON, and the
+     * card is for the person only).
      */
     val role: String,
     /** For "tool": the result exactly as the model saw it. */
@@ -54,7 +57,10 @@ data class MessageEntity(
     val reasoning: String? = null,
     /** "tool": the call this answers. */
     val toolCallId: String? = null,
-    /** "tool" and "note": the one line the chat shows, e.g. 记下了待办「交报告」. */
+    /**
+     * The one line the chat shows instead of a bubble: for "tool" and "note" rows
+     * (记下了待办「交报告」), and for a "user" row that is an answer to a request.
+     */
     val note: String? = null,
 )
 
@@ -69,7 +75,21 @@ data class DiaryEntryEntity(
     val blocks: String,
     val createdAt: Long,
     val updatedAt: Long,
-)
+    /** [AUTHOR_ME] or [AUTHOR_AI]: the book is shared, each entry says whose it is. */
+    @ColumnInfo(defaultValue = DiaryEntryEntity.AUTHOR_ME)
+    val author: String = DiaryEntryEntity.AUTHOR_ME,
+    /**
+     * A little secret: the model never reads it. It can only ask, in the chat, and sees it
+     * when the person says yes, that one time.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val secret: Boolean = false,
+) {
+    companion object {
+        const val AUTHOR_ME = "me"
+        const val AUTHOR_AI = "ai"
+    }
+}
 
 @Serializable
 @Entity(tableName = "todos")

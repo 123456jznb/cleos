@@ -44,6 +44,12 @@ object Prompt {
             add("对方让你记下、修改、完成或查看待办时，用工具去做，做完再告诉对方；没有调用工具，就不要说已经做好了。")
         }
         if (ToolGroup.Diary in tools) add("你可以读对方的日记，但只在对方提起或问到日记里写过的事时才去读。")
+        if (ToolGroup.AiDiary in tools) {
+            add("你有自己的日记，和对方的写在同一个本子里。对方让你写，或者你真有想记下来的事，就用 write_diary 写：写你自己的所见所想，用第一人称，不是替对方写。")
+        }
+        if (ToolGroup.Secrets in tools) {
+            add("对方可以把日记设成小秘密，你看不到。想看就用 request_secret 问，对方点头才会给你看；被拒绝了就别追着要。")
+        }
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
     }.takeIf { it.isNotEmpty() }?.joinToString("")
 
@@ -100,7 +106,7 @@ object Prompt {
             }
         }
         "tool" -> if (withTools && toolCallId != null) ApiMessage("tool", content, toolCallId = toolCallId) else null
-        // "note" lines are for the person reading the chat, not for the model.
+        // "note" lines and "request" cards are for the person reading the chat, not for the model.
         else -> null
     }
 

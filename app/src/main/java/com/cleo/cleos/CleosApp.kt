@@ -6,6 +6,7 @@ import androidx.room.Room
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.OpenMeteo
+import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
 import com.cleo.cleos.data.BackupService
 import com.cleo.cleos.data.ImageStore
@@ -46,7 +47,12 @@ class AppContainer(context: Context) {
         .build()
 
     val chatClient = ChatClient(http)
-    val tools = ToolBox(db.todos(), db.diary(), OpenMeteo(http))
+    val tools = ToolBox(
+        db.todos(),
+        db.diary(),
+        OpenMeteo(http),
+        requests = { db.messages().requests().mapNotNull { SecretRequests.decode(it.content) } },
+    )
     val chat = ChatRepository(db, settings, secrets, chatClient, tools, appScope)
     val backup = BackupService(context, db, settings, images)
 }

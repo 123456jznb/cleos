@@ -49,6 +49,16 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt, id")
     fun observe(conversationId: Long): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun get(id: Long): MessageEntity?
+
+    /** Every request to see a secret, in any conversation, oldest first. */
+    @Query("SELECT * FROM messages WHERE role = 'request' ORDER BY createdAt, id")
+    suspend fun requests(): List<MessageEntity>
+
+    @Query("UPDATE messages SET content = :content WHERE id = :id")
+    suspend fun setContent(id: Long, content: String)
+
     /** The newest [limit] messages, newest first. Callers reverse them for the API. */
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun newest(conversationId: Long, limit: Int): List<MessageEntity>
@@ -80,11 +90,17 @@ interface DiaryDao {
     @Query("SELECT * FROM diary_entries WHERE id = :id")
     suspend fun get(id: Long): DiaryEntryEntity?
 
-    @Query("SELECT * FROM diary_entries WHERE day = :day ORDER BY createdAt")
-    suspend fun onDay(day: Long): List<DiaryEntryEntity>
+    // What the model may read: never a secret, and only entries by the [authors] it is
+    // allowed (its own, and the person's when reading the diary is switched on).
 
-    @Query("SELECT * FROM diary_entries ORDER BY day DESC, createdAt DESC LIMIT :limit")
-    suspend fun recent(limit: Int): List<DiaryEntryEntity>
+    @Query("SELECT * FROM diary_entries WHERE day = :day AND secret = 0 AND author IN (:authors) ORDER BY createdAt")
+    suspend fun onDay(day: Long, authors: List<String>): List<DiaryEntryEntity>
+
+    @Query(
+        "SELECT * FROM diary_entries WHERE secret = 0 AND author IN (:authors) " +
+            "ORDER BY day DESC, createdAt DESC LIMIT :limit",
+    )
+    suspend fun recent(authors: List<String>, limit: Int): List<DiaryEntryEntity>
 
     /**
      * Candidates for a keyword, newest first. [pattern] is a LIKE pattern with `!` as the
@@ -92,10 +108,17 @@ interface DiaryDao {
      * so callers check the plain text again.
      */
     @Query(
-        "SELECT * FROM diary_entries WHERE title LIKE :pattern ESCAPE '!' OR blocks LIKE :pattern ESCAPE '!' " +
+        "SELECT * FROM diary_entries WHERE secret = 0 AND author IN (:authors) " +
+            "AND (title LIKE :pattern ESCAPE '!' OR blocks LIKE :pattern ESCAPE '!') " +
             "ORDER BY day DESC, createdAt DESC LIMIT :limit",
     )
-    suspend fun search(pattern: String, limit: Int): List<DiaryEntryEntity>
+    suspend fun search(pattern: String, authors: List<String>, limit: Int): List<DiaryEntryEntity>
+
+    @Query("SELECT * FROM diary_entries WHERE secret = 1 ORDER BY day DESC, createdAt DESC")
+    suspend fun secrets(): List<DiaryEntryEntity>
+
+    @Query("SELECT COUNT(*) FROM diary_entries WHERE secret = 1 AND day = :day")
+    suspend fun secretsOnDay(day: Long): Int
 
     @Insert
     suspend fun insert(entry: DiaryEntryEntity): Long

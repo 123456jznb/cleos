@@ -1,5 +1,6 @@
 package com.cleo.cleos.ui.diary
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,18 +18,26 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.glass.GlassIconButton
@@ -63,6 +73,8 @@ private data class DiaryCard(
     val excerpt: String,
     val cover: File?,
     val imageCount: Int,
+    val byAi: Boolean,
+    val secret: Boolean,
 )
 
 private sealed interface DiaryRow {
@@ -70,15 +82,34 @@ private sealed interface DiaryRow {
     data class Entry(val card: DiaryCard) : DiaryRow
 }
 
+/** One book, both writers: these pick whose pages to show, or only the locked ones. */
+private enum class DiaryFilter(val label: String, val empty: String, val hint: String) {
+    All("全部", "还没有日记", "点右下角的笔，写第一篇"),
+    Mine("我写的", "你还没写过日记", "点右下角的笔，写第一篇"),
+    Theirs("TA 写的", "TA 还没写过日记", "在聊天里请 TA 写一篇"),
+    Secrets("小秘密", "还没有小秘密", "点右下角的笔写一个，TA 看不到"),
+    ;
+
+    fun accepts(e: DiaryEntryEntity) = when (this) {
+        All -> true
+        Mine -> e.author == DiaryEntryEntity.AUTHOR_ME
+        Theirs -> e.author == DiaryEntryEntity.AUTHOR_AI
+        Secrets -> e.secret
+    }
+}
+
 @Composable
-fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () -> Unit) {
+fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit, onOpenSettings: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
-    val rows by remember {
+    var filter by rememberSaveable { mutableStateOf(DiaryFilter.All) }
+    val rows by remember(filter) {
         c.db.diary().observeAll()
-            .map { entries -> toRows(entries) { c.images.file(it) } }
+            .map { entries -> toRows(entries.filter(filter::accepts)) { c.images.file(it) } }
             .flowOn(Dispatchers.Default)
     }.collectAsStateWithLifecycle(null)
+    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
+    val ai = settings.aiName.trim().ifEmpty { "TA" }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val count = rows?.count { it is DiaryRow.Entry } ?: 0
 
@@ -90,10 +121,12 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () ->
                 backdrop = page,
                 trailing = { GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page) },
             )
+            // Writing from the secrets page starts locked: that page is where secrets are kept.
+            val secret = filter == DiaryFilter.Secrets
             GlassIconButton(
-                Icons.Rounded.EditNote,
-                "写日记",
-                { onOpenEntry(0L) },
+                if (secret) Icons.Rounded.Lock else Icons.Rounded.EditNote,
+                if (secret) "写小秘密" else "写日记",
+                { onOpenEntry(0L, secret) },
                 page,
                 style = palette.accentSurface,
                 tint = Color.White,
@@ -113,9 +146,9 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () ->
                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("还没有日记", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                    Text(filter.empty, color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.size(6.dp))
-                    Text("点右下角的笔，写第一篇", color = palette.contentSecondary, fontSize = 14.sp)
+                    Text(filter.hint, color = palette.contentSecondary, fontSize = 14.sp)
                 }
             }
         }
@@ -126,6 +159,7 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () ->
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = statusTop + TopBarHeight + 6.dp, bottom = bottomInset + 80.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "filter") { FilterBar(filter) { filter = it } }
             items(list.orEmpty(), key = {
                 when (it) {
                     is DiaryRow.Month -> "m${it.month}"
@@ -134,7 +168,7 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (Long) -> Unit, onOpenSettings: () ->
             }) { row ->
                 when (row) {
                     is DiaryRow.Month -> MonthHeader(row.month)
-                    is DiaryRow.Entry -> DiaryCardView(row.card) { onOpenEntry(row.card.id) }
+                    is DiaryRow.Entry -> DiaryCardView(row.card, ai) { onOpenEntry(row.card.id, false) }
                 }
             }
         }
@@ -161,6 +195,8 @@ private fun toRows(entries: List<DiaryEntryEntity>, file: (String) -> File): Lis
                 excerpt = DiaryBlocks.plainText(blocks).replace(Regex("\\s+"), " ").take(160),
                 cover = images.firstOrNull()?.let { file(it.file) },
                 imageCount = images.size,
+                byAi = e.author == DiaryEntryEntity.AUTHOR_AI,
+                secret = e.secret,
             ),
         )
     }
@@ -177,8 +213,46 @@ private fun MonthHeader(month: YearMonth) {
     }
 }
 
+/** On glass, like every other line of text on this page; the chosen one is an accent pill. */
 @Composable
-private fun DiaryCardView(card: DiaryCard, onClick: () -> Unit) {
+private fun FilterBar(selected: DiaryFilter, onSelect: (DiaryFilter) -> Unit) {
+    val palette = LocalGlassPalette.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        GlassSurface(style = palette.bar, shape = GlassShape.Capsule, contentPadding = PaddingValues(4.dp)) {
+            Row {
+                DiaryFilter.entries.forEach { f ->
+                    val on = f == selected
+                    Box(
+                        Modifier
+                            .background(if (on) palette.accent else Color.Transparent, CircleShape)
+                            .clickable(interactionSource = null, indication = null) { onSelect(f) }
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    ) {
+                        Text(
+                            f.label,
+                            color = if (on) Color.White else palette.content,
+                            fontSize = 14.sp,
+                            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardTag(icon: ImageVector, text: String) {
+    val palette = LocalGlassPalette.current
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 3.dp)) {
+        Icon(icon, contentDescription = null, tint = palette.accentContent, modifier = Modifier.size(13.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(text, color = palette.accentContent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun DiaryCardView(card: DiaryCard, ai: String, onClick: () -> Unit) {
     val palette = LocalGlassPalette.current
     GlassSurface(
         modifier = Modifier.fillMaxWidth().clickable(interactionSource = null, indication = null, onClick = onClick),
@@ -192,6 +266,10 @@ private fun DiaryCardView(card: DiaryCard, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
+                when {
+                    card.secret -> CardTag(Icons.Rounded.Lock, "小秘密")
+                    card.byAi -> CardTag(Icons.Rounded.AutoAwesome, "${ai}写的")
+                }
                 if (card.title.isNotBlank()) {
                     Text(card.title, color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.size(3.dp))

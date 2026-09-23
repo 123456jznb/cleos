@@ -52,7 +52,7 @@ private val TabBarReserve = 88.dp
 fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenConversations: () -> Unit,
-    onOpenDiaryEntry: (Long) -> Unit,
+    onOpenDiaryEntry: (id: Long, secret: Boolean) -> Unit,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val holder = rememberSaveableStateHolder()

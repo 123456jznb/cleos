@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
@@ -57,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -72,6 +76,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.SecretRequest
+import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.glass.Backdrop
@@ -88,6 +94,7 @@ import com.cleo.cleos.ui.common.TopBarHeight
 import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 /** A gap longer than this between two messages gets a time line between them. */
 private const val TIME_GAP_MS = 10 * 60 * 1000L
@@ -104,8 +111,12 @@ private sealed interface ChatRow {
     }
 }
 
-/** An assistant turn that only called tools: nothing to show, its results have their own lines. */
-private fun MessageEntity.silent() = role == "assistant" && content.isEmpty() && error == null
+/**
+ * Rows with nothing to draw: an assistant turn that only called tools (the results have
+ * their own lines), and a tool result without a line (a request shows its card instead).
+ */
+private fun MessageEntity.silent() =
+    (role == "assistant" && content.isEmpty() && error == null) || (role == "tool" && note.isNullOrBlank())
 
 /** Newest first, because the list is laid out bottom-up. */
 private fun buildRows(messages: List<MessageEntity>): List<ChatRow> {
@@ -197,14 +208,24 @@ fun ChatTab(
             items(rows, key = { it.key }) { row ->
                 when (row) {
                     is ChatRow.Stamp -> TimeStamp(row.at)
-                    is ChatRow.Message -> when (row.message.role) {
-                        "tool", "note" -> ToolNote(row.message.note.orEmpty(), notice = row.message.role == "note")
-                        else -> MessageBubble(
-                            message = row.message,
-                            canRetry = row.isLast && !state.replying,
-                            onRetry = { vm.retry(row.message.id) },
-                            onDelete = { vm.delete(row.message.id) },
-                        )
+                    is ChatRow.Message -> {
+                        val m = row.message
+                        val note = m.note
+                        when {
+                            m.role == "tool" || m.role == "note" ->
+                                ToolNote(note.orEmpty(), if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome)
+                            m.role == "request" -> RequestCard(m, state.aiName, enabled = !state.replying) { grant ->
+                                vm.answerSecret(m.id, grant)
+                            }
+                            // The person's answer to a request: their turn, drawn as a line on their side.
+                            m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
+                            else -> MessageBubble(
+                                message = m,
+                                canRetry = row.isLast && !state.replying,
+                                onRetry = { vm.retry(m.id) },
+                                onDelete = { vm.delete(m.id) },
+                            )
+                        }
                     }
                 }
             }
@@ -375,33 +396,96 @@ private fun LiveBubble(live: StreamingReply) {
                 }
             }
         }
-        live.activity?.let { ToolNote(it + "…", running = true) }
+        live.activity?.let { ToolNote(it + "…", Icons.Rounded.AutoAwesome, running = true) }
     }
 }
 
 /**
- * One line for something done on the way to a reply (记下了待办「交报告」), or a notice
- * from the app. A capsule of its own, like the error lines: it sits on the wallpaper.
+ * One line for something done on the way to a reply (记下了待办「交报告」), a notice from
+ * the app, or the person's answer to a request ([mine], on their side). A capsule of its
+ * own, like the error lines: it sits on the wallpaper.
  */
 @Composable
-private fun ToolNote(text: String, notice: Boolean = false, running: Boolean = false) {
+private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, mine: Boolean = false) {
     val palette = LocalGlassPalette.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+        GlassSurface(
+            modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+            style = palette.notice,
+            shape = GlassShape.Rounded(14.dp),
+            contentPadding = PaddingValues(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (running) palette.contentSecondary else palette.accentContent,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(text, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+        }
+    }
+}
+
+/**
+ * The model asking to see a little secret. Only the person ever sees this card, so it can
+ * show which entry (date and title) even though the model was never told the title.
+ */
+@Composable
+private fun RequestCard(message: MessageEntity, aiName: String, enabled: Boolean, onAnswer: (Boolean) -> Unit) {
+    val palette = LocalGlassPalette.current
+    val request = remember(message.content) { SecretRequests.decode(message.content) } ?: return
+    val who = aiName.ifBlank { "TA" }
     GlassSurface(
         modifier = Modifier.widthIn(max = bubbleMaxWidth()),
-        style = palette.notice,
-        shape = GlassShape.Rounded(14.dp),
-        contentPadding = PaddingValues(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        style = palette.bubble,
+        shape = GlassShape.Rounded(20.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (notice) Icons.Rounded.Info else Icons.Rounded.AutoAwesome,
-                contentDescription = null,
-                tint = if (running) palette.contentSecondary else palette.accentContent,
-                modifier = Modifier.size(14.dp),
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Lock, contentDescription = null, tint = palette.accentContent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("${who}想看你的小秘密", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Text(
+                Dates.monthDay(LocalDate.ofEpochDay(request.day)) + " · " + request.title.ifBlank { "没有标题" },
+                color = palette.contentSecondary,
+                fontSize = 13.sp,
             )
-            Spacer(Modifier.width(6.dp))
-            Text(text, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 18.sp)
+            if (request.reason.isNotBlank()) {
+                Text("「${request.reason}」", color = palette.content, fontSize = 15.sp, lineHeight = 21.sp)
+            }
+            when (request.status) {
+                SecretRequest.PENDING -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        Pill("给${who}看", accent = true, enabled = enabled) { onAnswer(true) }
+                        Pill("不给", accent = false, enabled = enabled) { onAnswer(false) }
+                    }
+                    Text("给看只是这一次，日记还是锁着的。", color = palette.contentSecondary, fontSize = 12.sp)
+                }
+                SecretRequest.GRANTED -> Text("给${who}看了", color = palette.contentSecondary, fontSize = 13.sp)
+                SecretRequest.DECLINED -> Text("没给${who}看", color = palette.contentSecondary, fontSize = 13.sp)
+                else -> Text("这个小秘密已经不在了", color = palette.contentSecondary, fontSize = 13.sp)
+            }
         }
+    }
+}
+
+/** A plain pill, not glass: it sits on a glass card, where glass would look like a hole. */
+@Composable
+private fun Pill(text: String, accent: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    Box(
+        Modifier
+            .alpha(if (enabled) 1f else 0.5f)
+            .background(if (accent) palette.accent else palette.content.copy(alpha = 0.08f), CircleShape)
+            .clickable(enabled = enabled, interactionSource = null, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(text, color = if (accent) Color.White else palette.content, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 

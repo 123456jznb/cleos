@@ -44,11 +44,19 @@ sealed interface EditorBlock {
  * nothing. A new entry is not written until it has some content; an entry emptied out
  * completely is removed when the editor closes.
  */
-class DiaryEditorViewModel(private val c: AppContainer, initialId: Long) : ViewModel() {
+class DiaryEditorViewModel(private val c: AppContainer, initialId: Long, startSecret: Boolean = false) : ViewModel() {
     var entryId = initialId
         private set
     var day by mutableStateOf(Dates.today())
     var title by mutableStateOf(TextFieldValue(""))
+
+    /** Locked: the model never reads it, and can only ask to be shown it once. */
+    var secret by mutableStateOf(startSecret)
+    var author by mutableStateOf(DiaryEntryEntity.AUTHOR_ME)
+        private set
+
+    /** The model's own entries are read, not edited: they are its words. */
+    val readOnly: Boolean get() = author == DiaryEntryEntity.AUTHOR_AI
     val blocks = mutableStateListOf<EditorBlock>()
     var loaded by mutableStateOf(false)
         private set
@@ -72,6 +80,8 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long) : ViewM
                     day = LocalDate.ofEpochDay(e.day)
                     title = TextFieldValue(e.title)
                     createdAt = e.createdAt
+                    secret = e.secret
+                    author = e.author
                     DiaryBlocks.decode(e.blocks).forEach { b ->
                         when (b) {
                             is DiaryBlock.Text -> blocks += EditorBlock.Text(nextKey++, TextFieldValue(b.text))
@@ -105,6 +115,7 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long) : ViewM
     private fun signature(): List<Any> = buildList {
         add(day)
         add(title.text)
+        add(secret)
         blocks.forEach {
             when (it) {
                 is EditorBlock.Text -> add(it.value.text)
@@ -132,7 +143,7 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long) : ViewM
     // but before its id came back, the closing save would insert the entry a second time.
     private suspend fun save(final: Boolean) = withContext(NonCancellable) {
         saveLock.withLock {
-            if (deleted || !loaded) return@withLock
+            if (deleted || !loaded || readOnly) return@withLock
             val content = content()
             if (isEmpty(content)) {
                 if (final && entryId != 0L) {
@@ -148,6 +159,8 @@ class DiaryEditorViewModel(private val c: AppContainer, initialId: Long) : ViewM
                 blocks = DiaryBlocks.encode(content),
                 createdAt = createdAt,
                 updatedAt = System.currentTimeMillis(),
+                author = author,
+                secret = secret,
             )
             if (entryId == 0L) entryId = c.db.diary().insert(entity) else c.db.diary().update(entity)
         }

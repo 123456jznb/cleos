@@ -189,8 +189,14 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
                     vm.setTool(ToolGroup.Todos, it)
                 }
-                ToolSwitch("读日记", "你提到日记里写过的事时，TA 可以去翻。日记最私密，所以默认关着。", ToolGroup.Diary in settings.tools) {
+                ToolSwitch("读你的日记", "你提到日记里写过的事时，TA 可以去翻（小秘密除外）。日记最私密，所以默认关着。", ToolGroup.Diary in settings.tools) {
                     vm.setTool(ToolGroup.Diary, it)
+                }
+                ToolSwitch("写日记", "TA 有自己的日记，写在同一个本子里，标着是 TA 写的；你能看，改不了。", ToolGroup.AiDiary in settings.tools) {
+                    vm.setTool(ToolGroup.AiDiary, it)
+                }
+                ToolSwitch("小秘密", "TA 知道你有小秘密，但看不到；想看会在聊天里问你，你点头才给看。", ToolGroup.Secrets in settings.tools) {
+                    vm.setTool(ToolGroup.Secrets, it)
                 }
                 ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
                     vm.setTool(ToolGroup.Weather, it)

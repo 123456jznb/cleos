@@ -33,6 +33,8 @@ import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -59,12 +61,16 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassButton
 import com.cleo.cleos.glass.GlassIconButton
@@ -86,9 +92,11 @@ private val ToolbarHeight = 52.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DiaryEditorScreen(id: Long, onBack: () -> Unit, onOpenImage: (String) -> Unit) {
-    val vm = appViewModel(key = "diary-$id") { DiaryEditorViewModel(it, id) }
+fun DiaryEditorScreen(id: Long, startSecret: Boolean = false, onBack: () -> Unit, onOpenImage: (String) -> Unit) {
+    val vm = appViewModel(key = "diary-$id") { DiaryEditorViewModel(it, id, startSecret) }
     val c = appContainer()
+    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
+    val ai = settings.aiName.trim().ifEmpty { "TA" }
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
@@ -107,16 +115,25 @@ fun DiaryEditorScreen(id: Long, onBack: () -> Unit, onOpenImage: (String) -> Uni
         overlay = { page ->
             GlassTopBar(
                 title = Dates.full(vm.day),
+                subtitle = when {
+                    !vm.loaded -> null
+                    vm.readOnly -> "${ai}写的"
+                    vm.secret -> "小秘密 · ${ai}看不到"
+                    else -> null
+                },
                 backdrop = page,
                 leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回", onBack, page) },
                 trailing = {
-                    GlassIconButton(Icons.Rounded.CalendarMonth, "改日期", { pickingDate = true }, page)
+                    if (!vm.readOnly) GlassIconButton(Icons.Rounded.CalendarMonth, "改日期", { pickingDate = true }, page)
                     GlassIconButton(Icons.Rounded.DeleteOutline, "删除", { confirmDelete = true }, page)
                 },
             )
             EditorToolbar(
                 backdrop = page,
                 importing = vm.importing,
+                readOnly = vm.readOnly,
+                secret = vm.secret,
+                onToggleSecret = { vm.secret = !vm.secret },
                 onPick = {
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
@@ -202,13 +219,14 @@ private fun EditorContent(vm: DiaryEditorViewModel, onOpenImage: (String) -> Uni
         BasicTextField(
             value = vm.title,
             onValueChange = { vm.title = it },
+            readOnly = vm.readOnly,
             textStyle = TextStyle(color = palette.content, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, lineHeight = 30.sp),
             cursorBrush = SolidColor(palette.accentContent),
             maxLines = 3,
             modifier = Modifier.fillMaxWidth(),
             decorationBox = { inner ->
                 Box {
-                    if (vm.title.text.isEmpty()) {
+                    if (vm.title.text.isEmpty() && !vm.readOnly) {
                         Text("标题（可以不写）", color = palette.contentSecondary.copy(alpha = 0.45f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                     }
                     inner()
@@ -231,6 +249,7 @@ private fun EditorContent(vm: DiaryEditorViewModel, onOpenImage: (String) -> Uni
                         BasicTextField(
                             value = block.value,
                             onValueChange = { block.value = it },
+                            readOnly = vm.readOnly,
                             textStyle = bodyStyle,
                             cursorBrush = SolidColor(palette.accentContent),
                             modifier = Modifier
@@ -251,7 +270,7 @@ private fun EditorContent(vm: DiaryEditorViewModel, onOpenImage: (String) -> Uni
                         file = file(block.image.file),
                         ratio = block.image.width.toFloat() / block.image.height.coerceAtLeast(1),
                         onOpen = { onOpenImage(block.image.file) },
-                        onRemove = { vm.removeImage(block.key) },
+                        onRemove = if (vm.readOnly) null else ({ vm.removeImage(block.key) }),
                     )
                 }
             }
@@ -262,7 +281,7 @@ private fun EditorContent(vm: DiaryEditorViewModel, onOpenImage: (String) -> Uni
             Modifier
                 .fillMaxWidth()
                 .height(220.dp)
-                .clickable(interactionSource = null, indication = null) {
+                .clickable(enabled = !vm.readOnly, interactionSource = null, indication = null) {
                     vm.focusRequest = vm.blocks.lastOrNull { it is EditorBlock.Text }?.key
                 },
         )
@@ -270,7 +289,7 @@ private fun EditorContent(vm: DiaryEditorViewModel, onOpenImage: (String) -> Uni
 }
 
 @Composable
-private fun ImageBlock(file: File, ratio: Float, onOpen: () -> Unit, onRemove: () -> Unit) {
+private fun ImageBlock(file: File, ratio: Float, onOpen: () -> Unit, onRemove: (() -> Unit)?) {
     Box(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         AsyncImage(
             model = file,
@@ -284,16 +303,18 @@ private fun ImageBlock(file: File, ratio: Float, onOpen: () -> Unit, onRemove: (
                 .clip(RoundedCornerShape(16.dp))
                 .clickable(onClick = onOpen),
         )
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-                .size(30.dp)
-                .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-                .clickable(onClick = onRemove),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Rounded.Close, contentDescription = "移除图片", tint = Color.White, modifier = Modifier.size(18.dp))
+        if (onRemove != null) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(30.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Close, contentDescription = "移除图片", tint = Color.White, modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
@@ -302,24 +323,53 @@ private fun ImageBlock(file: File, ratio: Float, onOpen: () -> Unit, onRemove: (
 private fun EditorToolbar(
     backdrop: Backdrop,
     importing: Boolean,
+    readOnly: Boolean,
+    secret: Boolean,
+    onToggleSecret: () -> Unit,
     onPick: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalGlassPalette.current
     Row(modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        GlassButton(
-            onClick = onPick,
-            backdrop = backdrop,
-            style = palette.input,
-            enabled = !importing,
-            modifier = Modifier.height(ToolbarHeight),
-            contentPadding = PaddingValues(horizontal = 18.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = palette.content, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(if (importing) "正在放进来…" else "插图", color = palette.content, fontSize = 15.sp)
+        if (!readOnly) {
+            GlassButton(
+                onClick = onPick,
+                backdrop = backdrop,
+                style = palette.input,
+                enabled = !importing,
+                modifier = Modifier.height(ToolbarHeight),
+                contentPadding = PaddingValues(horizontal = 18.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = palette.content, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (importing) "正在放进来…" else "插图", color = palette.content, fontSize = 15.sp)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            // Locked or not, said in words as well as by the icon: it decides what the model can read.
+            GlassButton(
+                onClick = onToggleSecret,
+                backdrop = backdrop,
+                style = if (secret) palette.accentSurface else palette.input,
+                contentColor = if (secret) Color.White else palette.content,
+                modifier = Modifier
+                    .height(ToolbarHeight)
+                    .semantics { stateDescription = if (secret) "锁着，看不到" else "没锁" },
+                contentPadding = PaddingValues(horizontal = 16.dp),
+            ) {
+                val tint = if (secret) Color.White else palette.content
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (secret) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("小秘密", color = tint, fontSize = 15.sp)
+                }
             }
         }
         Spacer(Modifier.weight(1f))

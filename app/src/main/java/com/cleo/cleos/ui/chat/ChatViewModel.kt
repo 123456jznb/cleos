@@ -85,6 +85,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun delete(messageId: Long) = c.chat.deleteMessage(messageId)
 
+    fun answerSecret(requestMessageId: Long, grant: Boolean) {
+        conversationId.value?.let { c.chat.answerSecretRequest(it, requestMessageId, grant) }
+    }
+
     /** An empty conversation is reused instead of stacking up blank ones. */
     fun newConversation() {
         viewModelScope.launch {

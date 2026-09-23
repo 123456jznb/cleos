@@ -29,9 +29,9 @@ object LabRoute
 @Serializable
 object ConversationsRoute
 
-/** id 0 means a new entry. */
+/** id 0 means a new entry; [secret] says whether a new one starts locked. */
 @Serializable
-data class DiaryRoute(val id: Long)
+data class DiaryRoute(val id: Long, val secret: Boolean = false)
 
 @Serializable
 data class ImageRoute(val file: String)
@@ -56,7 +56,7 @@ fun CleosNavHost() {
             MainScreen(
                 onOpenSettings = { nav.go(SettingsRoute) },
                 onOpenConversations = { nav.go(ConversationsRoute) },
-                onOpenDiaryEntry = { nav.go(DiaryRoute(it)) },
+                onOpenDiaryEntry = { id, secret -> nav.go(DiaryRoute(id, secret)) },
             )
         }
         composable<SettingsRoute> {
@@ -65,8 +65,10 @@ fun CleosNavHost() {
         composable<LabRoute> { GlassLabScreen(onBack = nav::back) }
         composable<ConversationsRoute> { ConversationsScreen(onBack = nav::back) }
         composable<DiaryRoute> { entry ->
+            val route = entry.toRoute<DiaryRoute>()
             DiaryEditorScreen(
-                id = entry.toRoute<DiaryRoute>().id,
+                id = route.id,
+                startSecret = route.secret,
                 onBack = nav::back,
                 onOpenImage = { nav.go(ImageRoute(it)) },
             )

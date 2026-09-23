@@ -38,10 +38,10 @@ data class AppSettings(
     /** Glass the user tuned in the glass lab and applied, per part. */
     val glassTuning: Map<GlassPart, GlassTuning> = emptyMap(),
     /**
-     * What the model may do. Reading the diary starts off: it is the one tool that
-     * hands the model something private, so it waits to be asked for.
+     * What the model may do. Reading the person's diary starts off: it is the one tool
+     * that hands the model something private, so it waits to be asked for.
      */
-    val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.Weather),
+    val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Weather),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",
 )
@@ -152,11 +152,32 @@ private val tuningJson = Json { ignoreUnknownKeys = true }
 internal fun encodeTuning(map: Map<GlassPart, GlassTuning>): String =
     tuningJson.encodeToString(map.mapKeys { it.key.name })
 
-internal fun encodeTools(tools: Set<ToolGroup>): String = tools.sortedBy { it.ordinal }.joinToString(",") { it.name }
+/**
+ * Every group's choice is written out, on or off. Written as a list of the groups that are
+ * on, a group added in a later version would read as switched off; this way it gets its
+ * own default until the person decides.
+ */
+internal fun encodeTools(tools: Set<ToolGroup>): String =
+    ToolGroup.entries.joinToString(",") { "${it.name}:${if (it in tools) "on" else "off"}" }
+
+/** 0.3.0 wrote only the names of the groups that were on, and knew only these three. */
+private val GROUPS_IN_0_3 = setOf(ToolGroup.Todos, ToolGroup.Diary, ToolGroup.Weather)
 
 /** By name, like the tuning: a group removed in a later version is skipped. */
-internal fun decodeTools(raw: String): Set<ToolGroup> =
-    raw.split(',').mapNotNull { name -> ToolGroup.entries.firstOrNull { it.name == name.trim() } }.toSet()
+internal fun decodeTools(raw: String): Set<ToolGroup> {
+    fun group(name: String) = ToolGroup.entries.firstOrNull { it.name == name.trim() }
+    val defaults = AppSettings().tools
+    if (':' !in raw) {
+        val on = raw.split(',').mapNotNull(::group).toSet()
+        return on + (defaults - GROUPS_IN_0_3)
+    }
+    val chosen = raw.split(',').mapNotNull { part ->
+        val bits = part.split(':')
+        if (bits.size != 2) return@mapNotNull null
+        group(bits[0])?.let { it to (bits[1].trim() == "on") }
+    }.toMap()
+    return ToolGroup.entries.filter { chosen[it] ?: (it in defaults) }.toSet()
+}
 
 internal fun decodeTuning(raw: String?): Map<GlassPart, GlassTuning> {
     if (raw.isNullOrBlank()) return emptyMap()

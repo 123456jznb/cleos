@@ -51,6 +51,14 @@ class PromptTest {
     }
 
     @Test
+    fun itsOwnDiaryAndTheSecretsComeWithTheirRules() {
+        val s = Prompt.system(AppSettings(), setOf(ToolGroup.AiDiary, ToolGroup.Secrets))
+        assertTrue(s.contains("不是替对方写"))
+        assertTrue(s.contains("被拒绝了就别追着要"))
+        assertFalse("reading the person's diary is a separate permission", s.contains("只在对方提起或问到日记里写过的事时"))
+    }
+
+    @Test
     fun timeRidesOnTheLastUserMessageOnlyAndCarriesTheYear() {
         val out = Prompt.messages(
             AppSettings(),
