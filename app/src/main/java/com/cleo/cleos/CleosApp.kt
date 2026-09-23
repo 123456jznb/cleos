@@ -3,6 +3,7 @@ package com.cleo.cleos
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.OpenMeteo
@@ -52,7 +53,8 @@ class AppContainer(context: Context) {
         db.diary(),
         OpenMeteo(http),
         requests = { db.messages().requests().mapNotNull { SecretRequests.decode(it.content) } },
+        avatar = AiSelfAvatar(db, images, settings),
     )
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, appScope)
+    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, appScope)
     val backup = BackupService(context, db, settings, images)
 }

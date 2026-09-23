@@ -35,6 +35,11 @@ data class ApiMessage(
     val toolCallId: String? = null,
     /** Reasoning handed back within the turn that produced it (see MessageEntity.reasoning). */
     val reasoning: String? = null,
+    /**
+     * Pictures the person sent: ImageStore names as Prompt builds the message, turned into
+     * data: URLs just before sending.
+     */
+    val images: List<String> = emptyList(),
 )
 
 /** Where to send a conversation. [baseUrl] may or may not already end in /chat/completions. */
@@ -176,7 +181,23 @@ internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<
         for (m in messages) {
             addJsonObject {
                 put("role", m.role)
-                if (m.toolCalls.isEmpty()) {
+                if (m.images.isNotEmpty()) {
+                    // With pictures the content becomes a list of parts, the text first.
+                    putJsonArray("content") {
+                        if (m.content.isNotEmpty()) {
+                            addJsonObject {
+                                put("type", "text")
+                                put("text", m.content)
+                            }
+                        }
+                        for (url in m.images) {
+                            addJsonObject {
+                                put("type", "image_url")
+                                putJsonObject("image_url") { put("url", url) }
+                            }
+                        }
+                    }
+                } else if (m.toolCalls.isEmpty()) {
                     put("content", m.content)
                 } else {
                     if (m.content.isEmpty()) put("content", JsonNull) else put("content", m.content)

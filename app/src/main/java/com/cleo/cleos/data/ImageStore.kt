@@ -5,8 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.util.Base64
+import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
 import kotlin.math.max
@@ -71,6 +74,43 @@ class ImageStore(context: Context) {
 
     fun delete(names: Collection<String>) {
         names.forEach { runCatching { File(dir, it).delete() } }
+    }
+
+    // A few pictures go out with every turn while they are recent; encoding them again
+    // each time would redo the same decode and compress for nothing.
+    private val sendable = LruCache<String, String>(8)
+
+    /**
+     * [name] as a data: URL for a model to look at: at most [maxEdge] on the longer side
+     * and JPEG, which is plenty for a model and keeps each request small.
+     */
+    suspend fun dataUrl(name: String, maxEdge: Int = 1024): String? = withContext(Dispatchers.IO) {
+        sendable.get(name)?.let { return@withContext it }
+        val bitmap = thumbnail(name, maxEdge) ?: return@withContext null
+        val scale = min(1f, maxEdge / max(bitmap.width, bitmap.height).toFloat())
+        val sized = if (scale < 1f) {
+            Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt(), true)
+        } else {
+            bitmap
+        }
+        val bytes = ByteArrayOutputStream().use { out ->
+            sized.compress(Bitmap.CompressFormat.JPEG, 82, out)
+            out.toByteArray()
+        }
+        ("data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)).also { sendable.put(name, it) }
+    }
+
+    /**
+     * The middle square of [name], [edge] pixels across: for a picture the model chose as
+     * its avatar, where there is nobody to drag a crop circle.
+     */
+    suspend fun centreSquare(name: String, edge: Int = 512): Bitmap? = withContext(Dispatchers.IO) {
+        // Decoded large: the square comes from the shorter side, and a wide panorama
+        // decoded to [edge] on its longer side would leave a tiny square.
+        val bitmap = thumbnail(name, 2048) ?: return@withContext null
+        val side = min(bitmap.width, bitmap.height)
+        val square = Bitmap.createBitmap(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side)
+        if (side > edge) Bitmap.createScaledBitmap(square, edge, edge, true) else square
     }
 
     /** A small, cheap decode for colour analysis. */

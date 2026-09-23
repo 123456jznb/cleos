@@ -127,7 +127,7 @@ fun ConversationsScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     confirm = null
-                    c.appScope.launch { c.db.conversations().delete(conv.id) }
+                    c.chat.deleteConversation(conv.id)
                 }) { Text("删除", color = LocalGlassPalette.current.error) }
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } },

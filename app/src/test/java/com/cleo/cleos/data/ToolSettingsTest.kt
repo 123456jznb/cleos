@@ -9,19 +9,17 @@ class ToolSettingsTest {
     fun choicesSurviveAndGroupsAddedLaterGetTheirDefault() {
         val chosen = setOf(ToolGroup.Todos, ToolGroup.Diary)
         assertEquals(chosen, decodeTools(encodeTools(chosen)))
-        // Written before Secrets existed: it was never chosen, so it takes its default (on).
-        assertEquals(chosen + ToolGroup.Secrets, decodeTools("Todos:on,Diary:on,AiDiary:off,Weather:off"))
+        // Written before Secrets and Avatar existed: never chosen, so they take their default (on).
+        assertEquals(chosen + ToolGroup.Secrets + ToolGroup.Avatar, decodeTools("Todos:on,Diary:on,AiDiary:off,Weather:off"))
     }
 
     @Test
     fun whatVersion030WroteStillReads() {
         // 0.3.0 listed only the groups that were on, and knew Todos, Diary and Weather.
-        assertEquals(
-            setOf(ToolGroup.Todos, ToolGroup.Weather, ToolGroup.AiDiary, ToolGroup.Secrets),
-            decodeTools("Todos,Weather"),
-        )
+        val newer = setOf(ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Avatar)
+        assertEquals(setOf(ToolGroup.Todos, ToolGroup.Weather) + newer, decodeTools("Todos,Weather"))
         // Everything switched off then stays off; the newer groups still start on.
-        assertEquals(setOf(ToolGroup.AiDiary, ToolGroup.Secrets), decodeTools(""))
+        assertEquals(newer, decodeTools(""))
     }
 
     @Test

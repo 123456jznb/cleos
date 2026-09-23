@@ -1,9 +1,16 @@
 package com.cleo.cleos.ui.chat
 
+import android.net.Uri
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
+import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.StreamingReply
+import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +33,7 @@ data class ChatUiState(
     val aiName: String = "",
     val userName: String = "",
     val aiAvatar: String? = null,
+    val aiAvatarEmoji: String? = null,
     val userAvatar: String? = null,
     val chatAvatars: Boolean = false,
     val model: String = "",
@@ -71,6 +79,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 aiName = s.aiName,
                 userName = s.userName,
                 aiAvatar = s.aiAvatar,
+                aiAvatarEmoji = s.aiAvatarEmoji,
                 userAvatar = s.userAvatar,
                 chatAvatars = s.chatAvatars,
                 model = s.apiModel,
@@ -81,8 +90,38 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     val busy: Boolean get() = c.chat.busy
 
+    /** Pictures picked for the next message, already copied into the app's storage. */
+    val attachments = mutableStateListOf<MessageImage>()
+    var attaching by mutableStateOf(false)
+        private set
+
+    fun attach(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            attaching = true
+            for (uri in uris.take(Prompt.MAX_IMAGES - attachments.size)) {
+                runCatching { c.images.import(uri, maxEdge = 2048, prefix = "chat-") }
+                    .onSuccess { attachments += MessageImage(it.file, it.width, it.height) }
+            }
+            attaching = false
+        }
+    }
+
+    fun detach(image: MessageImage) {
+        attachments.remove(image)
+        c.appScope.launch { c.images.delete(listOf(image.file)) }
+    }
+
     fun send(text: String) {
-        conversationId.value?.let { c.chat.send(it, text) }
+        val id = conversationId.value ?: return
+        c.chat.send(id, text, attachments.toList())
+        attachments.clear()
+    }
+
+    override fun onCleared() {
+        // Picked but never sent: nothing will ever point at these files.
+        val unsent = attachments.map { it.file }
+        if (unsent.isNotEmpty()) c.appScope.launch { c.images.delete(unsent) }
     }
 
     fun stop() = c.chat.stop()

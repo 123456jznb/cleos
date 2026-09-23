@@ -62,6 +62,8 @@ data class MessageEntity(
      * (记下了待办「交报告」), and for a "user" row that is an answer to a request.
      */
     val note: String? = null,
+    /** "user": the pictures sent with it, a JSON array of MessageImage, in order. */
+    val images: String? = null,
 )
 
 @Serializable

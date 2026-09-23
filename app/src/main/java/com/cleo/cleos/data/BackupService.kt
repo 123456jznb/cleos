@@ -44,6 +44,7 @@ data class BackupSettings(
     /** File names under images/; absent in backups from before the home page. */
     val userAvatar: String? = null,
     val aiAvatar: String? = null,
+    val aiAvatarEmoji: String? = null,
     val chatAvatars: Boolean = true,
     val knownSince: Long? = null,
 )
@@ -145,6 +146,7 @@ class BackupService(
                 weatherCity = s.weatherCity,
                 userAvatar = s.userAvatar,
                 aiAvatar = s.aiAvatar,
+                aiAvatarEmoji = s.aiAvatarEmoji,
                 chatAvatars = s.chatAvatars,
                 knownSince = s.knownSince,
             ),
@@ -154,6 +156,7 @@ class BackupService(
             todos = db.todos().all(),
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
+            data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
             listOfNotNull(s.wallpaper, s.userAvatar, s.aiAvatar)).toSet()
 
         var written = 0
@@ -243,6 +246,7 @@ class BackupService(
                     weatherCity = bs.weatherCity,
                     userAvatar = bs.userAvatar?.takeIf { name -> images.file(name).exists() },
                     aiAvatar = bs.aiAvatar?.takeIf { name -> images.file(name).exists() },
+                    aiAvatarEmoji = bs.aiAvatarEmoji,
                     chatAvatars = bs.chatAvatars,
                     knownSince = bs.knownSince,
                 )

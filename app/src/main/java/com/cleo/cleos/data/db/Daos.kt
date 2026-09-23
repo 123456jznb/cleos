@@ -52,6 +52,17 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun get(id: Long): MessageEntity?
 
+    /** The pictures of one conversation's messages, to delete the files along with it. */
+    @Query("SELECT images FROM messages WHERE conversationId = :conversationId AND images IS NOT NULL")
+    suspend fun imagesIn(conversationId: Long): List<String>
+
+    /** The person's latest message with pictures in a conversation: what "this photo" means. */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND role = 'user' AND images IS NOT NULL " +
+            "ORDER BY createdAt DESC, id DESC LIMIT 1",
+    )
+    suspend fun latestWithImages(conversationId: Long): MessageEntity?
+
     // For the home page: the first thing the person said, and how much was said. Lines
     // shown instead of bubbles (notes, answers to requests) are not things said.
 

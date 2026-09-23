@@ -11,13 +11,15 @@ import androidx.room.RoomDatabase
  */
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, DiaryEntryEntity::class, TodoEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
         AutoMigration(from = 1, to = 2),
         // 2 -> 3: who wrote a diary entry, and whether it is a secret (both with defaults).
         AutoMigration(from = 2, to = 3),
+        // 3 -> 4: pictures sent in the chat (one nullable column).
+        AutoMigration(from = 3, to = 4),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {

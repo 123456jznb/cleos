@@ -155,10 +155,10 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                         Person(
                             file = s.aiAvatar,
                             name = ai,
-                            letter = avatarLetter(s.aiName, "TA"),
+                            letter = s.aiAvatarEmoji ?: avatarLetter(s.aiName, "TA"),
                             label = if (s.aiName.isBlank()) null else "TA",
                             menuOpen = menuFor == Who.Ai,
-                            onAvatar = { if (s.aiAvatar == null) pick(Who.Ai) else menuFor = Who.Ai },
+                            onAvatar = { if (s.aiAvatar == null && s.aiAvatarEmoji == null) pick(Who.Ai) else menuFor = Who.Ai },
                             onName = { naming = Who.Ai },
                             onChange = { menuFor = null; pick(Who.Ai) },
                             onReset = { menuFor = null; c.appScope.launch { setAvatar(c, Who.Ai, null) } },
@@ -365,7 +365,8 @@ private fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, on
 /** Swaps the picture and removes the one it replaces: nothing else points at an old avatar. */
 private suspend fun setAvatar(c: AppContainer, who: Who, file: String?) {
     val old = c.settings.current().let { if (who == Who.Me) it.userAvatar else it.aiAvatar }
-    c.settings.update { if (who == Who.Me) it.copy(userAvatar = file) else it.copy(aiAvatar = file) }
+    // A picture chosen here replaces an emoji TA picked for itself, and so does going back to the default.
+    c.settings.update { if (who == Who.Me) it.copy(userAvatar = file) else it.copy(aiAvatar = file, aiAvatarEmoji = null) }
     if (old != null && old != file) c.images.delete(listOf(old))
 }
 

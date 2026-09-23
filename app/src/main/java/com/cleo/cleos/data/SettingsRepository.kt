@@ -43,12 +43,14 @@ data class AppSettings(
      * What the model may do. Reading the person's diary starts off: it is the one tool
      * that hands the model something private, so it waits to be asked for.
      */
-    val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Weather),
+    val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.AiDiary, ToolGroup.Secrets, ToolGroup.Avatar, ToolGroup.Weather),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",
     /** File names inside ImageStore, or null for the lettered circle. */
     val userAvatar: String? = null,
     val aiAvatar: String? = null,
+    /** An emoji the model picked for itself, shown in place of the initial when there is no picture. */
+    val aiAvatarEmoji: String? = null,
     /** Avatars beside the bubbles in the chat. */
     val chatAvatars: Boolean = true,
     /** LocalDate.toEpochDay() the home page counts from; null counts from the first message. */
@@ -91,6 +93,7 @@ class SettingsRepository(private val context: Context) {
         val weatherCity = stringPreferencesKey("weather_city")
         val userAvatar = stringPreferencesKey("user_avatar")
         val aiAvatar = stringPreferencesKey("ai_avatar")
+        val aiAvatarEmoji = stringPreferencesKey("ai_avatar_emoji")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val knownSince = longPreferencesKey("known_since")
         val currentConversation = stringPreferencesKey("current_conversation")
@@ -121,6 +124,7 @@ class SettingsRepository(private val context: Context) {
             weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
             userAvatar = this[Keys.userAvatar],
             aiAvatar = this[Keys.aiAvatar],
+            aiAvatarEmoji = this[Keys.aiAvatarEmoji],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             knownSince = this[Keys.knownSince],
         )
@@ -148,6 +152,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.weatherCity] = next.weatherCity
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
             if (next.aiAvatar != null) prefs[Keys.aiAvatar] = next.aiAvatar else prefs.remove(Keys.aiAvatar)
+            if (next.aiAvatarEmoji != null) prefs[Keys.aiAvatarEmoji] = next.aiAvatarEmoji else prefs.remove(Keys.aiAvatarEmoji)
             prefs[Keys.chatAvatars] = next.chatAvatars
             if (next.knownSince != null) prefs[Keys.knownSince] = next.knownSince else prefs.remove(Keys.knownSince)
         }

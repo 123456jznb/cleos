@@ -57,6 +57,7 @@ fun CleosNavHost() {
                 onOpenSettings = { nav.go(SettingsRoute) },
                 onOpenConversations = { nav.go(ConversationsRoute) },
                 onOpenDiaryEntry = { id, secret -> nav.go(DiaryRoute(id, secret)) },
+                onOpenImage = { nav.go(ImageRoute(it)) },
             )
         }
         composable<SettingsRoute> {

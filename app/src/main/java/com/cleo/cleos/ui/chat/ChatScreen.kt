@@ -1,6 +1,9 @@
 package com.cleo.cleos.ui.chat
 
 import android.content.ClipData
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -29,13 +33,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddComment
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
@@ -60,9 +69,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -77,10 +88,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.SecretRequest
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.StreamingReply
+import com.cleo.cleos.data.MessageImage
+import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassButton
@@ -94,10 +109,12 @@ import com.cleo.cleos.ui.common.Dates
 import com.cleo.cleos.ui.common.GlassPage
 import com.cleo.cleos.ui.common.GlassTopBar
 import com.cleo.cleos.ui.common.TopBarHeight
+import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlinx.coroutines.launch
+import java.io.File
 import java.time.LocalDate
 
 /** A gap longer than this between two messages gets a time line between them. */
@@ -114,6 +131,11 @@ private val AvatarGap = 8.dp
 
 /** What a row gives up on the avatar's side, so lines without one still line up. */
 private val AvatarSlot = AvatarSize + AvatarGap
+
+private val MaxPictureHeight = 260.dp
+
+/** Pictures in one message: as many as are sent along with a request. */
+private const val MAX_ATTACHMENTS = Prompt.MAX_IMAGES
 
 private sealed interface ChatRow {
     val key: Any
@@ -152,6 +174,7 @@ fun ChatTab(
     bottomInset: Dp,
     onOpenSettings: () -> Unit,
     onOpenConversations: () -> Unit,
+    onOpenImage: (String) -> Unit,
 ) {
     val vm = appViewModel { ChatViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -160,6 +183,9 @@ fun ChatTab(
     val listState = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
     var inputHeight by remember { mutableIntStateOf(0) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_ATTACHMENTS)) {
+        vm.attach(it)
+    }
 
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
@@ -170,7 +196,7 @@ fun ChatTab(
     } else {
         Faces(
             me = Face(state.userAvatar, avatarLetter(state.userName, "我")),
-            ai = Face(state.aiAvatar, avatarLetter(state.aiName, "TA")),
+            ai = Face(state.aiAvatar, state.aiAvatarEmoji ?: avatarLetter(state.aiName, "TA")),
         )
     }
 
@@ -195,6 +221,10 @@ fun ChatTab(
                 backdrop = page,
                 text = input,
                 onTextChange = { input = it },
+                attachments = vm.attachments,
+                attaching = vm.attaching,
+                onPick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onRemove = vm::detach,
                 busy = state.replying,
                 onSend = {
                     vm.send(input)
@@ -249,6 +279,7 @@ fun ChatTab(
                                     canRetry = row.isLast && !state.replying,
                                     onRetry = { vm.retry(m.id) },
                                     onDelete = { vm.delete(m.id) },
+                                    onOpenImage = onOpenImage,
                                 )
                             }
                         }
@@ -305,6 +336,7 @@ private fun MessageBubble(
     canRetry: Boolean,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    onOpenImage: (String) -> Unit,
 ) {
     val palette = LocalGlassPalette.current
     val mine = message.role == "user"
@@ -312,6 +344,7 @@ private fun MessageBubble(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val faces = LocalFaces.current
+    val pictures = remember(message.images) { MessageImages.decode(message.images) }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         if (faces != null && !mine) {
@@ -319,44 +352,55 @@ private fun MessageBubble(
             Spacer(Modifier.width(AvatarGap))
         }
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
-            if (message.content.isNotEmpty()) {
-                Box {
-                    GlassSurface(
-                        modifier = Modifier
-                            .widthIn(max = bubbleMaxWidth())
-                            .combinedClickable(
-                                interactionSource = null,
-                                indication = null,
-                                onClick = {},
-                                onLongClick = { menu = true },
-                            ),
-                        style = if (mine) palette.bubbleMine else palette.bubble,
-                        shape = GlassShape.Rounded(20.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                    ) {
-                        Text(
-                            message.content,
-                            color = if (mine) Color.White else palette.content,
-                            fontSize = 16.sp,
-                            lineHeight = 23.sp,
-                        )
+            // One menu for the whole message, so a message that is only pictures has one too.
+            Box {
+                Column(
+                    horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (pictures.isNotEmpty()) {
+                        PictureGroup(pictures, onOpen = onOpenImage, onLongPress = { menu = true })
                     }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (message.content.isNotEmpty()) {
+                        GlassSurface(
+                            modifier = Modifier
+                                .widthIn(max = bubbleMaxWidth())
+                                .combinedClickable(
+                                    interactionSource = null,
+                                    indication = null,
+                                    onClick = {},
+                                    onLongClick = { menu = true },
+                                ),
+                            style = if (mine) palette.bubbleMine else palette.bubble,
+                            shape = GlassShape.Rounded(20.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                message.content,
+                                color = if (mine) Color.White else palette.content,
+                                fontSize = 16.sp,
+                                lineHeight = 23.sp,
+                            )
+                        }
+                    }
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (message.content.isNotEmpty()) {
                         DropdownMenuItem(text = { Text("复制") }, onClick = {
                             menu = false
                             scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
                         })
-                        if (!mine && canRetry) {
-                            DropdownMenuItem(text = { Text("重新回答") }, onClick = {
-                                menu = false
-                                onRetry()
-                            })
-                        }
-                        DropdownMenuItem(text = { Text("删除") }, onClick = {
+                    }
+                    if (!mine && canRetry) {
+                        DropdownMenuItem(text = { Text("重新回答") }, onClick = {
                             menu = false
-                            onDelete()
+                            onRetry()
                         })
                     }
+                    DropdownMenuItem(text = { Text("删除") }, onClick = {
+                        menu = false
+                        onDelete()
+                    })
                 }
             }
             val error = message.error
@@ -403,6 +447,51 @@ private fun MessageBubble(
         if (faces != null && mine) {
             Spacer(Modifier.width(AvatarGap))
             Avatar(faces.me.file, faces.me.letter, AvatarSize)
+        }
+    }
+}
+
+/**
+ * Pictures sent with a message, outside the bubble: a glass pane behind a photo would only
+ * blur its edges. One picture keeps its shape; several become a grid of squares.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PictureGroup(pictures: List<MessageImage>, onOpen: (String) -> Unit, onLongPress: () -> Unit) {
+    val c = appContainer()
+    val maxWidth = minOf(bubbleMaxWidth(), 240.dp)
+    fun Modifier.picture(file: String) = clip(RoundedCornerShape(18.dp)).combinedClickable(
+        onClick = { onOpen(file) },
+        onLongClick = onLongPress,
+    )
+    if (pictures.size == 1) {
+        val p = pictures[0]
+        val ratio = (p.width.toFloat() / p.height.coerceAtLeast(1)).coerceIn(0.6f, 1.8f)
+        AsyncImage(
+            model = c.images.file(p.file),
+            contentDescription = "图片",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                // A tall photo is held to a height, so one picture doesn't fill the screen.
+                .width(minOf(maxWidth, MaxPictureHeight * ratio))
+                .aspectRatio(ratio)
+                .picture(p.file),
+        )
+    } else {
+        val cell = (maxWidth - 4.dp) / 2
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            pictures.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    row.forEach { p ->
+                        AsyncImage(
+                            model = c.images.file(p.file),
+                            contentDescription = "图片",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(cell).picture(p.file),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -560,59 +649,122 @@ private fun TypingDots() {
     }
 }
 
+/**
+ * One piece of glass holds everything: the picture button, the text, and send (stop while
+ * a reply is being written). Pictures waiting to go sit above the text, inside the same
+ * glass. A round send button beside the field would be a second glass pane, rendered
+ * offscreen on every frame, for one button.
+ */
 @Composable
 private fun ChatInputBar(
     backdrop: Backdrop,
     text: String,
     onTextChange: (String) -> Unit,
+    attachments: List<MessageImage>,
+    attaching: Boolean,
+    onPick: () -> Unit,
+    onRemove: (MessageImage) -> Unit,
     busy: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalGlassPalette.current
-    Row(
+    val c = appContainer()
+    val canSend = text.isNotBlank() || attachments.isNotEmpty()
+    Column(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.Bottom,
+            .padding(horizontal = 12.dp)
+            .heightIn(min = 50.dp)
+            .liquidGlass(backdrop, palette.input, GlassShape.Rounded(25.dp)),
     ) {
+        if (attachments.isNotEmpty() || attaching) {
+            Row(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(start = 10.dp, end = 10.dp, top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                attachments.forEach { img -> AttachmentThumb(c.images.file(img.file)) { onRemove(img) } }
+                if (attaching) {
+                    Box(Modifier.size(64.dp).background(palette.content.copy(alpha = 0.08f), RoundedCornerShape(14.dp)))
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.Bottom) {
+            Box(
+                Modifier
+                    .padding(start = 5.dp, bottom = 5.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(enabled = !busy && attachments.size < MAX_ATTACHMENTS, onClick = onPick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "发图片", tint = palette.contentSecondary, modifier = Modifier.size(24.dp))
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp, end = 6.dp, top = 13.dp, bottom = 13.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (text.isEmpty()) {
+                    Text("说点什么…", color = palette.contentSecondary, fontSize = 16.sp)
+                }
+                BasicTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    textStyle = TextStyle(color = palette.content, fontSize = 16.sp, lineHeight = 22.sp),
+                    cursorBrush = SolidColor(palette.accentContent),
+                    maxLines = 6,
+                    // The placeholder above is drawn beside the field, so a screen reader
+                    // would otherwise announce an unnamed text box.
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "输入消息" },
+                )
+            }
+            // Plain fills inside the glass, like the chips on a card: glass in glass reads as a hole.
+            val button = Modifier.padding(end = 6.dp, bottom = 6.dp).size(38.dp).clip(CircleShape)
+            if (busy) {
+                Box(
+                    button.background(palette.content.copy(alpha = 0.1f)).clickable(onClick = onStop),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Stop, contentDescription = "停止", tint = palette.content, modifier = Modifier.size(20.dp))
+                }
+            } else {
+                Box(
+                    button
+                        .background(if (canSend) palette.accent else palette.accent.copy(alpha = 0.35f))
+                        .clickable(enabled = canSend, onClick = onSend),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.ArrowUpward, contentDescription = "发送", tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentThumb(file: File, onRemove: () -> Unit) {
+    Box(Modifier.size(64.dp)) {
+        AsyncImage(
+            model = file,
+            contentDescription = "要发的图片",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)),
+        )
         Box(
             Modifier
-                .weight(1f)
-                .heightIn(min = 50.dp)
-                .liquidGlass(backdrop, palette.input, GlassShape.Rounded(25.dp))
-                .padding(horizontal = 18.dp, vertical = 13.dp),
-            contentAlignment = Alignment.CenterStart,
+                .align(Alignment.TopEnd)
+                .padding(3.dp)
+                .size(22.dp)
+                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
         ) {
-            if (text.isEmpty()) {
-                Text("说点什么…", color = palette.contentSecondary, fontSize = 16.sp)
-            }
-            BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
-                textStyle = TextStyle(color = palette.content, fontSize = 16.sp, lineHeight = 22.sp),
-                cursorBrush = SolidColor(palette.accentContent),
-                maxLines = 6,
-                // The placeholder above is drawn beside the field, so a screen reader
-                // would otherwise announce an unnamed text box.
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "输入消息" },
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        if (busy) {
-            GlassIconButton(Icons.Rounded.Stop, "停止", onStop, backdrop, size = 50.dp)
-        } else {
-            GlassIconButton(
-                Icons.Rounded.ArrowUpward,
-                "发送",
-                onSend,
-                backdrop,
-                style = palette.accentSurface,
-                tint = Color.White,
-                enabled = text.isNotBlank(),
-                size = 50.dp,
-            )
+            Icon(Icons.Rounded.Close, contentDescription = "去掉这张", tint = Color.White, modifier = Modifier.size(14.dp))
         }
     }
 }

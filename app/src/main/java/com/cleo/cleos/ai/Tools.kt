@@ -32,7 +32,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Weather }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -145,6 +145,16 @@ object ToolSpecs {
             "reason" to prop("string", "想看的理由，一句话，对方会看到"),
         ),
     )
+    val setMyAvatar = ToolSpec(
+        name = "set_my_avatar",
+        groups = setOf(ToolGroup.Avatar),
+        action = "换头像",
+        description = "换你自己的头像：用对方在这段聊天里发来的一张图（取正中间的方块），或者一个表情。两者给一个。",
+        parameters = schema(
+            "image" to prop("string", "图的编号，比如 #45-1；写 latest 就是对方最近发来的那张"),
+            "emoji" to prop("string", "一个表情，比如 🌙"),
+        ),
+    )
     val getWeather = ToolSpec(
         name = "get_weather",
         groups = setOf(ToolGroup.Weather),
@@ -159,7 +169,7 @@ object ToolSpecs {
         ),
     )
 
-    val all = listOf(addTodo, listTodos, updateTodo, readDiary, writeDiary, listSecrets, requestSecret, getWeather)
+    val all = listOf(addTodo, listTodos, updateTodo, readDiary, writeDiary, listSecrets, requestSecret, setMyAvatar, getWeather)
     val byName = all.associateBy { it.name }
 
     /** What to offer for the groups that are on, each worded for what it can reach. */
@@ -198,6 +208,17 @@ interface WeatherSource {
 /** [place] as the chat names it ("杭州"); [text] is what the model reads. */
 data class WeatherReport(val place: String, val text: String)
 
+/** Where the model's own avatar is kept; the app side of set_my_avatar. */
+interface SelfAvatar {
+    /** The file of the picture [ref] names in this conversation ("latest", "#45-1"), if there is one. */
+    suspend fun picture(conversationId: Long, ref: String): String?
+
+    /** Crops [file] and makes it the avatar; false when the picture can't be read. */
+    suspend fun usePicture(file: String): Boolean
+
+    suspend fun useEmoji(emoji: String)
+}
+
 /**
  * Runs what the model asked for. Whether a group is allowed is checked here again, at the
  * moment of the call, not only when the tools are offered: the history may hold calls
@@ -209,6 +230,7 @@ class ToolBox(
     private val weather: WeatherSource,
     /** Every request to see a secret so far, oldest first, from any conversation. */
     private val requests: suspend () -> List<SecretRequest> = { emptyList() },
+    private val avatar: SelfAvatar? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -218,7 +240,7 @@ class ToolBox(
 
     fun action(name: String): String = ToolSpecs.byName[name]?.action ?: "用工具"
 
-    suspend fun run(call: ToolCall, settings: AppSettings): ToolOutcome {
+    suspend fun run(call: ToolCall, settings: AppSettings, conversationId: Long = 0): ToolOutcome {
         val spec = ToolSpecs.byName[call.name]
             ?: return ToolOutcome("没有叫 ${call.name} 的工具。", "想用的工具不存在：${call.name}")
         if (spec.groups.none { it in settings.tools }) {
@@ -236,6 +258,7 @@ class ToolBox(
                 ToolSpecs.writeDiary.name -> writeDiary(args, today)
                 ToolSpecs.listSecrets.name -> listSecrets(today)
                 ToolSpecs.requestSecret.name -> requestSecret(args)
+                ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
@@ -411,6 +434,27 @@ class ToolBox(
         )
     }
 
+    private suspend fun setMyAvatar(a: JsonObject, conversationId: Long): ToolOutcome {
+        val port = avatar ?: throw ToolFailure("现在换不了头像。", "这里换不了")
+        val image = ToolArgs.text(a, "image")?.trim().orEmpty()
+        val emoji = ToolArgs.text(a, "emoji")?.trim().orEmpty()
+        return when {
+            image.isNotEmpty() -> {
+                val file = port.picture(conversationId, image)
+                    ?: throw ToolFailure("找不到「$image」这张图。用对方发来的图的编号（像 #45-1），或者写 latest。", "找不到那张图")
+                if (!port.usePicture(file)) throw ToolFailure("这张图读不出来，换一张。", "那张图读不出来")
+                ToolOutcome("换好了：现在的头像是对方发来的那张图。", "换了新头像")
+            }
+            emoji.isNotEmpty() -> {
+                // An emoji is a few code points at most (a family, a flag); a sentence is not an avatar.
+                if (emoji.codePointCount(0, emoji.length) > EMOJI_MAX) throw ToolFailure("emoji 只放一个表情。", "表情太长了")
+                port.useEmoji(emoji)
+                ToolOutcome("换好了：现在的头像是 $emoji。", "换了新头像：$emoji")
+            }
+            else -> throw ToolFailure("image 和 emoji 给一个。", "没说换成什么")
+        }
+    }
+
     private suspend fun getWeather(a: JsonObject, settings: AppSettings): ToolOutcome {
         val city = ToolArgs.text(a, "city")?.trim().orEmpty().ifEmpty { settings.weatherCity.trim() }
         if (city.isEmpty()) {
@@ -431,6 +475,7 @@ class ToolBox(
         const val SEARCH_CANDIDATES = 60
         const val DIARY_MAX = 5000
         const val REASON_MAX = 120
+        const val EMOJI_MAX = 8
     }
 }
 

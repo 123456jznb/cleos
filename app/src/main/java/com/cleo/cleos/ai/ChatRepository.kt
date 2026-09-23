@@ -1,6 +1,9 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.ImageStore
+import com.cleo.cleos.data.MessageImage
+import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
@@ -49,6 +52,7 @@ class ChatRepository(
     private val secrets: SecretStore,
     private val client: ChatClient,
     private val tools: ToolBox,
+    private val images: ImageStore,
     private val scope: CoroutineScope,
 ) {
     private val _streaming = MutableStateFlow<StreamingReply?>(null)
@@ -60,6 +64,9 @@ class ChatRepository(
      * app. They are asked without tools from then on instead of failing every message.
      */
     private val refusesTools = ConcurrentHashMap.newKeySet<String>()
+
+    /** The same for pictures: models that can't look at images are sent the text only. */
+    private val refusesImages = ConcurrentHashMap.newKeySet<String>()
 
     val busy: Boolean get() = job?.isActive == true
 
@@ -74,16 +81,24 @@ class ChatRepository(
         return db.conversations().latest()?.id ?: newConversation()
     }
 
-    fun send(conversationId: Long, text: String) {
+    fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()) {
         if (busy) return
         val content = text.trim()
-        if (content.isEmpty()) return
+        if (content.isEmpty() && pictures.isEmpty()) return
         job = scope.launch {
             val now = System.currentTimeMillis()
-            db.messages().insert(MessageEntity(conversationId = conversationId, role = "user", content = content, createdAt = now))
+            db.messages().insert(
+                MessageEntity(
+                    conversationId = conversationId,
+                    role = "user",
+                    content = content,
+                    createdAt = now,
+                    images = MessageImages.encode(pictures),
+                ),
+            )
             val conversation = db.conversations().get(conversationId)
             if (conversation != null && conversation.title == DEFAULT_TITLE) {
-                db.conversations().rename(conversationId, content.lineSequence().first().take(24))
+                db.conversations().rename(conversationId, content.lineSequence().first().take(24).ifBlank { "[图片]" })
             }
             db.conversations().touch(conversationId, now)
             reply(conversationId)
@@ -103,8 +118,22 @@ class ChatRepository(
         job?.cancel()
     }
 
+    /** The row and the pictures sent with it: nothing else points at those files. */
     fun deleteMessage(id: Long) {
-        scope.launch { db.messages().delete(id) }
+        scope.launch {
+            val pictures = db.messages().get(id)?.images
+            db.messages().delete(id)
+            images.delete(MessageImages.decode(pictures).map { it.file })
+        }
+    }
+
+    /** A conversation and its pictures: the rows go by cascade, the files would stay behind. */
+    fun deleteConversation(id: Long) {
+        scope.launch {
+            val pictures = db.messages().imagesIn(id).flatMap { MessageImages.decode(it) }.map { it.file }
+            db.conversations().delete(id)
+            images.delete(pictures)
+        }
     }
 
     /**
@@ -162,26 +191,29 @@ class ChatRepository(
         val history = db.messages().newest(conversationId, s.historySize).reversed()
         val now = ZonedDateTime.now()
         var groups = if (endpointKey in refusesTools) emptySet() else s.tools
-        var messages = Prompt.messages(s, history, now, groups)
+        var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
+        var messages = prepare(Prompt.messages(s, history, now, groups, withImages))
         var rounds = 0
-        var askedWithoutToolsAt: Long? = null
+        // What the last refusal made this reply leave out, and when.
+        var leftOut: LeftOut? = null
         try {
             while (true) {
-                val mayRefuse = rounds == 0 && groups.isNotEmpty()
+                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || withImages)
                 when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse)) {
                     is Step.Ended -> {
-                        val at = askedWithoutToolsAt
-                        // Only now is it clear the tools were the problem: without them it worked.
-                        if (at != null && step.ok) {
-                            refusesTools += endpointKey
-                            note(conversationId, TOOLS_REFUSED, at = at - 1)
+                        val out = leftOut
+                        // Only now is it clear what the model couldn't take: without it, it worked.
+                        if (out != null && step.ok) {
+                            if (out.images) refusesImages += endpointKey else refusesTools += endpointKey
+                            note(conversationId, if (out.images) IMAGES_REFUSED else TOOLS_REFUSED, at = out.at - 1)
                         }
                         return
                     }
-                    Step.ToolsRefused -> {
-                        askedWithoutToolsAt = System.currentTimeMillis()
-                        groups = emptySet()
-                        messages = Prompt.messages(s, history, now, groups)
+                    Step.Refused -> {
+                        // Pictures go first: many more models take tools than take pictures.
+                        leftOut = LeftOut(images = withImages, at = System.currentTimeMillis())
+                        if (withImages) withImages = false else groups = emptySet()
+                        messages = prepare(Prompt.messages(s, history, now, groups, withImages))
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
@@ -201,11 +233,21 @@ class ChatRepository(
         }
     }
 
+    private class LeftOut(val images: Boolean, val at: Long)
+
+    /** Pictures become data: URLs just before sending; one that can't be read is left out. */
+    private suspend fun prepare(messages: List<ApiMessage>): List<ApiMessage> = messages.map { m ->
+        if (m.images.isEmpty()) m else m.copy(images = m.images.mapNotNull { images.dataUrl(it) })
+    }
+
     private sealed interface Step {
         class Ended(val ok: Boolean) : Step
 
-        /** The first request failed the way requests with tools fail on a model without them. */
-        data object ToolsRefused : Step
+        /**
+         * The first request failed the way requests fail on a model that can't take what
+         * was in them: tools, or pictures.
+         */
+        data object Refused : Step
 
         class Called(val message: ApiMessage, val savedId: Long) : Step
     }
@@ -216,7 +258,7 @@ class ChatRepository(
         endpoint: ApiEndpoint,
         messages: List<ApiMessage>,
         specs: List<ToolSpec>,
-        mayRefuseTools: Boolean,
+        mayRefuse: Boolean,
     ): Step {
         val startedAt = System.currentTimeMillis()
         val text = StringBuilder()
@@ -248,9 +290,9 @@ class ChatRepository(
         } catch (e: Exception) {
             error = "出错了：${e.message ?: e.javaClass.simpleName}"
         }
-        // A model that can't take tools turns the first request down before writing a
-        // word. The caller asks again without them.
-        if (error != null && mayRefuseTools && text.isEmpty() && status in REFUSED_WITH_TOOLS) return Step.ToolsRefused
+        // A model that can't take tools or pictures turns the first request down before
+        // writing a word. The caller asks again without them.
+        if (error != null && mayRefuse && text.isEmpty() && status in REFUSED_STATUSES) return Step.Refused
 
         return withContext(NonCancellable) {
             if (error == null && calls.isNotEmpty()) {
@@ -290,7 +332,7 @@ class ChatRepository(
                 activity = tools.activity(call.name),
             )
             val outcome = try {
-                tools.run(call, s)
+                tools.run(call, s, conversationId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -361,11 +403,12 @@ class ChatRepository(
         const val MAX_TOOL_ROUNDS = 5
 
         /**
-         * How endpoints turn down `tools` for a model without support: 400 (SiliconFlow,
+         * How endpoints turn down tools or pictures a model can't take: 400 (SiliconFlow,
          * vLLM), 404 (OpenRouter finds no endpoint for it), 422 (strict validators).
          */
-        private val REFUSED_WITH_TOOLS = setOf(400, 404, 422)
+        private val REFUSED_STATUSES = setOf(400, 404, 422)
         private const val TOOLS_REFUSED = "这个模型不接受工具调用，这次没带工具。想让 TA 记待办、查天气，换一个支持工具的模型。"
+        private const val IMAGES_REFUSED = "这个模型看不了图片，这次只发了文字。想让 TA 看图，换一个能看图的模型。"
         private const val TOO_MANY_ROUNDS = "连着用了太多次工具，先停在这里。"
     }
 }

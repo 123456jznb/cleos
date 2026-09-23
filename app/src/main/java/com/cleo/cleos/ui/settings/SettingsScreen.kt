@@ -198,6 +198,9 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 ToolSwitch("小秘密", "TA 知道你有小秘密，但看不到；想看会在聊天里问你，你点头才给看。", ToolGroup.Secrets in settings.tools) {
                     vm.setTool(ToolGroup.Secrets, it)
                 }
+                ToolSwitch("换自己的头像", "TA 可以把你发来的图、或者一个表情，换成自己的头像。", ToolGroup.Avatar in settings.tools) {
+                    vm.setTool(ToolGroup.Avatar, it)
+                }
                 ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
                     vm.setTool(ToolGroup.Weather, it)
                 }

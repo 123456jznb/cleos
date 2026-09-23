@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.db.MessageEntity
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -26,6 +27,13 @@ import java.util.Locale
 object Prompt {
     private const val FORMAT_RULE = "这是手机上的聊天。像平常发消息那样回复，不用 Markdown 标题、列表和加粗。"
 
+    /**
+     * Pictures sent along with a request, the most recent first. Every picture goes out
+     * again with every turn while it is included, so only the last few are; older ones
+     * are named in the text but not attached.
+     */
+    const val MAX_IMAGES = 4
+
     fun system(settings: AppSettings, tools: Set<ToolGroup> = emptySet()): String = buildList {
         if (settings.aiName.isNotBlank()) add("你叫${settings.aiName.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
@@ -50,22 +58,26 @@ object Prompt {
         if (ToolGroup.Secrets in tools) {
             add("对方可以把日记设成小秘密，你看不到。想看就用 request_secret 问，对方点头才会给你看；被拒绝了就别追着要。")
         }
+        if (ToolGroup.Avatar in tools) add("你可以用 set_my_avatar 换自己的头像：用对方发来的一张图，或者一个表情。")
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
     }.takeIf { it.isNotEmpty() }?.joinToString("")
 
     /**
      * [history] oldest first, already trimmed to the window. With [tools] empty, tool
      * calls and their results are left out and only what was said remains, so a model
-     * without tool support can read a conversation that used them.
+     * without tool support can read a conversation that used them. With [images] false
+     * no picture is attached (the text still says one was sent).
      */
     fun messages(
         settings: AppSettings,
         history: List<MessageEntity>,
         now: ZonedDateTime,
         tools: Set<ToolGroup> = emptySet(),
+        images: Boolean = false,
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty()
-        val sendable = history.mapNotNull { it.toApi(withTools) }
+        val attached = if (images) attachedPictures(history) else emptySet()
+        val sendable = history.mapNotNull { it.toApi(withTools, images, attached) }
         val paired = if (withTools) pairCalls(sendable) else sendable
         // The window can start mid-exchange; begin at a user turn, which every endpoint accepts.
         val fromUser = paired.dropWhile { it.role != "user" }.ifEmpty { paired }
@@ -76,7 +88,10 @@ object Prompt {
         for (m in fromUser) {
             val last = merged.lastOrNull()
             if (last != null && last.role == m.role && m.role != "tool" && last.toolCalls.isEmpty()) {
-                merged[merged.lastIndex] = m.copy(content = listOf(last.content, m.content).filter { it.isNotEmpty() }.joinToString("\n\n"))
+                merged[merged.lastIndex] = m.copy(
+                    content = listOf(last.content, m.content).filter { it.isNotEmpty() }.joinToString("\n\n"),
+                    images = last.images + m.images,
+                )
             } else {
                 merged += m
             }
@@ -93,8 +108,44 @@ object Prompt {
         return listOf(ApiMessage("system", system(settings, tools))) + merged
     }
 
-    private fun MessageEntity.toApi(withTools: Boolean): ApiMessage? = when (role) {
-        "user" -> content.takeIf { it.isNotBlank() }?.let { ApiMessage("user", it) }
+    /** Ids of the messages whose pictures go along: the newest, whole messages, up to [MAX_IMAGES]. */
+    private fun attachedPictures(history: List<MessageEntity>): Set<Long> {
+        val out = mutableSetOf<Long>()
+        var budget = MAX_IMAGES
+        for (m in history.asReversed()) {
+            if (m.role != "user" || m.note != null) continue
+            val n = MessageImages.decode(m.images).size
+            if (n == 0) continue
+            if (n > budget) break
+            out += m.id
+            budget -= n
+        }
+        return out
+    }
+
+    /**
+     * A person's message as the model reads it. Pictures are named by id (#45-1: message
+     * 45, first picture), so the model can point at one, e.g. to use it as its avatar.
+     */
+    private fun MessageEntity.userText(canSee: Boolean, attached: Boolean): String {
+        val count = MessageImages.decode(images).size
+        if (count == 0) return content
+        val ids = (1..count).joinToString(" ") { "#$id-$it" }
+        val line = when {
+            attached -> "（附图 $ids）"
+            !canSee -> "（发了 $count 张图 $ids，你这边看不到图片）"
+            else -> "（早先发的 $count 张图 $ids，这里没再附上）"
+        }
+        return if (content.isBlank()) line else "$line\n$content"
+    }
+
+    private fun MessageEntity.toApi(withTools: Boolean, canSee: Boolean, attached: Set<Long>): ApiMessage? = when (role) {
+        "user" -> {
+            val attach = id in attached
+            userText(canSee, attach).takeIf { it.isNotBlank() }?.let { text ->
+                ApiMessage("user", text, images = if (attach) MessageImages.decode(images).map { it.file } else emptyList())
+            }
+        }
         "assistant" -> {
             val calls = if (withTools) ToolCallCodec.decode(toolCalls) else emptyList()
             when {
