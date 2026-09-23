@@ -134,6 +134,9 @@ private val AvatarSlot = AvatarSize + AvatarGap
 
 private val MaxPictureHeight = 260.dp
 
+/** The input bar's height on one line; its round ends have half this as radius. */
+private val BarHeight = 50.dp
+
 /** Pictures in one message: as many as are sent along with a request. */
 private const val MAX_ATTACHMENTS = Prompt.MAX_IMAGES
 
@@ -676,8 +679,8 @@ private fun ChatInputBar(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .heightIn(min = 50.dp)
-            .liquidGlass(backdrop, palette.input, GlassShape.Rounded(25.dp)),
+            .heightIn(min = BarHeight)
+            .liquidGlass(backdrop, palette.input, GlassShape.Rounded(BarHeight / 2)),
     ) {
         if (attachments.isNotEmpty() || attaching) {
             Row(
@@ -692,21 +695,27 @@ private fun ChatInputBar(
                 }
             }
         }
+        // Each button sits in the middle of a square as tall as the bar: on one line it is
+        // centred, concentric with the capsule's round end; as the text grows to more lines
+        // the squares stay at the bottom. (Padding the buttons by hand left them 4dp from
+        // the top and 8dp from the bottom: the text row was 48dp in a 50dp bar.)
         Row(verticalAlignment = Alignment.Bottom) {
-            Box(
-                Modifier
-                    .padding(start = 5.dp, bottom = 5.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .clickable(enabled = !busy && attachments.size < MAX_ATTACHMENTS, onClick = onPick),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "发图片", tint = palette.contentSecondary, modifier = Modifier.size(24.dp))
+            Box(Modifier.size(BarHeight), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = !busy && attachments.size < MAX_ATTACHMENTS, onClick = onPick),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "发图片", tint = palette.contentSecondary, modifier = Modifier.size(24.dp))
+                }
             }
             Box(
                 Modifier
                     .weight(1f)
-                    .padding(start = 4.dp, end = 6.dp, top = 13.dp, bottom = 13.dp),
+                    .heightIn(min = BarHeight)
+                    .padding(end = 4.dp, top = 13.dp, bottom = 13.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (text.isEmpty()) {
@@ -723,23 +732,25 @@ private fun ChatInputBar(
                     modifier = Modifier.fillMaxWidth().semantics { contentDescription = "输入消息" },
                 )
             }
-            // Plain fills inside the glass, like the chips on a card: glass in glass reads as a hole.
-            val button = Modifier.padding(end = 6.dp, bottom = 6.dp).size(38.dp).clip(CircleShape)
-            if (busy) {
-                Box(
-                    button.background(palette.content.copy(alpha = 0.1f)).clickable(onClick = onStop),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Stop, contentDescription = "停止", tint = palette.content, modifier = Modifier.size(20.dp))
-                }
-            } else {
-                Box(
-                    button
-                        .background(if (canSend) palette.accent else palette.accent.copy(alpha = 0.35f))
-                        .clickable(enabled = canSend, onClick = onSend),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.ArrowUpward, contentDescription = "发送", tint = Color.White, modifier = Modifier.size(22.dp))
+            Box(Modifier.size(BarHeight), contentAlignment = Alignment.Center) {
+                // Plain fills inside the glass, like the chips on a card: glass in glass reads as a hole.
+                val button = Modifier.size(38.dp).clip(CircleShape)
+                if (busy) {
+                    Box(
+                        button.background(palette.content.copy(alpha = 0.1f)).clickable(onClick = onStop),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.Stop, contentDescription = "停止", tint = palette.content, modifier = Modifier.size(20.dp))
+                    }
+                } else {
+                    Box(
+                        button
+                            .background(if (canSend) palette.accent else palette.accent.copy(alpha = 0.35f))
+                            .clickable(enabled = canSend, onClick = onSend),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.ArrowUpward, contentDescription = "发送", tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
                 }
             }
         }
