@@ -4,10 +4,17 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 
 /**
  * The wallpaper used until one is picked.
@@ -18,6 +25,21 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 @Composable
 fun DefaultWallpaper(dark: Boolean, modifier: Modifier = Modifier) {
     Canvas(modifier) { if (dark) drawNight() else drawDawn() }
+}
+
+/**
+ * The built-in wallpaper measured exactly like a picked photo: drawn small into a
+ * bitmap and handed to the analyzer. Its darkest/brightest patches feed the same
+ * contrast floor, which matters once glass is tuned clearer than the defaults.
+ */
+fun defaultWallpaperTone(dark: Boolean): WallpaperTone {
+    val w = 64
+    val h = 139 // about the phone's aspect ratio
+    val bitmap = ImageBitmap(w, h)
+    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(bitmap), Size(w.toFloat(), h.toFloat())) {
+        if (dark) drawNight() else drawDawn()
+    }
+    return WallpaperAnalyzer.analyze(bitmap.asAndroidBitmap())
 }
 
 private fun DrawScope.blob(x: Float, y: Float, r: Float, color: Color, alpha: Float) {

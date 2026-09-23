@@ -45,15 +45,42 @@ data class GlassPalette(
     /** Tab bar selection at rest, and held. */
     val lensRest: GlassStyle,
     val lensHeld: GlassStyle,
-)
+    /**
+     * Each tunable part after the user's tuning and the contrast floor. Empty until
+     * [GlassPalettes.build] fills it; the accessors below fall back to the families.
+     */
+    val parts: Map<GlassPart, GlassStyle> = emptyMap(),
+    /** Each part's untuned default: where the glass lab starts and what "reset" returns to. */
+    val partDefaults: Map<GlassPart, GlassStyle> = emptyMap(),
+    val bubbleMineStyle: GlassStyle? = null,
+    val topBarTitleStyle: GlassStyle? = null,
+    /** Luminance of the wallpaper's darkest / brightest patch, when known. */
+    val troughLum: Float? = null,
+    val peakLum: Float? = null,
+) {
+    val bubble: GlassStyle get() = parts[GlassPart.Bubble] ?: surface
+    val card: GlassStyle get() = parts[GlassPart.Card] ?: surface
+    val topBar: GlassStyle get() = parts[GlassPart.TopBar] ?: chrome
+    val tabBar: GlassStyle get() = parts[GlassPart.TabBar] ?: chrome
+    val input: GlassStyle get() = parts[GlassPart.Input] ?: bar
+
+    /** The user's own bubbles: the bubble tuning, in the accent colour. */
+    val bubbleMine: GlassStyle get() = bubbleMineStyle ?: accentSurface
+
+    /** The title capsule in the top bar: the top bar's glass, but never less tinted than [bar]. */
+    val topBarTitle: GlassStyle get() = topBarTitleStyle ?: bar
+
+    /** [style] as the app would actually draw it for [part] (with the contrast floor). */
+    fun floored(part: GlassPart, style: GlassStyle): GlassStyle = GlassPalettes.floor(this, part, style)
+}
 
 object GlassPalettes {
     /** Violet, the accent when the wallpaper has no colour worth following. */
     const val DEFAULT_HUE = 4.93f // radians, ~282°
 
     /**
-     * [trough]/[peak]: luminance of the wallpaper's darkest / brightest patch (null for
-     * the built-in wallpapers, which are designed not to need it).
+     * [trough]/[peak]: luminance of the wallpaper's darkest / brightest patch.
+     * [tuning]: what the user saved in the glass lab, per part.
      */
     fun build(
         dark: Boolean,
@@ -61,27 +88,71 @@ object GlassPalettes {
         chromaScale: Float = 1f,
         trough: Float? = null,
         peak: Float? = null,
-    ): GlassPalette = base(dark, hue, chromaScale).withContrastFloor(if (dark) peak else trough)
+        tuning: Map<GlassPart, GlassTuning> = emptyMap(),
+    ): GlassPalette {
+        val b = base(dark, hue, chromaScale).copy(troughLum = trough, peakLum = peak)
+        val worst = b.worstLum
+        val floored = b.copy(chrome = raise(b, b.chrome, worst, withAccent = true), bar = raise(b, b.bar, worst, withAccent = true))
+
+        val defaults = mapOf(
+            GlassPart.Bubble to floored.surface,
+            GlassPart.Card to floored.surface,
+            GlassPart.TopBar to b.chrome,
+            GlassPart.TabBar to b.chrome,
+            GlassPart.Input to b.bar,
+        )
+        val parts = defaults.mapValues { (part, style) ->
+            floor(floored, part, tuning[part]?.applyTo(style, dark) ?: style)
+        }
+        // The user's own bubbles take the bubble tuning in the accent colour. Their text
+        // is white, so what threatens it is the brightest patch, on light and dark glass
+        // alike; with no wallpaper information, assume white.
+        val mineTuned = tuning[GlassPart.Bubble]?.applyTo(b.accentSurface, dark) ?: b.accentSurface
+        val mine = raiseFor(mineTuned, peak ?: 1f, Color.White, 4.5f)
+        val topBar = parts.getValue(GlassPart.TopBar)
+        val title = topBar.copy(tint = topBar.tint.copy(alpha = maxOf(topBar.tint.alpha, floored.bar.tint.alpha)))
+        return floored.copy(
+            parts = parts,
+            partDefaults = defaults,
+            bubbleMineStyle = mine,
+            topBarTitleStyle = title,
+        )
+    }
+
+    private val GlassPalette.worstLum: Float? get() = if (dark) peakLum else troughLum
 
     /**
-     * Clear glass looks best, but light-or-dark is decided for the wallpaper as a whole:
-     * a photo with a bright sky and dark hills gets light glass, and the tab bar then sits
-     * over the hills with dark labels on barely tinted glass. So the chrome and bar tints
-     * are raised, only as far as needed, until their text clears 4.5:1 over the worst
-     * patch of the wallpaper (the darkest for light glass, the brightest for dark).
+     * The contrast floor for one part. Clear glass looks best, but light-or-dark is
+     * decided for the wallpaper as a whole: a photo with a bright sky and dark hills gets
+     * light glass, and a bar then sits over the hills with dark labels on barely tinted
+     * glass. So tints are raised, only as far as needed, until text clears 4.5:1 over the
+     * worst patch of the wallpaper (the darkest for light glass, the brightest for dark).
+     * The user can tune a part as clear as they like; this is what keeps the words on it
+     * readable anyway.
      */
-    private fun GlassPalette.withContrastFloor(worstLum: Float?): GlassPalette {
-        if (worstLum == null) return this
-        fun raise(style: GlassStyle): GlassStyle {
-            // Text at 4.5:1; the selected tab's accent icon and bold label at 3:1, the
-            // level for graphics and large text.
-            val need = maxOf(
-                minTintAlpha(style.tint, worstLum, content, 4.5f),
-                minTintAlpha(style.tint, worstLum, accentContent, 3f),
-            )
-            return if (need > style.tint.alpha) style.copy(tint = style.tint.copy(alpha = need)) else style
-        }
-        return copy(chrome = raise(chrome), bar = raise(bar))
+    internal fun floor(p: GlassPalette, part: GlassPart, style: GlassStyle): GlassStyle =
+        raise(p, style, p.worstLum, withAccent = part == GlassPart.TopBar || part == GlassPart.TabBar)
+
+    private fun raise(p: GlassPalette, style: GlassStyle, worstLum: Float?, withAccent: Boolean): GlassStyle {
+        if (worstLum == null) return style
+        // Text at 4.5:1; accent icons and bold accent labels (the selected tab) at 3:1,
+        // the level for graphics and large text.
+        val needText = minTintAlpha(style.tint, worstLum, p.content, 4.5f)
+        val need = if (withAccent) maxOf(needText, minTintAlpha(style.tint, worstLum, p.accentContent, 3f)) else needText
+        return atLeast(style, need)
+    }
+
+    private fun raiseFor(style: GlassStyle, worstLum: Float, text: Color, ratio: Float): GlassStyle =
+        atLeast(style, minTintAlpha(style.tint, worstLum, text, ratio))
+
+    /**
+     * Rounded *up* to the next 1/255: an sRGB Color keeps 8 bits of alpha, and letting the
+     * nearest step round down left white-on-accent at 4.48:1 against a 4.5 target.
+     */
+    private fun atLeast(style: GlassStyle, need: Float): GlassStyle {
+        if (need <= style.tint.alpha) return style
+        val stored = (kotlin.math.ceil(need * 255f) / 255f).coerceAtMost(1f)
+        return style.copy(tint = style.tint.copy(alpha = stored))
     }
 
     /**

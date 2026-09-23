@@ -142,7 +142,7 @@ fun DiaryEditorScreen(id: Long, onBack: () -> Unit, onOpenImage: (String) -> Uni
                     end = 10.dp,
                     bottom = bottomBase + ToolbarHeight + 20.dp,
                 )
-                .liquidGlass(LocalWallpaperBackdrop.current, palette.surface, GlassShape.Rounded(28.dp)),
+                .liquidGlass(LocalWallpaperBackdrop.current, palette.card, GlassShape.Rounded(28.dp)),
         ) {
             if (vm.loaded) EditorContent(vm, onOpenImage) { c.images.file(it) }
         }
@@ -311,7 +311,7 @@ private fun EditorToolbar(
         GlassButton(
             onClick = onPick,
             backdrop = backdrop,
-            style = palette.bar,
+            style = palette.input,
             enabled = !importing,
             modifier = Modifier.height(ToolbarHeight),
             contentPadding = PaddingValues(horizontal = 18.dp),

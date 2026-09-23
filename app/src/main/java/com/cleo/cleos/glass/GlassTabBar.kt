@@ -141,7 +141,7 @@ fun GlassTabBar(
                     .align(Alignment.Center)
                     .fillMaxWidth()
                     .height(BarHeight)
-                    .liquidGlass(backdrop, palette.chrome, GlassShape.Capsule)
+                    .liquidGlass(backdrop, palette.tabBar, GlassShape.Capsule)
                     .onSizeChanged { rowWidth = it.width }
                     .pointerInput(count) {
                         awaitEachGesture {

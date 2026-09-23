@@ -41,6 +41,7 @@ import com.cleo.cleos.glass.overscan
 import com.cleo.cleos.glass.rememberBackdrop
 import com.cleo.cleos.ui.wallpaper.DefaultWallpaper
 import com.cleo.cleos.ui.wallpaper.WallpaperAnalyzer
+import com.cleo.cleos.ui.wallpaper.defaultWallpaperTone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
@@ -59,7 +60,12 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
         GlassMode.Dark -> true
         GlassMode.Auto -> if (custom != null) settings.wallpaperDark ?: systemDark else systemDark
     }
-    val palette = remember(dark, custom, settings.wallpaperHue, settings.wallpaperChroma, settings.wallpaperTrough, settings.wallpaperPeak) {
+    // The built-in wallpaper is measured once per light/dark, the same way a photo is.
+    val defaultTone = remember(dark) { defaultWallpaperTone(dark) }
+    val palette = remember(
+        dark, custom, settings.wallpaperHue, settings.wallpaperChroma,
+        settings.wallpaperTrough, settings.wallpaperPeak, settings.glassTuning, defaultTone,
+    ) {
         if (custom != null && settings.wallpaperHue != null) {
             GlassPalettes.build(
                 dark = dark,
@@ -67,9 +73,15 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
                 chromaScale = WallpaperAnalyzer.chromaScale(settings.wallpaperChroma),
                 trough = settings.wallpaperTrough,
                 peak = settings.wallpaperPeak,
+                tuning = settings.glassTuning,
             )
         } else {
-            GlassPalettes.build(dark)
+            GlassPalettes.build(
+                dark = dark,
+                trough = defaultTone.trough,
+                peak = defaultTone.peak,
+                tuning = settings.glassTuning,
+            )
         }
     }
     val wallpaperBackdrop = rememberBackdrop(flat = true)

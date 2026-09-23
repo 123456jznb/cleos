@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassShape
+import com.cleo.cleos.glass.LocalGlassChrome
 import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.glass.LocalWallpaperBackdrop
 import com.cleo.cleos.glass.WallpaperOverscan
@@ -72,6 +74,7 @@ fun GlassTopBar(
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val palette = LocalGlassPalette.current
+    CompositionLocalProvider(LocalGlassChrome provides palette.topBar) {
     Row(
         modifier
             .fillMaxWidth()
@@ -85,7 +88,7 @@ fun GlassTopBar(
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             Box(
                 Modifier
-                    .liquidGlass(backdrop, palette.bar, GlassShape.Capsule)
+                    .liquidGlass(backdrop, palette.topBarTitle, GlassShape.Capsule)
                     .padding(horizontal = 18.dp, vertical = if (subtitle == null) 10.dp else 6.dp),
             ) {
                 androidx.compose.foundation.layout.Column {
@@ -105,5 +108,6 @@ fun GlassTopBar(
         }
         Spacer(Modifier.width(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = trailing)
+    }
     }
 }

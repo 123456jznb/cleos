@@ -365,7 +365,7 @@ private fun AddBar(backdrop: Backdrop, text: String, onTextChange: (String) -> U
             Modifier
                 .weight(1f)
                 .heightIn(min = 50.dp)
-                .liquidGlass(backdrop, palette.bar, GlassShape.Capsule)
+                .liquidGlass(backdrop, palette.input, GlassShape.Capsule)
                 .padding(horizontal = 18.dp),
             contentAlignment = Alignment.CenterStart,
         ) {

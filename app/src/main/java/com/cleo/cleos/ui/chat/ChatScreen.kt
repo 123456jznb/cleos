@@ -265,7 +265,7 @@ private fun MessageBubble(
                             onClick = {},
                             onLongClick = { menu = true },
                         ),
-                    style = if (mine) palette.accentSurface else palette.surface,
+                    style = if (mine) palette.bubbleMine else palette.bubble,
                     shape = GlassShape.Rounded(20.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                 ) {
@@ -343,7 +343,7 @@ private fun LiveBubble(live: StreamingReply) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
         GlassSurface(
             modifier = Modifier.widthIn(max = bubbleMaxWidth()),
-            style = palette.surface,
+            style = palette.bubble,
             shape = GlassShape.Rounded(20.dp),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
         ) {
@@ -400,7 +400,7 @@ private fun ChatInputBar(
             Modifier
                 .weight(1f)
                 .heightIn(min = 50.dp)
-                .liquidGlass(backdrop, palette.bar, GlassShape.Rounded(25.dp))
+                .liquidGlass(backdrop, palette.input, GlassShape.Rounded(25.dp))
                 .padding(horizontal = 18.dp, vertical = 13.dp),
             contentAlignment = Alignment.CenterStart,
         ) {

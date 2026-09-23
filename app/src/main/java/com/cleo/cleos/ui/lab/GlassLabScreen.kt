@@ -4,10 +4,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,8 +20,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -33,18 +40,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassMotion
+import com.cleo.cleos.glass.GlassPalette
+import com.cleo.cleos.glass.GlassPart
 import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassStyle
+import com.cleo.cleos.glass.GlassTuning
 import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.glass.LocalWallpaperBackdrop
 import com.cleo.cleos.glass.WallpaperOverscan
@@ -52,23 +66,51 @@ import com.cleo.cleos.glass.backdropSource
 import com.cleo.cleos.glass.glassPress
 import com.cleo.cleos.glass.liquidGlass
 import com.cleo.cleos.glass.rememberBackdrop
+import com.cleo.cleos.ui.common.appContainer
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * A playground for the glass: one piece you can drag over detailed content, and a
- * slider for every parameter the shader takes. Useful for tuning, and for seeing what
- * each knob actually does before changing the app-wide styles.
+ * A playground for the glass, and where the app's glass gets tuned.
+ *
+ * "自由" is free play: one piece to drag over detailed content, a slider per shader knob.
+ * Pick a part instead and the piece takes that part's shape and content, starts from what
+ * the app uses now, and "用到 App 里" makes the app use it. The piece is drawn exactly as
+ * the app will draw it, contrast floor included, so what is seen here is what is got.
  */
 @Composable
 fun GlassLabScreen(onBack: () -> Unit) {
     val palette = LocalGlassPalette.current
+    val c = appContainer()
+    val settings by remember { c.settings.settings }.collectAsStateWithLifecycle(initialValue = null)
     val density = LocalDensity.current
     val page = rememberBackdrop()
-    var style by remember { mutableStateOf(palette.chrome) }
+
+    var part by remember { mutableStateOf<GlassPart?>(null) }
+    var editing by remember { mutableStateOf(palette.chrome) }
     var corner by remember { mutableFloatStateOf(100f) }
-    var pieceOffset by remember { mutableStateOf(with(density) { Offset(40.dp.toPx(), 260.dp.toPx()) }) }
+    // Starts over the big title, above where the open panel reaches, so it is visible and
+    // has something detailed to bend.
+    var pieceOffset by remember { mutableStateOf(with(density) { Offset(24.dp.toPx(), 118.dp.toPx()) }) }
     var panelOpen by remember { mutableStateOf(true) }
     val motion = remember { GlassMotion() }
+
+    val saved = part?.let { settings?.glassTuning?.get(it) }
+    fun defaultOf(p: GlassPart): GlassStyle = palette.partDefaults[p] ?: palette.surface
+    fun select(p: GlassPart?) {
+        part = p
+        editing = if (p == null) {
+            corner = 100f
+            palette.chrome
+        } else {
+            val tuned = settings?.glassTuning?.get(p)
+            tuned?.applyTo(defaultOf(p), palette.dark) ?: defaultOf(p)
+        }
+    }
+    val current = part
+    val tuning = GlassTuning.of(editing, palette.dark, keepShadow = saved?.shadow)
+    val applied = tuning.sameAs(saved, palette.dark)
+    val shown = if (current != null) palette.floored(current, editing) else editing
 
     Box(Modifier.fillMaxSize()) {
         Box(
@@ -76,15 +118,18 @@ fun GlassLabScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .backdropSource(page, behind = LocalWallpaperBackdrop.current, overscan = WallpaperOverscan),
         ) {
-            Specimen(Modifier.fillMaxSize().statusBarsPadding().padding(top = 64.dp))
+            // Only in free play. A part is previewed over what it will sit on in the app,
+            // the wallpaper: a tab bar judged over giant black type looks unreadable, which
+            // says nothing about how it will look.
+            if (current == null) Specimen(Modifier.fillMaxSize().statusBarsPadding().padding(top = 64.dp))
         }
 
-        val shape = if (corner >= 100f) GlassShape.Capsule else GlassShape.Rounded(corner.dp)
+        val (w, h, shape) = pieceGeometry(current, corner)
         Box(
             Modifier
                 .offset { IntOffset(pieceOffset.x.roundToInt(), pieceOffset.y.roundToInt()) }
-                .size(240.dp, 110.dp)
-                .liquidGlass(page, style, shape, motion)
+                .size(w, h)
+                .liquidGlass(page, shown, shape, motion)
                 .glassPress(motion, swell = 4.dp)
                 .pointerInput(Unit) {
                     detectDragGestures { change, drag ->
@@ -92,7 +137,10 @@ fun GlassLabScreen(onBack: () -> Unit) {
                         pieceOffset += drag
                     }
                 },
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            PieceContent(current, palette)
+        }
 
         Row(
             Modifier
@@ -113,29 +161,121 @@ fun GlassLabScreen(onBack: () -> Unit) {
                 .fillMaxWidth()
                 .liquidGlass(page, palette.surface, GlassShape.Rounded(28.dp))
                 .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Preset("清透") { style = palette.chrome; corner = 100f }
-                Spacer(Modifier.width(8.dp))
-                Preset("常规") { style = palette.surface; corner = 24f }
-                Spacer(Modifier.width(8.dp))
-                Preset("透镜") { style = palette.lensHeld; corner = 100f }
+            // Wraps instead of scrolling: a part hidden off the edge is a part nobody finds.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("自由", selected = current == null) { select(null) }
+                GlassPart.entries.forEach { p -> Pill(p.label, selected = current == p) { select(p) } }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                fun preset(style: GlassStyle) {
+                    editing = if (current == null) style else GlassTuning.of(style).applyTo(defaultOf(current), palette.dark)
+                }
+                Pill("清透") { preset(palette.chrome); if (current == null) corner = 100f }
+                Pill("常规") { preset(palette.surface); if (current == null) corner = 24f }
+                Pill("透镜") { preset(palette.lensHeld); if (current == null) corner = 100f }
                 Spacer(Modifier.weight(1f))
-                Preset(if (panelOpen) "收起" else "展开") { panelOpen = !panelOpen }
+                Pill(if (panelOpen) "收起" else "展开") { panelOpen = !panelOpen }
+            }
+            if (current != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pill(if (applied) "已用在 App 里" else "用到 App 里", selected = !applied) {
+                        if (!applied) c.appScope.launch { c.settings.setGlassTuning(current, tuning) }
+                    }
+                    if (saved != null || editing != defaultOf(current)) {
+                        Pill("恢复默认") {
+                            editing = defaultOf(current)
+                            c.appScope.launch { c.settings.setGlassTuning(current, null) }
+                        }
+                    }
+                }
+                val note = when {
+                    shown.tint.alpha > editing.tint.alpha + 0.005f ->
+                        "上面有字，在现在的壁纸上太透会看不清：着色会补到 %.2f。".format(shown.tint.alpha)
+                    current == GlassPart.TopBar -> "标题那个胶囊不会比默认更透，按钮照你调的。"
+                    current == GlassPart.Bubble -> "你自己发的气泡用强调色，白字，着色同样会补到看得清为止。"
+                    else -> null
+                }
+                if (note != null) Text(note, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)
             }
             if (panelOpen) {
-                Knob("模糊", style.blur.value, 0f..30f) { style = style.copy(blur = it.dp) }
-                Knob("折射", style.refraction.value, -40f..40f) { style = style.copy(refraction = it.dp) }
-                Knob("边缘宽度", style.bevel.value, 0f..48f) { style = style.copy(bevel = it.dp) }
-                Knob("色散", style.dispersion, 0f..1f) { style = style.copy(dispersion = it) }
-                Knob("放大", style.zoom, 0.6f..1.6f) { style = style.copy(zoom = it) }
-                Knob("着色", style.tint.alpha, 0f..1f) { style = style.copy(tint = style.tint.copy(alpha = it)) }
-                Knob("饱和度", style.saturation, 0f..2.5f) { style = style.copy(saturation = it) }
-                Knob("高光", style.highlight, 0f..1.5f) { style = style.copy(highlight = it) }
-                Knob("阴影", style.shadowAlpha, 0f..0.5f) { style = style.copy(shadowAlpha = it) }
-                Knob("圆角", corner, 0f..100f, label = if (corner >= 100f) "胶囊" else "${corner.roundToInt()}") { corner = it }
+                Knob("模糊", editing.blur.value, 0f..30f) { editing = editing.copy(blur = it.dp) }
+                Knob("折射", editing.refraction.value, -40f..40f) { editing = editing.copy(refraction = it.dp) }
+                Knob("边缘宽度", editing.bevel.value, 0f..48f) { editing = editing.copy(bevel = it.dp) }
+                Knob("色散", editing.dispersion, 0f..1f) { editing = editing.copy(dispersion = it) }
+                Knob("放大", editing.zoom, 0.6f..1.6f) { editing = editing.copy(zoom = it) }
+                Knob("着色", editing.tint.alpha, 0f..1f) { editing = editing.copy(tint = editing.tint.copy(alpha = it)) }
+                Knob("饱和度", editing.saturation, 0f..2.5f) { editing = editing.copy(saturation = it) }
+                Knob("高光", editing.highlight, 0f..1.5f) { editing = editing.copy(highlight = it) }
+                if (!palette.dark) {
+                    Knob("阴影", editing.shadowAlpha, 0f..0.5f) { editing = editing.copy(shadowAlpha = it) }
+                }
+                if (current == null) {
+                    Knob("圆角", corner, 0f..100f, label = if (corner >= 100f) "胶囊" else "${corner.roundToInt()}") { corner = it }
+                }
             }
         }
+    }
+}
+
+/** The preview piece takes the size and outline of the part being tuned. */
+private fun pieceGeometry(part: GlassPart?, corner: Float): Triple<Dp, Dp, GlassShape> = when (part) {
+    GlassPart.Bubble -> Triple(250.dp, 92.dp, GlassShape.Rounded(20.dp))
+    GlassPart.Card -> Triple(300.dp, 104.dp, GlassShape.Rounded(24.dp))
+    GlassPart.TopBar -> Triple(180.dp, 56.dp, GlassShape.Capsule)
+    GlassPart.TabBar -> Triple(310.dp, 64.dp, GlassShape.Capsule)
+    GlassPart.Input -> Triple(290.dp, 50.dp, GlassShape.Capsule)
+    null -> Triple(240.dp, 110.dp, if (corner >= 100f) GlassShape.Capsule else GlassShape.Rounded(corner.dp))
+}
+
+/** What sits on the part in the app, so its readability can be judged here. */
+@Composable
+private fun BoxScope.PieceContent(part: GlassPart?, palette: GlassPalette) {
+    when (part) {
+        GlassPart.Bubble -> Text(
+            "今天过得怎么样？河边那家店开门了吗。",
+            color = palette.content,
+            fontSize = 16.sp,
+            lineHeight = 23.sp,
+            modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp),
+        )
+        GlassPart.Card -> Row(Modifier.align(Alignment.CenterStart).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(42.dp)) {
+                Text("23", color = palette.accentContent, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text("周三", color = palette.contentSecondary, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text("安静的一天", color = palette.content, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("早上去了河边，光很软。", color = palette.content.copy(alpha = 0.78f), fontSize = 14.sp)
+            }
+        }
+        GlassPart.TopBar -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Forum, contentDescription = null, tint = palette.content, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("聊天", color = palette.content, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+        }
+        GlassPart.TabBar -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            TabPreview(Icons.Rounded.ChatBubble, "聊天", palette.accentContent)
+            TabPreview(Icons.Outlined.AutoStories, "日记", palette.content)
+            TabPreview(Icons.Outlined.TaskAlt, "待办", palette.content)
+        }
+        GlassPart.Input -> Text(
+            "说点什么…",
+            color = palette.contentSecondary,
+            fontSize = 16.sp,
+            modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 18.dp),
+        )
+        null -> Unit
+    }
+}
+
+@Composable
+private fun TabPreview(icon: ImageVector, label: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
+        Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -144,15 +284,15 @@ fun GlassLabScreen(onBack: () -> Unit) {
  * behind the panel, so glass buttons here would look like holes cut through it.
  */
 @Composable
-private fun Preset(text: String, onClick: () -> Unit) {
+private fun Pill(text: String, selected: Boolean = false, onClick: () -> Unit) {
     val palette = LocalGlassPalette.current
     Box(
         Modifier
-            .background(palette.content.copy(alpha = 0.07f), CircleShape)
+            .background(if (selected) palette.accent else palette.content.copy(alpha = 0.07f), CircleShape)
             .clickable(interactionSource = null, indication = null, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(text, fontSize = 14.sp, color = palette.content)
+        Text(text, fontSize = 13.sp, color = if (selected) Color.White else palette.content)
     }
 }
 
@@ -165,7 +305,7 @@ private fun Knob(
     onChange: (Float) -> Unit,
 ) {
     val palette = LocalGlassPalette.current
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(34.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(32.dp)) {
         Text(name, color = palette.content, fontSize = 13.sp, modifier = Modifier.width(64.dp))
         Slider(
             value = value,
@@ -193,7 +333,7 @@ private fun Specimen(modifier: Modifier) {
             val colors = listOf(Color(0xFFFF5A5F), Color(0xFFFFB400), Color(0xFF00A699), Color(0xFF007AFF), Color(0xFF8E44FF))
             val bar = size.width / 20f
             for (i in 0 until 20) {
-                drawRect(colors[i % colors.size], topLeft = Offset(i * bar, 0f), size = androidx.compose.ui.geometry.Size(bar * 0.5f, size.height))
+                drawRect(colors[i % colors.size], topLeft = Offset(i * bar, 0f), size = Size(bar * 0.5f, size.height))
             }
         }
         Canvas(Modifier.fillMaxWidth().height(160.dp)) {

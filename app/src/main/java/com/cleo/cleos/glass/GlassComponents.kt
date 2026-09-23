@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,12 +67,19 @@ fun Modifier.glassPress(motion: GlassMotion, swell: Dp = 3.dp, enabled: Boolean 
         }
     }
 
-/** A piece of glass that holds content. Defaults to the text-safe surface style over the wallpaper. */
+/**
+ * The style round buttons use when none is passed. Containers set it for the buttons
+ * inside them: the top bar provides its own tuned style, so every button up there
+ * follows what was applied to "顶栏" in the glass lab without each screen passing it.
+ */
+val LocalGlassChrome = compositionLocalOf<GlassStyle?> { null }
+
+/** A piece of glass that holds content. Defaults to the (text-safe) card style over the wallpaper. */
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalWallpaperBackdrop.current,
-    style: GlassStyle = LocalGlassPalette.current.surface,
+    style: GlassStyle = LocalGlassPalette.current.card,
     shape: GlassShape = GlassShape.Rounded(24.dp),
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: @Composable BoxScope.() -> Unit,
@@ -89,7 +97,7 @@ fun GlassButton(
     onClick: () -> Unit,
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
-    style: GlassStyle = LocalGlassPalette.current.chrome,
+    style: GlassStyle = LocalGlassChrome.current ?: LocalGlassPalette.current.chrome,
     shape: GlassShape = GlassShape.Capsule,
     enabled: Boolean = true,
     contentColor: Color = LocalGlassPalette.current.content,
@@ -123,7 +131,7 @@ fun GlassIconButton(
     onClick: () -> Unit,
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
-    style: GlassStyle = LocalGlassPalette.current.chrome,
+    style: GlassStyle = LocalGlassChrome.current ?: LocalGlassPalette.current.chrome,
     enabled: Boolean = true,
     tint: Color = LocalGlassPalette.current.content,
     size: Dp = 44.dp,

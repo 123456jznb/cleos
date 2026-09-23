@@ -36,6 +36,8 @@ data class BackupSettings(
     val wallpaperChroma: Float?,
     val wallpaperTrough: Float? = null,
     val wallpaperPeak: Float? = null,
+    /** JSON as SettingsRepository stores it; absent in backups from before the glass lab could apply. */
+    val glassTuning: String? = null,
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -130,6 +132,7 @@ class BackupService(
                 wallpaperChroma = s.wallpaperChroma,
                 wallpaperTrough = s.wallpaperTrough,
                 wallpaperPeak = s.wallpaperPeak,
+                glassTuning = s.glassTuning.takeIf { it.isNotEmpty() }?.let { encodeTuning(it) },
             ),
             conversations = db.conversations().all(),
             messages = db.messages().all(),
@@ -221,6 +224,7 @@ class BackupService(
                     wallpaperChroma = bs.wallpaperChroma,
                     wallpaperTrough = bs.wallpaperTrough,
                     wallpaperPeak = bs.wallpaperPeak,
+                    glassTuning = decodeTuning(bs.glassTuning),
                 )
             }
             settings.setCurrentConversation(null)

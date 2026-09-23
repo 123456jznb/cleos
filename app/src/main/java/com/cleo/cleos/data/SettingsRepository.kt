@@ -7,9 +7,12 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.cleo.cleos.glass.GlassPart
+import com.cleo.cleos.glass.GlassTuning
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.Json
 
 enum class GlassMode { Auto, Light, Dark }
 
@@ -31,6 +34,8 @@ data class AppSettings(
     val wallpaperChroma: Float? = null,
     val wallpaperTrough: Float? = null,
     val wallpaperPeak: Float? = null,
+    /** Glass the user tuned in the glass lab and applied, per part. */
+    val glassTuning: Map<GlassPart, GlassTuning> = emptyMap(),
 )
 
 data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
@@ -64,6 +69,7 @@ class SettingsRepository(private val context: Context) {
         val wallpaperChroma = floatPreferencesKey("wallpaper_chroma")
         val wallpaperTrough = floatPreferencesKey("wallpaper_trough")
         val wallpaperPeak = floatPreferencesKey("wallpaper_peak")
+        val glassTuning = stringPreferencesKey("glass_tuning")
         val currentConversation = stringPreferencesKey("current_conversation")
     }
 
@@ -87,6 +93,7 @@ class SettingsRepository(private val context: Context) {
             wallpaperChroma = this[Keys.wallpaperChroma],
             wallpaperTrough = this[Keys.wallpaperTrough],
             wallpaperPeak = this[Keys.wallpaperPeak],
+            glassTuning = decodeTuning(this[Keys.glassTuning]),
         )
     }
 
@@ -106,7 +113,12 @@ class SettingsRepository(private val context: Context) {
             if (next.wallpaperChroma != null) prefs[Keys.wallpaperChroma] = next.wallpaperChroma else prefs.remove(Keys.wallpaperChroma)
             if (next.wallpaperTrough != null) prefs[Keys.wallpaperTrough] = next.wallpaperTrough else prefs.remove(Keys.wallpaperTrough)
             if (next.wallpaperPeak != null) prefs[Keys.wallpaperPeak] = next.wallpaperPeak else prefs.remove(Keys.wallpaperPeak)
+            if (next.glassTuning.isNotEmpty()) prefs[Keys.glassTuning] = encodeTuning(next.glassTuning) else prefs.remove(Keys.glassTuning)
         }
+    }
+
+    suspend fun setGlassTuning(part: GlassPart, tuning: GlassTuning?) = update {
+        it.copy(glassTuning = if (tuning == null) it.glassTuning - part else it.glassTuning + (part to tuning))
     }
 
     val currentConversation: Flow<Long?> =
@@ -117,4 +129,16 @@ class SettingsRepository(private val context: Context) {
             if (id == null) it.remove(Keys.currentConversation) else it[Keys.currentConversation] = id.toString()
         }
     }
+}
+
+private val tuningJson = Json { ignoreUnknownKeys = true }
+
+// Stored by enum name, so a part removed in some later version is skipped, not an error.
+internal fun encodeTuning(map: Map<GlassPart, GlassTuning>): String =
+    tuningJson.encodeToString(map.mapKeys { it.key.name })
+
+internal fun decodeTuning(raw: String?): Map<GlassPart, GlassTuning> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    val byName = runCatching { tuningJson.decodeFromString<Map<String, GlassTuning>>(raw) }.getOrDefault(emptyMap())
+    return byName.mapNotNull { (name, t) -> GlassPart.entries.firstOrNull { it.name == name }?.let { it to t } }.toMap()
 }
