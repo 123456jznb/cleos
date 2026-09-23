@@ -12,12 +12,15 @@ import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -41,6 +44,9 @@ data class StreamingReply(
  * Sending and receiving. Replies run in the app-wide scope, not a screen's: switching
  * to the diary mid-reply should not cut the reply off.
  *
+ * One reply at a time per conversation, but conversations don't wait for each other: the
+ * person can go and talk to another TA while the first one is still answering.
+ *
  * A reply with tools is a loop: the model answers with text, tool calls or both; the
  * calls run, their results go back, and the model continues, until it answers without
  * calling anything. Each step is stored as it happens (the text, the calls, every
@@ -57,9 +63,10 @@ class ChatRepository(
     private val companions: Companions,
     private val scope: CoroutineScope,
 ) {
-    private val _streaming = MutableStateFlow<StreamingReply?>(null)
-    val streaming: StateFlow<StreamingReply?> = _streaming.asStateFlow()
-    private var job: Job? = null
+    /** The replies being written, by conversation. */
+    private val _streaming = MutableStateFlow<Map<Long, StreamingReply>>(emptyMap())
+    val streaming: StateFlow<Map<Long, StreamingReply>> = _streaming.asStateFlow()
+    private val jobs = ConcurrentHashMap<Long, Job>()
 
     /**
      * Endpoint and model pairs that turned down a request with tools, in this run of the
@@ -70,7 +77,23 @@ class ChatRepository(
     /** The same for pictures: models that can't look at images are sent the text only. */
     private val refusesImages = ConcurrentHashMap.newKeySet<String>()
 
-    val busy: Boolean get() = job?.isActive == true
+    /** Whether a reply is under way in [conversationId], including while its tools run. */
+    fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true
+
+    /** Runs [block] as [conversationId]'s reply; false, and nothing runs, while one is under way there. */
+    private fun start(conversationId: Long, block: suspend () -> Unit): Boolean {
+        if (busy(conversationId)) return false
+        // Registered before it starts, so a quick reply can't finish before it is on the map.
+        val job = scope.launch(start = CoroutineStart.LAZY) { block() }
+        jobs[conversationId] = job
+        job.invokeOnCompletion { jobs.remove(conversationId, job) }
+        job.start()
+        return true
+    }
+
+    private fun show(reply: StreamingReply) = _streaming.update { it + (reply.conversationId to reply) }
+
+    private fun hide(conversationId: Long) = _streaming.update { it - conversationId }
 
     suspend fun newConversation(companionId: Long): Long {
         val now = System.currentTimeMillis()
@@ -92,11 +115,11 @@ class ChatRepository(
     private suspend fun taOf(conversationId: Long) =
         db.conversations().get(conversationId)?.companionId?.let { companions.get(it) } ?: companions.current()
 
-    fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()) {
-        if (busy) return
+    /** False when nothing was sent (a reply is still under way here): the text stays in the box. */
+    fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()): Boolean {
         val content = text.trim()
-        if (content.isEmpty() && pictures.isEmpty()) return
-        job = scope.launch {
+        if (content.isEmpty() && pictures.isEmpty()) return false
+        return start(conversationId) {
             val now = System.currentTimeMillis()
             db.messages().insert(
                 MessageEntity(
@@ -118,16 +141,30 @@ class ChatRepository(
 
     /** Throw away [assistantMessageId] (a failed or unwanted reply) and ask again. */
     fun retry(conversationId: Long, assistantMessageId: Long) {
-        if (busy) return
-        job = scope.launch {
+        start(conversationId) {
             db.messages().delete(assistantMessageId)
             reply(conversationId)
         }
     }
 
-    fun stop() {
-        job?.cancel()
+    fun stop(conversationId: Long) {
+        jobs[conversationId]?.cancel()
     }
+
+    /**
+     * Stops the replies in these conversations and waits until they have let go. A reply
+     * still writing into a conversation that is being deleted would fail on the missing
+     * row, so this comes first.
+     */
+    suspend fun stopReplies(conversationIds: Collection<Long>) {
+        conversationIds.mapNotNull { jobs[it] }.forEach { it.cancelAndJoin() }
+    }
+
+    /** Before one TA goes, with every conversation they had. */
+    suspend fun stopRepliesOf(companionId: Long) = stopReplies(db.conversations().idsFor(companionId))
+
+    /** Before a restore replaces every conversation. */
+    suspend fun stopAll() = stopReplies(jobs.keys.toList())
 
     /** The row and the pictures sent with it: nothing else points at those files. */
     fun deleteMessage(id: Long) {
@@ -141,6 +178,7 @@ class ChatRepository(
     /** A conversation and its pictures: the rows go by cascade, the files would stay behind. */
     fun deleteConversation(id: Long) {
         scope.launch {
+            stopReplies(listOf(id))
             val pictures = db.messages().imagesIn(id).flatMap { MessageImages.decode(it) }.map { it.file }
             db.conversations().delete(id)
             images.delete(pictures)
@@ -152,17 +190,16 @@ class ChatRepository(
      * way it is their turn in the conversation, so the model answers it.
      */
     fun answerSecretRequest(conversationId: Long, requestMessageId: Long, grant: Boolean) {
-        if (busy) return
-        job = scope.launch {
-            val row = db.messages().get(requestMessageId) ?: return@launch
-            val request = SecretRequests.decode(row.content)?.takeIf { it.status == SecretRequest.PENDING } ?: return@launch
+        start(conversationId) answer@{
+            val row = db.messages().get(requestMessageId) ?: return@answer
+            val request = SecretRequests.decode(row.content)?.takeIf { it.status == SecretRequest.PENDING } ?: return@answer
             val ai = taOf(conversationId).name.trim().ifEmpty { "TA" }
             val day = LocalDate.ofEpochDay(request.day)
             val entry = db.diary().get(request.diaryId)
             if (grant && entry == null) {
                 db.messages().setContent(row.id, SecretRequests.encode(request.copy(status = SecretRequest.GONE)))
                 note(conversationId, "这个小秘密已经删掉了，没法给${ai}看")
-                return@launch
+                return@answer
             }
             val status = if (grant) SecretRequest.GRANTED else SecretRequest.DECLINED
             db.messages().setContent(row.id, SecretRequests.encode(request.copy(status = status)))
@@ -230,7 +267,7 @@ class ChatRepository(
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
                             note(conversationId, TOO_MANY_ROUNDS)
-                            _streaming.value = null
+                            hide(conversationId)
                             return
                         }
                         messages = messages + step.message + runTools(conversationId, step, s, ta.id)
@@ -240,7 +277,7 @@ class ChatRepository(
             }
         } catch (e: CancellationException) {
             // Stopped while a tool ran: no stream is open to clear the live row on its way out.
-            if (_streaming.value?.finished != true) _streaming.value = null
+            if (_streaming.value[conversationId]?.finished != true) hide(conversationId)
             throw e
         }
     }
@@ -278,17 +315,17 @@ class ChatRepository(
         var calls = emptyList<ToolCall>()
         var error: String? = null
         var status: Int? = null
-        _streaming.value = StreamingReply(conversationId, "", thinking = false)
+        show(StreamingReply(conversationId, "", thinking = false))
         try {
             client.stream(endpoint, messages, specs).collect { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
                         text.append(event.text)
-                        _streaming.value = StreamingReply(conversationId, text.toString(), thinking = false)
+                        show(StreamingReply(conversationId, text.toString(), thinking = false))
                     }
                     is ChatEvent.Reasoning -> {
                         reasoning.append(event.text)
-                        if (text.isEmpty()) _streaming.value = StreamingReply(conversationId, "", thinking = true)
+                        if (text.isEmpty()) show(StreamingReply(conversationId, "", thinking = true))
                     }
                     is ChatEvent.ToolCalls -> calls = event.calls
                 }
@@ -336,12 +373,14 @@ class ChatRepository(
         for (call in step.message.toolCalls) {
             // What was said before the calls stays up; the screen switches to the stored
             // copy (savedId) as soon as it is in the list.
-            _streaming.value = StreamingReply(
-                conversationId,
-                said,
-                thinking = false,
-                savedId = step.savedId.takeIf { said.isNotEmpty() },
-                activity = tools.activity(call.name),
+            show(
+                StreamingReply(
+                    conversationId,
+                    said,
+                    thinking = false,
+                    savedId = step.savedId.takeIf { said.isNotEmpty() },
+                    activity = tools.activity(call.name),
+                ),
             )
             val outcome = try {
                 tools.run(call, s, conversationId, companionId)
@@ -391,13 +430,14 @@ class ChatRepository(
             // the screen hides the live bubble once it sees savedId in its list.
             // The cleanup runs on its own so this job (and `busy`) ends now.
             val handover = StreamingReply(conversationId, body, thinking = false, savedId = id, finished = true)
-            _streaming.value = handover
+            show(handover)
             scope.launch {
                 delay(1500)
-                _streaming.compareAndSet(handover, null)
+                // Unless the next reply here has begun meanwhile.
+                _streaming.update { if (it[conversationId] == handover) it - conversationId else it }
             }
         } else {
-            _streaming.value = null
+            hide(conversationId)
         }
     }
 

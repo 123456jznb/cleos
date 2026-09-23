@@ -75,7 +75,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             ta.map { it.apiBaseUrl }.distinctUntilChanged().flatMapLatest { c.secrets.hasKey(it) },
             c.settings.settings,
         ) { messages, streaming, ta, hasKey, s ->
-            val live = streaming?.takeIf { it.conversationId == id }
+            val live = streaming[id]
             // Once the stored copy of the live text is in the list, the live one steps
             // aside: all of it when the reply is over, only the text while tools still run.
             val stored = live?.savedId != null && messages.any { it.id == live.savedId }
@@ -103,8 +103,6 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState())
 
-    val busy: Boolean get() = c.chat.busy
-
     /** Pictures picked for the next message, already copied into the app's storage. */
     val attachments = mutableStateListOf<MessageImage>()
     var attaching by mutableStateOf(false)
@@ -127,10 +125,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.appScope.launch { c.images.delete(listOf(image.file)) }
     }
 
-    fun send(text: String) {
-        val id = conversationId.value ?: return
-        c.chat.send(id, text, attachments.toList())
+    /** False when nothing went out: the text and pictures stay where they are. */
+    fun send(text: String): Boolean {
+        val id = conversationId.value ?: return false
+        if (!c.chat.send(id, text, attachments.toList())) return false
         attachments.clear()
+        return true
     }
 
     override fun onCleared() {
@@ -139,7 +139,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (unsent.isNotEmpty()) c.appScope.launch { c.images.delete(unsent) }
     }
 
-    fun stop() = c.chat.stop()
+    fun stop() {
+        conversationId.value?.let { c.chat.stop(it) }
+    }
 
     fun retry(messageId: Long) {
         conversationId.value?.let { c.chat.retry(it, messageId) }

@@ -260,10 +260,7 @@ fun ChatTab(
                 onPick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onRemove = vm::detach,
                 busy = state.replying,
-                onSend = {
-                    vm.send(input)
-                    input = ""
-                },
+                onSend = { if (vm.send(input)) input = "" },
                 onStop = vm::stop,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

@@ -112,6 +112,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         deleted = true
         val id = companionId
         viewModelScope.launch {
+            c.chat.stopRepliesOf(id)
             c.companions.delete(id)
             then()
         }
@@ -226,9 +227,16 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun exportBackup(uri: Uri) = runBackup("导出了") { c.backup.export(uri) }
 
-    fun restoreBackup(uri: Uri) = runBackup("恢复了") { c.backup.restore(uri) }
+    // A reply still running would write into conversations that are about to be replaced.
+    fun restoreBackup(uri: Uri) = runBackup("恢复了") {
+        c.chat.stopAll()
+        c.backup.restore(uri)
+    }
 
-    fun undoRestore() = runBackup("撤销了，回到恢复前：") { c.backup.undoRestore() }
+    fun undoRestore() = runBackup("撤销了，回到恢复前：") {
+        c.chat.stopAll()
+        c.backup.undoRestore()
+    }
 
     // App scope: a restore half done because the screen was closed is the worst outcome.
     private fun runBackup(done: String, action: suspend () -> Any) {
