@@ -22,9 +22,11 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +36,8 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
@@ -46,12 +50,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.glass.GlassIconButton
@@ -171,6 +177,34 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                 )
+            }
+
+            Section("TA 能做的事") {
+                Text(
+                    "在聊天里说一声，TA 就能去做。模型要支持工具调用（function calling）；不支持的会自动不带工具，聊天照常。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
+                    vm.setTool(ToolGroup.Todos, it)
+                }
+                ToolSwitch("读日记", "你提到日记里写过的事时，TA 可以去翻。日记最私密，所以默认关着。", ToolGroup.Diary in settings.tools) {
+                    vm.setTool(ToolGroup.Diary, it)
+                }
+                ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
+                    vm.setTool(ToolGroup.Weather, it)
+                }
+                if (ToolGroup.Weather in settings.tools) {
+                    OutlinedTextField(
+                        value = vm.weatherCity,
+                        onValueChange = { vm.weatherCity = it },
+                        label = { Text("你在的城市") },
+                        placeholder = { Text("比如 杭州；不填的话 TA 会问你") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
 
             Section("外观") {
@@ -313,6 +347,42 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
             Text(title, color = palette.accentContent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             content()
         }
+    }
+}
+
+@Composable
+private fun ToolSwitch(title: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val palette = LocalGlassPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                interactionSource = null,
+                indication = null,
+                role = Role.Switch,
+                onValueChange = onChange,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(detail, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        // The row is the control; the switch only shows its state (one target for a screen reader).
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = palette.accent,
+                checkedBorderColor = palette.accent,
+                uncheckedThumbColor = palette.contentSecondary,
+                uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
+                uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
+            ),
+        )
     }
 }
 

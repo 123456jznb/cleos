@@ -38,6 +38,9 @@ data class BackupSettings(
     val wallpaperPeak: Float? = null,
     /** JSON as SettingsRepository stores it; absent in backups from before the glass lab could apply. */
     val glassTuning: String? = null,
+    /** Tool groups by name, comma-separated; absent in backups from before tools. */
+    val tools: String? = null,
+    val weatherCity: String = "",
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -133,6 +136,8 @@ class BackupService(
                 wallpaperTrough = s.wallpaperTrough,
                 wallpaperPeak = s.wallpaperPeak,
                 glassTuning = s.glassTuning.takeIf { it.isNotEmpty() }?.let { encodeTuning(it) },
+                tools = encodeTools(s.tools),
+                weatherCity = s.weatherCity,
             ),
             conversations = db.conversations().all(),
             messages = db.messages().all(),
@@ -225,6 +230,8 @@ class BackupService(
                     wallpaperTrough = bs.wallpaperTrough,
                     wallpaperPeak = bs.wallpaperPeak,
                     glassTuning = decodeTuning(bs.glassTuning),
+                    tools = bs.tools?.let(::decodeTools) ?: AppSettings().tools,
+                    weatherCity = bs.weatherCity,
                 )
             }
             settings.setCurrentConversation(null)

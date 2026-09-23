@@ -34,11 +34,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -101,11 +104,15 @@ private sealed interface ChatRow {
     }
 }
 
+/** An assistant turn that only called tools: nothing to show, its results have their own lines. */
+private fun MessageEntity.silent() = role == "assistant" && content.isEmpty() && error == null
+
 /** Newest first, because the list is laid out bottom-up. */
 private fun buildRows(messages: List<MessageEntity>): List<ChatRow> {
     val rows = ArrayList<ChatRow>(messages.size + 8)
     for (i in messages.indices.reversed()) {
         val m = messages[i]
+        if (m.silent()) continue
         rows += ChatRow.Message(m, isLast = i == messages.lastIndex)
         val prev = messages.getOrNull(i - 1)
         if (prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS) rows += ChatRow.Stamp(m.createdAt)
@@ -133,7 +140,7 @@ fun ChatTab(
     val rows = remember(state.messages) { buildRows(state.messages) }
 
     // Follow new messages, unless the user has scrolled up to read something older.
-    LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty()) {
+    LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty(), state.streaming?.activity) {
         if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
     }
 
@@ -153,7 +160,7 @@ fun ChatTab(
                 backdrop = page,
                 text = input,
                 onTextChange = { input = it },
-                busy = state.streaming != null && state.streaming?.savedId == null,
+                busy = state.replying,
                 onSend = {
                     vm.send(input)
                     input = ""
@@ -190,12 +197,15 @@ fun ChatTab(
             items(rows, key = { it.key }) { row ->
                 when (row) {
                     is ChatRow.Stamp -> TimeStamp(row.at)
-                    is ChatRow.Message -> MessageBubble(
-                        message = row.message,
-                        canRetry = row.isLast && state.streaming == null,
-                        onRetry = { vm.retry(row.message.id) },
-                        onDelete = { vm.delete(row.message.id) },
-                    )
+                    is ChatRow.Message -> when (row.message.role) {
+                        "tool", "note" -> ToolNote(row.message.note.orEmpty(), notice = row.message.role == "note")
+                        else -> MessageBubble(
+                            message = row.message,
+                            canRetry = row.isLast && !state.replying,
+                            onRetry = { vm.retry(row.message.id) },
+                            onDelete = { vm.delete(row.message.id) },
+                        )
+                    }
                 }
             }
         }
@@ -340,24 +350,57 @@ private fun MessageBubble(
 @Composable
 private fun LiveBubble(live: StreamingReply) {
     val palette = LocalGlassPalette.current
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-        GlassSurface(
-            modifier = Modifier.widthIn(max = bubbleMaxWidth()),
-            style = palette.bubble,
-            shape = GlassShape.Rounded(20.dp),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-        ) {
-            if (live.text.isEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TypingDots()
-                    if (live.thinking) {
-                        Spacer(Modifier.width(8.dp))
-                        Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (live.text.isNotEmpty() || live.activity == null) {
+            GlassSurface(
+                modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+                style = palette.bubble,
+                shape = GlassShape.Rounded(20.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                if (live.text.isEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TypingDots()
+                        if (live.thinking) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+                        }
                     }
+                } else {
+                    Text(live.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
                 }
-            } else {
-                Text(live.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
             }
+        }
+        live.activity?.let { ToolNote(it + "…", running = true) }
+    }
+}
+
+/**
+ * One line for something done on the way to a reply (记下了待办「交报告」), or a notice
+ * from the app. A capsule of its own, like the error lines: it sits on the wallpaper.
+ */
+@Composable
+private fun ToolNote(text: String, notice: Boolean = false, running: Boolean = false) {
+    val palette = LocalGlassPalette.current
+    GlassSurface(
+        modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+        style = palette.notice,
+        shape = GlassShape.Rounded(14.dp),
+        contentPadding = PaddingValues(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (notice) Icons.Rounded.Info else Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                tint = if (running) palette.contentSecondary else palette.accentContent,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(text, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 18.sp)
         }
     }
 }

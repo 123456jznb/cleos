@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.glass.GlassPart
 import com.cleo.cleos.glass.GlassTuning
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +37,13 @@ data class AppSettings(
     val wallpaperPeak: Float? = null,
     /** Glass the user tuned in the glass lab and applied, per part. */
     val glassTuning: Map<GlassPart, GlassTuning> = emptyMap(),
+    /**
+     * What the model may do. Reading the diary starts off: it is the one tool that
+     * hands the model something private, so it waits to be asked for.
+     */
+    val tools: Set<ToolGroup> = setOf(ToolGroup.Todos, ToolGroup.Weather),
+    /** Where "今天天气怎么样" means, when the model isn't told a city. */
+    val weatherCity: String = "",
 )
 
 data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
@@ -70,6 +78,8 @@ class SettingsRepository(private val context: Context) {
         val wallpaperTrough = floatPreferencesKey("wallpaper_trough")
         val wallpaperPeak = floatPreferencesKey("wallpaper_peak")
         val glassTuning = stringPreferencesKey("glass_tuning")
+        val tools = stringPreferencesKey("tools")
+        val weatherCity = stringPreferencesKey("weather_city")
         val currentConversation = stringPreferencesKey("current_conversation")
     }
 
@@ -94,6 +104,8 @@ class SettingsRepository(private val context: Context) {
             wallpaperTrough = this[Keys.wallpaperTrough],
             wallpaperPeak = this[Keys.wallpaperPeak],
             glassTuning = decodeTuning(this[Keys.glassTuning]),
+            tools = this[Keys.tools]?.let(::decodeTools) ?: d.tools,
+            weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
         )
     }
 
@@ -114,6 +126,9 @@ class SettingsRepository(private val context: Context) {
             if (next.wallpaperTrough != null) prefs[Keys.wallpaperTrough] = next.wallpaperTrough else prefs.remove(Keys.wallpaperTrough)
             if (next.wallpaperPeak != null) prefs[Keys.wallpaperPeak] = next.wallpaperPeak else prefs.remove(Keys.wallpaperPeak)
             if (next.glassTuning.isNotEmpty()) prefs[Keys.glassTuning] = encodeTuning(next.glassTuning) else prefs.remove(Keys.glassTuning)
+            // Always written, even when empty: "none" must not read back as "never set".
+            prefs[Keys.tools] = encodeTools(next.tools)
+            prefs[Keys.weatherCity] = next.weatherCity
         }
     }
 
@@ -136,6 +151,12 @@ private val tuningJson = Json { ignoreUnknownKeys = true }
 // Stored by enum name, so a part removed in some later version is skipped, not an error.
 internal fun encodeTuning(map: Map<GlassPart, GlassTuning>): String =
     tuningJson.encodeToString(map.mapKeys { it.key.name })
+
+internal fun encodeTools(tools: Set<ToolGroup>): String = tools.sortedBy { it.ordinal }.joinToString(",") { it.name }
+
+/** By name, like the tuning: a group removed in a later version is skipped. */
+internal fun decodeTools(raw: String): Set<ToolGroup> =
+    raw.split(',').mapNotNull { name -> ToolGroup.entries.firstOrNull { it.name == name.trim() } }.toSet()
 
 internal fun decodeTuning(raw: String?): Map<GlassPart, GlassTuning> {
     if (raw.isNullOrBlank()) return emptyMap()

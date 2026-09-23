@@ -18,7 +18,10 @@ import kotlinx.coroutines.launch
 data class ChatUiState(
     val conversationId: Long? = null,
     val messages: List<MessageEntity> = emptyList(),
+    /** What to draw live below the stored messages; text already stored is blanked out. */
     val streaming: StreamingReply? = null,
+    /** A reply is under way here (the stop button), including while its tools run. */
+    val replying: Boolean = false,
     val hasApiKey: Boolean = true,
     val aiName: String = "",
     val model: String = "",
@@ -46,14 +49,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             c.secrets.hasApiKey,
             c.settings.settings,
         ) { messages, streaming, hasKey, s ->
+            val live = streaming?.takeIf { it.conversationId == id }
+            // Once the stored copy of the live text is in the list, the live one steps
+            // aside: all of it when the reply is over, only the text while tools still run.
+            val stored = live?.savedId != null && messages.any { it.id == live.savedId }
             ChatUiState(
                 conversationId = id,
                 messages = messages,
-                // Show the live bubble only for this conversation, and only until the
-                // stored copy of the same reply has appeared in the list.
-                streaming = streaming?.takeIf { live ->
-                    live.conversationId == id && (live.savedId == null || messages.none { it.id == live.savedId })
+                streaming = when {
+                    live == null -> null
+                    stored && live.finished -> null
+                    stored -> live.copy(text = "")
+                    else -> live
                 },
+                replying = live != null && !live.finished,
                 hasApiKey = hasKey,
                 aiName = s.aiName,
                 model = s.apiModel,

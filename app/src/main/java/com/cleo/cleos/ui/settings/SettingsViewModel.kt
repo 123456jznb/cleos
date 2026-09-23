@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
 import com.cleo.cleos.ai.ApiEndpoint
 import com.cleo.cleos.ai.ChatException
+import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.GlassMode
@@ -39,6 +40,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var userName by mutableStateOf("")
     var persona by mutableStateOf("")
     var historySize by mutableIntStateOf(40)
+    var weatherCity by mutableStateOf("")
     var keyInput by mutableStateOf("")
     var loaded by mutableStateOf(false)
         private set
@@ -65,6 +67,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             userName = s.userName
             persona = s.persona
             historySize = s.historySize
+            weatherCity = s.weatherCity
             loaded = true
             watch()
         }
@@ -72,7 +75,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     @OptIn(FlowPreview::class)
     private suspend fun watch() {
-        snapshotFlow { listOf(baseUrl, model, aiName, userName, persona, historySize) }
+        snapshotFlow { listOf(baseUrl, model, aiName, userName, persona, historySize, weatherCity) }
             .drop(1)
             .debounce(500)
             .collect { persist() }
@@ -88,7 +91,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 userName = userName.trim(),
                 persona = persona.take(PERSONA_LIMIT),
                 historySize = historySize,
+                weatherCity = weatherCity.trim(),
             )
+        }
+    }
+
+    fun setTool(group: ToolGroup, on: Boolean) {
+        viewModelScope.launch {
+            c.settings.update { it.copy(tools = if (on) it.tools + group else it.tools - group) }
         }
     }
 

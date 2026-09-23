@@ -1,5 +1,6 @@
 package com.cleo.cleos.data.db
 
+import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.RoomDatabase
 
@@ -10,8 +11,12 @@ import androidx.room.RoomDatabase
  */
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, DiaryEntryEntity::class, TodoEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = true,
+    autoMigrations = [
+        // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
+        AutoMigration(from = 1, to = 2),
+    ],
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversations(): ConversationDao

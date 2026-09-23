@@ -80,6 +80,23 @@ interface DiaryDao {
     @Query("SELECT * FROM diary_entries WHERE id = :id")
     suspend fun get(id: Long): DiaryEntryEntity?
 
+    @Query("SELECT * FROM diary_entries WHERE day = :day ORDER BY createdAt")
+    suspend fun onDay(day: Long): List<DiaryEntryEntity>
+
+    @Query("SELECT * FROM diary_entries ORDER BY day DESC, createdAt DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<DiaryEntryEntity>
+
+    /**
+     * Candidates for a keyword, newest first. [pattern] is a LIKE pattern with `!` as the
+     * escape character. It also matches inside the blocks' JSON (keys, image file names),
+     * so callers check the plain text again.
+     */
+    @Query(
+        "SELECT * FROM diary_entries WHERE title LIKE :pattern ESCAPE '!' OR blocks LIKE :pattern ESCAPE '!' " +
+            "ORDER BY day DESC, createdAt DESC LIMIT :limit",
+    )
+    suspend fun search(pattern: String, limit: Int): List<DiaryEntryEntity>
+
     @Insert
     suspend fun insert(entry: DiaryEntryEntity): Long
 
@@ -104,6 +121,9 @@ interface TodoDao {
     /** Unordered: the screen sorts (dated first by date, then the rest in the order added). */
     @Query("SELECT * FROM todos")
     fun observeAll(): Flow<List<TodoEntity>>
+
+    @Query("SELECT * FROM todos WHERE id = :id")
+    suspend fun get(id: Long): TodoEntity?
 
     @Insert
     suspend fun insert(todo: TodoEntity): Long

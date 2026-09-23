@@ -7,9 +7,8 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -18,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,7 +26,16 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
-data class ApiMessage(val role: String, val content: String)
+data class ApiMessage(
+    val role: String,
+    val content: String,
+    /** An assistant turn that called tools. */
+    val toolCalls: List<ToolCall> = emptyList(),
+    /** A tool result: the call it answers. */
+    val toolCallId: String? = null,
+    /** Reasoning handed back within the turn that produced it (see MessageEntity.reasoning). */
+    val reasoning: String? = null,
+)
 
 /** Where to send a conversation. [baseUrl] may or may not already end in /chat/completions. */
 data class ApiEndpoint(val baseUrl: String, val apiKey: String, val model: String) {
@@ -38,8 +47,12 @@ data class ApiEndpoint(val baseUrl: String, val apiKey: String, val model: Strin
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
-    /** Reasoning models stream their thinking separately; shown only as "thinking…". */
-    data object Thinking : ChatEvent
+
+    /** Reasoning models stream their thinking separately. Shown only as "在想". */
+    data class Reasoning(val text: String) : ChatEvent
+
+    /** The tool calls the reply ended with. Sent once, after everything else. */
+    data class ToolCalls(val calls: List<ToolCall>) : ChatEvent
 }
 
 /** A failure with a message already worded for the person using the app. */
@@ -57,24 +70,16 @@ class ChatException(message: String, val status: Int? = null) : Exception(messag
 class ChatClient(private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun stream(endpoint: ApiEndpoint, messages: List<ApiMessage>): Flow<ChatEvent> = callbackFlow {
-        val body = buildJsonObject {
-            put("model", endpoint.model)
-            put("stream", true)
-            putJsonArray("messages") {
-                messages.forEach { m ->
-                    addJsonObject {
-                        put("role", m.role)
-                        put("content", m.content)
-                    }
-                }
-            }
-        }
+    fun stream(
+        endpoint: ApiEndpoint,
+        messages: List<ApiMessage>,
+        tools: List<ToolSpec> = emptyList(),
+    ): Flow<ChatEvent> = callbackFlow {
         val request = Request.Builder()
             .url(endpoint.chatUrl)
             .header("Authorization", "Bearer ${endpoint.apiKey}")
             .header("Accept", "text/event-stream")
-            .post(body.toString().toRequestBody(JSON_TYPE))
+            .post(requestBody(endpoint.model, messages, tools).toString().toRequestBody(JSON_TYPE))
             .build()
         val call = http.newCall(request)
 
@@ -85,25 +90,16 @@ class ChatClient(private val http: OkHttpClient) {
                         throw ChatException(describeHttpError(response.code, response.body.string()), response.code)
                     }
                     val source = response.body.source()
-                    var thinkingSent = false
+                    val parser = StreamParser()
                     while (true) {
                         val line = source.readUtf8Line() ?: break
                         if (!line.startsWith("data:")) continue
                         val data = line.substring(5).trim()
                         if (data.isEmpty()) continue
                         if (data == "[DONE]") break
-                        val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-                        obj["error"]?.let { throw ChatException("服务端报错：" + errorText(it)) }
-                        val delta = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("delta") as? JsonObject
-                            ?: continue
-                        val reasoning = (delta["reasoning_content"] as? JsonPrimitive)?.contentOrNull
-                        if (!reasoning.isNullOrEmpty() && !thinkingSent) {
-                            send(ChatEvent.Thinking)
-                            thinkingSent = true
-                        }
-                        val content = (delta["content"] as? JsonPrimitive)?.contentOrNull
-                        if (!content.isNullOrEmpty()) send(ChatEvent.Delta(content))
+                        for (event in parser.feed(data)) send(event)
                     }
+                    parser.toolCalls().takeIf { it.isNotEmpty() }?.let { send(ChatEvent.ToolCalls(it)) }
                 }
                 close()
             } catch (e: ChatException) {
@@ -139,9 +135,6 @@ class ChatClient(private val http: OkHttpClient) {
         }
     }
 
-    private fun errorText(e: JsonElement): String =
-        (e as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull ?: e.toString()
-
     private fun describeHttpError(code: Int, body: String): String {
         val detail = runCatching { errorText(json.parseToJsonElement(body).jsonObject["error"]!!) }
             .getOrNull()
@@ -169,3 +162,62 @@ class ChatClient(private val http: OkHttpClient) {
         val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }
+
+/**
+ * The request as the OpenAI-compatible endpoints take it. An assistant turn that called
+ * tools goes back with its calls, and with null content when it said nothing (the
+ * canonical shape, what the OpenAI SDK itself sends); each result follows as a "tool"
+ * message naming its call.
+ */
+internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>): JsonObject = buildJsonObject {
+    put("model", model)
+    put("stream", true)
+    putJsonArray("messages") {
+        for (m in messages) {
+            addJsonObject {
+                put("role", m.role)
+                if (m.toolCalls.isEmpty()) {
+                    put("content", m.content)
+                } else {
+                    if (m.content.isEmpty()) put("content", JsonNull) else put("content", m.content)
+                    m.reasoning?.let { put("reasoning_content", it) }
+                    putJsonArray("tool_calls") {
+                        for (c in m.toolCalls) {
+                            addJsonObject {
+                                put("id", c.id)
+                                put("type", "function")
+                                putJsonObject("function") {
+                                    put("name", c.name)
+                                    put("arguments", sendableArguments(c.arguments))
+                                }
+                            }
+                        }
+                    }
+                }
+                m.toolCallId?.let { put("tool_call_id", it) }
+            }
+        }
+    }
+    if (tools.isNotEmpty()) {
+        putJsonArray("tools") {
+            for (t in tools) {
+                addJsonObject {
+                    put("type", "function")
+                    putJsonObject("function") {
+                        put("name", t.name)
+                        put("description", t.description)
+                        put("parameters", t.parameters)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Arguments are echoed back as the model wrote them, unless they are not a JSON object
+ * (cut off mid-stream, or "" for no parameters): endpoints that check them would reject
+ * the whole request. The tool already told the model its arguments were broken.
+ */
+private fun sendableArguments(raw: String): String =
+    if (raw.isNotBlank() && ToolArgs.parse(raw) != null) raw else "{}"
