@@ -200,6 +200,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
                 )
+                ToolSwitch(
+                    "分几条发",
+                    "想分开说的时候，TA 会一条一条地发，每条一个气泡。模型没这么做时，照常是一个气泡。",
+                    ToolGroup.Messages in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Messages, it)
+                }
                 ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
                     vm.setTool(ToolGroup.Todos, it)
                 }

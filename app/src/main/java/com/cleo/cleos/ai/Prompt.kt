@@ -4,6 +4,8 @@ import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -49,6 +51,9 @@ object Prompt {
      * rules for the tools actually offered are included.
      */
     private fun toolRule(tools: Set<ToolGroup>): String? = buildList {
+        if (ToolGroup.Messages in tools) {
+            add("想分成几条消息说的时候，用 send_message 一条一条发：一条只说一件事，要发几条就在同一次回复里调用几次。只说一句就直接回复。用 send_message 发过的话，别再在回复里写一遍，也别说「发好了」。")
+        }
         if (ToolGroup.Todos in tools) {
             add("对方让你记下、修改、完成或查看待办时，用工具去做，做完再告诉对方；没有调用工具，就不要说已经做好了。")
         }
@@ -79,7 +84,8 @@ object Prompt {
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
-        val sendable = history.mapNotNull { it.toApi(withTools, images, attached) }
+        val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached)?.let { m.id to it } }
+        val sendable = if (ToolGroup.Messages in tools) asSentMessages(converted) else converted.map { it.second }
         val paired = if (withTools) pairCalls(sendable) else sendable
         // The window can start mid-exchange; begin at a user turn, which every endpoint accepts.
         val fromUser = paired.dropWhile { it.role != "user" }.ifEmpty { paired }
@@ -108,6 +114,34 @@ object Prompt {
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
         }
         return listOf(ApiMessage("system", system(settings, ta, tools))) + merged
+    }
+
+    /**
+     * The TA's messages in a row go back as the send_message calls they are (or, from before,
+     * could have been), each with its result: the model sees itself sending separate messages,
+     * the way it is asked to, instead of one text with blank lines. A single message stays a
+     * plain reply. Ids come from the rows, so they stay the same from one request to the next.
+     */
+    private fun asSentMessages(list: List<Pair<Long, ApiMessage>>): List<ApiMessage> {
+        fun ApiMessage.said() = role == "assistant" && toolCalls.isEmpty() && content.isNotBlank()
+        val out = ArrayList<ApiMessage>(list.size)
+        var i = 0
+        while (i < list.size) {
+            var j = i
+            while (j < list.size && list[j].second.said()) j++
+            if (j - i < 2) {
+                out += list[i].second
+                i++
+                continue
+            }
+            val calls = list.subList(i, j).map { (id, m) ->
+                ToolCall("send_$id", ToolSpecs.sendMessage.name, buildJsonObject { put("text", m.content) }.toString())
+            }
+            out += ApiMessage("assistant", "", calls)
+            calls.forEach { out += ApiMessage("tool", ToolSpecs.SENT, toolCallId = it.id) }
+            i = j
+        }
+        return out
     }
 
     /** Ids of the messages whose pictures go along: the newest, whole messages, up to [MAX_IMAGES]. */

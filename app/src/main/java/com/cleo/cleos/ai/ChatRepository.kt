@@ -250,12 +250,7 @@ class ChatRepository(
                 val mayRefuse = rounds == 0 && (groups.isNotEmpty() || withImages)
                 when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse)) {
                     is Step.Ended -> {
-                        val out = leftOut
-                        // Only now is it clear what the model couldn't take: without it, it worked.
-                        if (out != null && step.ok) {
-                            if (out.images) refusesImages += endpointKey else refusesTools += endpointKey
-                            note(conversationId, if (out.images) IMAGES_REFUSED else TOOLS_REFUSED, at = out.at - 1)
-                        }
+                        if (step.ok) remember(leftOut, conversationId, endpointKey)
                         return
                     }
                     Step.Refused -> {
@@ -270,7 +265,15 @@ class ChatRepository(
                             hide(conversationId)
                             return
                         }
-                        messages = messages + step.message + runTools(conversationId, step, s, ta.id)
+                        val results = runTools(conversationId, step, s, ta.id)
+                        // Only messages sent: that was the whole reply. Asking again would bring
+                        // nothing new, or a "发好了".
+                        if (step.message.toolCalls.all { it.name == ToolSpecs.sendMessage.name }) {
+                            remember(leftOut, conversationId, endpointKey)
+                            hide(conversationId)
+                            return
+                        }
+                        messages = messages + step.message + results
                         rounds++
                     }
                 }
@@ -283,6 +286,16 @@ class ChatRepository(
     }
 
     private class LeftOut(val images: Boolean, val at: Long)
+
+    /**
+     * Once a reply got through without what a refusal made it leave out, that is what the
+     * model can't take: it is left out from now on, and the chat says so.
+     */
+    private suspend fun remember(out: LeftOut?, conversationId: Long, endpointKey: String) {
+        if (out == null) return
+        if (out.images) refusesImages += endpointKey else refusesTools += endpointKey
+        note(conversationId, if (out.images) IMAGES_REFUSED else TOOLS_REFUSED, at = out.at - 1)
+    }
 
     /** Pictures become data: URLs just before sending; one that can't be read is left out. */
     private suspend fun prepare(messages: List<ApiMessage>): List<ApiMessage> = messages.map { m ->
@@ -298,7 +311,8 @@ class ChatRepository(
          */
         data object Refused : Step
 
-        class Called(val message: ApiMessage, val savedId: Long) : Step
+        /** [savedId]: the row the text said before the calls went into, if there was any to store. */
+        class Called(val message: ApiMessage, val savedId: Long?) : Step
     }
 
     /** One request: streams it to the screen, stores what came back, says what's next. */
@@ -347,16 +361,27 @@ class ChatRepository(
             if (error == null && calls.isNotEmpty()) {
                 val body = text.toString()
                 val thought = reasoning.toString().ifEmpty { null }
-                val id = db.messages().insert(
-                    MessageEntity(
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = body,
-                        createdAt = startedAt,
-                        toolCalls = ToolCallCodec.encode(calls),
-                        reasoning = thought,
-                    ),
-                )
+                // Sent messages are stored as bubbles of their own, not as calls (Prompt turns
+                // bubbles in a row back into calls). With some sent, the words said first go in
+                // now as a bubble too, and the other calls only after the messages (runTools):
+                // a call has to stay right before its results.
+                val speaks = calls.any { it.name == ToolSpecs.sendMessage.name }
+                val id = when {
+                    !speaks -> db.messages().insert(
+                        MessageEntity(
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = body,
+                            createdAt = startedAt,
+                            toolCalls = ToolCallCodec.encode(calls),
+                            reasoning = thought,
+                        ),
+                    )
+                    body.isBlank() -> null
+                    else -> db.messages().insert(
+                        MessageEntity(conversationId = conversationId, role = "assistant", content = body, createdAt = startedAt),
+                    )
+                }
                 db.conversations().touch(conversationId, System.currentTimeMillis())
                 Step.Called(ApiMessage("assistant", body, calls, reasoning = thought), savedId = id)
             } else {
@@ -366,11 +391,57 @@ class ChatRepository(
         }
     }
 
-    /** Runs the calls in order, storing each result with its line for the chat. */
+    /**
+     * Runs the calls, storing each result with its line for the chat. Sent messages come
+     * first: each is the TA speaking and becomes a bubble, a moment after the one before, the
+     * way messages arrive when someone types them one by one. Then the other calls, in order.
+     * The results go back in the order of the calls.
+     */
     private suspend fun runTools(conversationId: Long, step: Step.Called, s: AppSettings, companionId: Long): List<ApiMessage> {
         val said = step.message.content
-        val results = ArrayList<ApiMessage>(step.message.toolCalls.size)
-        for (call in step.message.toolCalls) {
+        val (sends, others) = step.message.toolCalls.partition { it.name == ToolSpecs.sendMessage.name }
+        val results = HashMap<String, ApiMessage>()
+        var previous = said.takeIf { it.isNotBlank() }
+        var sent = 0
+        for (call in sends) {
+            val words = ToolArgs.parse(call.arguments)?.let { ToolArgs.text(it, "text") }?.trim().orEmpty()
+            val result = when {
+                words.isEmpty() -> "没有内容，没发出去。"
+                sent >= MAX_MESSAGES -> "一次最多发 $MAX_MESSAGES 条，这条没发出去。"
+                else -> {
+                    previous?.let {
+                        // Typing the next one: the dots, for a moment that grows a little with what was just said.
+                        show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
+                        delay((400L + it.length * 25L).coerceAtMost(1500L))
+                    }
+                    withContext(NonCancellable) {
+                        val at = System.currentTimeMillis()
+                        db.messages().insert(MessageEntity(conversationId = conversationId, role = "assistant", content = words, createdAt = at))
+                        db.conversations().touch(conversationId, at)
+                    }
+                    previous = words
+                    sent++
+                    ToolSpecs.SENT
+                }
+            }
+            results[call.id] = ApiMessage("tool", result, toolCallId = call.id)
+        }
+        if (sends.isNotEmpty() && others.isNotEmpty()) {
+            // Held back in step(): stored now, after the messages and right before the results.
+            withContext(NonCancellable) {
+                db.messages().insert(
+                    MessageEntity(
+                        conversationId = conversationId,
+                        role = "assistant",
+                        content = "",
+                        createdAt = System.currentTimeMillis(),
+                        toolCalls = ToolCallCodec.encode(others),
+                        reasoning = step.message.reasoning,
+                    ),
+                )
+            }
+        }
+        for (call in others) {
             // What was said before the calls stays up; the screen switches to the stored
             // copy (savedId) as soon as it is in the list.
             show(
@@ -409,9 +480,9 @@ class ChatRepository(
                     )
                 }
             }
-            results += ApiMessage("tool", outcome.result, toolCallId = call.id)
+            results[call.id] = ApiMessage("tool", outcome.result, toolCallId = call.id)
         }
-        return results
+        return step.message.toolCalls.mapNotNull { results[it.id] }
     }
 
     private suspend fun finish(conversationId: Long, startedAt: Long, body: String, error: String?, keepEmpty: Boolean) {
@@ -453,6 +524,9 @@ class ChatRepository(
 
         /** Round trips with tools in one reply before it is cut off, against a model stuck calling. */
         const val MAX_TOOL_ROUNDS = 5
+
+        /** Messages sent in one go: past this it is a flood, not a conversation. */
+        const val MAX_MESSAGES = 8
 
         /**
          * How endpoints turn down tools or pictures a model can't take: 400 (SiliconFlow,

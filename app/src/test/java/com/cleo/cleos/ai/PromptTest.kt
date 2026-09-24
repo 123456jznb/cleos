@@ -169,6 +169,33 @@ class PromptTest {
     }
 
     @Test
+    fun messagesInARowGoBackAsSentMessages() {
+        val history = listOf(
+            msg("user", "早"),
+            msg("assistant", "早呀"),
+            msg("assistant", "今天下雨了"),
+            msg("user", "嗯"),
+            msg("assistant", "带伞"),
+            msg("user", "好"),
+        )
+        val out = Prompt.messages(AppSettings(), ta(), history, now, setOf(ToolGroup.Messages))
+        assertEquals(listOf("system", "user", "assistant", "tool", "tool", "user", "assistant", "user"), out.map { it.role })
+        val sent = out[2]
+        assertEquals("", sent.content)
+        assertEquals(listOf("send_message", "send_message"), sent.toolCalls.map { it.name })
+        assertTrue(sent.toolCalls[0].arguments.contains("早呀"))
+        assertTrue(sent.toolCalls[1].arguments.contains("今天下雨了"))
+        assertEquals(sent.toolCalls.map { it.id }, listOf(out[3].toolCallId, out[4].toolCallId))
+        assertEquals("the ids come from the rows", "send_${history[1].id}", sent.toolCalls[0].id)
+        assertEquals("one message alone stays plain", "带伞", out[6].content)
+        assertTrue(out[6].toolCalls.isEmpty())
+        assertTrue(out[0].content.contains("send_message"))
+        // Without the tool they are one reply, as before.
+        val plain = Prompt.messages(AppSettings(), ta(), history, now)
+        assertEquals("早呀\n\n今天下雨了", plain[2].content)
+    }
+
+    @Test
     fun notesAreNeverSentAndTheWindowStartsAtAUserTurn() {
         val out = Prompt.messages(
             AppSettings(),

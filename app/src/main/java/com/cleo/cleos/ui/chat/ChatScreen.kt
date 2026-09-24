@@ -149,7 +149,8 @@ private sealed interface ChatRow {
         override val key: Any get() = "t$at"
     }
 
-    data class Message(val message: MessageEntity, val isLast: Boolean) : ChatRow {
+    /** [showFace]: the newest of a run of messages from one side, which alone gets the avatar. */
+    data class Message(val message: MessageEntity, val isLast: Boolean, val showFace: Boolean = true) : ChatRow {
         override val key: Any get() = message.id
     }
 }
@@ -161,15 +162,32 @@ private sealed interface ChatRow {
 private fun MessageEntity.silent() =
     (role == "assistant" && content.isEmpty() && error == null) || (role == "tool" && note.isNullOrBlank())
 
-/** Newest first, because the list is laid out bottom-up. */
+/** Which side a bubble is on: true for the person's, false for the TA's, null for lines that aren't bubbles. */
+private fun MessageEntity.side(): Boolean? = when {
+    role == "user" && note == null -> true
+    role == "assistant" -> false
+    else -> null
+}
+
+/**
+ * Newest first, because the list is laid out bottom-up. Several messages in a row from one
+ * side show the avatar once, beside the newest, the way chat apps stack them; a line or a
+ * time between them starts a new run.
+ */
 private fun buildRows(messages: List<MessageEntity>): List<ChatRow> {
     val rows = ArrayList<ChatRow>(messages.size + 8)
+    var newerSide: Boolean? = null
     for (i in messages.indices.reversed()) {
         val m = messages[i]
         if (m.silent()) continue
-        rows += ChatRow.Message(m, isLast = i == messages.lastIndex)
+        val side = m.side()
+        rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = side == null || side != newerSide)
+        newerSide = side
         val prev = messages.getOrNull(i - 1)
-        if (prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS) rows += ChatRow.Stamp(m.createdAt)
+        if (prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS) {
+            rows += ChatRow.Stamp(m.createdAt)
+            newerSide = null
+        }
     }
     return rows
 }
@@ -307,6 +325,7 @@ fun ChatTab(
                                 m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
                                 else -> MessageBubble(
                                     message = m,
+                                    showFace = row.showFace,
                                     canRetry = row.isLast && !state.replying,
                                     onRetry = { vm.retry(m.id) },
                                     onDelete = { vm.delete(m.id) },
@@ -364,6 +383,7 @@ private fun TimeStamp(at: Long) {
 @Composable
 private fun MessageBubble(
     message: MessageEntity,
+    showFace: Boolean,
     canRetry: Boolean,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
@@ -378,9 +398,14 @@ private fun MessageBubble(
     val pictures = remember(message.images) { MessageImages.decode(message.images) }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+        // Without its face, the bubble still keeps the face's room: a run lines up.
         if (faces != null && !mine) {
-            Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
-            Spacer(Modifier.width(AvatarGap))
+            if (showFace) {
+                Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
+                Spacer(Modifier.width(AvatarGap))
+            } else {
+                Spacer(Modifier.width(AvatarSlot))
+            }
         }
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
             // One menu for the whole message, so a message that is only pictures has one too.
@@ -476,8 +501,12 @@ private fun MessageBubble(
             }
         }
         if (faces != null && mine) {
-            Spacer(Modifier.width(AvatarGap))
-            Avatar(faces.me.file, faces.me.letter, AvatarSize)
+            if (showFace) {
+                Spacer(Modifier.width(AvatarGap))
+                Avatar(faces.me.file, faces.me.letter, AvatarSize)
+            } else {
+                Spacer(Modifier.width(AvatarSlot))
+            }
         }
     }
 }

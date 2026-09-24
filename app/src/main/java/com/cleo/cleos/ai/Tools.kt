@@ -33,7 +33,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -146,6 +146,26 @@ object ToolSpecs {
             "reason" to prop("string", "想看的理由，一句话，对方会看到"),
         ),
     )
+    /**
+     * Speaking in several messages, the way people do in a chat: one call, one bubble.
+     * Optional on purpose. Plain text is shown too, as one bubble, so a model that doesn't
+     * call it still gets heard: a chat that only shows what goes through a tool falls
+     * silent whenever the model answers in plain text.
+     */
+    val sendMessage = ToolSpec(
+        name = "send_message",
+        groups = setOf(ToolGroup.Messages),
+        action = "发消息",
+        description = "发一条消息给对方。想分成几条说的时候用：一条只说一件事，要发几条就在这一次回复里调用几次，按顺序。只说一句的话直接回复就行。",
+        parameters = schema(
+            required = listOf("text"),
+            "text" to prop("string", "这一条消息的内容"),
+        ),
+    )
+
+    /** What a sent message answers the model with. */
+    const val SENT = "已发出。"
+
     val setMyAvatar = ToolSpec(
         name = "set_my_avatar",
         groups = setOf(ToolGroup.Avatar),
@@ -170,7 +190,7 @@ object ToolSpecs {
         ),
     )
 
-    val all = listOf(addTodo, listTodos, updateTodo, readDiary, writeDiary, listSecrets, requestSecret, setMyAvatar, getWeather)
+    val all = listOf(sendMessage, addTodo, listTodos, updateTodo, readDiary, writeDiary, listSecrets, requestSecret, setMyAvatar, getWeather)
     val byName = all.associateBy { it.name }
 
     /** What to offer for the groups that are on, each worded for what it can reach. */
@@ -267,6 +287,8 @@ class ToolBox(
                 ToolSpecs.listSecrets.name -> listSecrets(today, companionId)
                 ToolSpecs.requestSecret.name -> requestSecret(args, companionId)
                 ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId, companionId)
+                // Sent messages become bubbles in ChatRepository; this is only reached by mistake.
+                ToolSpecs.sendMessage.name -> ToolOutcome(ToolSpecs.SENT, "")
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
