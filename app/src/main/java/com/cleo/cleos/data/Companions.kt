@@ -114,5 +114,12 @@ class Companions(
     companion object {
         /** The TA there was before there could be several; the migration gave them this id. */
         const val FIRST = 1L
+
+        /**
+         * How long a persona can be. Room for a persona and, next to it, what a TA brought
+         * from another app had noted about the person (see PhoneAssistantBackup); 2000 was
+         * too tight for both. It all goes out with every message, so it stays bounded.
+         */
+        const val PERSONA_LIMIT = 4000
     }
 }

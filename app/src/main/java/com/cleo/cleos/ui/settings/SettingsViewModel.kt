@@ -15,7 +15,11 @@ import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.GlassMode
+import com.cleo.cleos.data.ImportException
+import com.cleo.cleos.data.ImportPlan
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.ui.wallpaper.WallpaperAnalyzer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -24,12 +28,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-const val PERSONA_LIMIT = 2000
+const val PERSONA_LIMIT = Companions.PERSONA_LIMIT
 
 /**
  * Text fields are edited locally and written back after a short pause (and once more
@@ -37,7 +42,7 @@ const val PERSONA_LIMIT = 2000
  * exception: it is only ever written, encrypted, and never read back into a field.
  *
  * The model, the TA's name and persona belong to the TA that was current when the screen
- * opened; the rest is the person's and the app's.
+ * opened (or the one just imported); the rest is the person's and the app's.
  */
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var companionId by mutableLongStateOf(0L)
@@ -77,13 +82,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch { c.companions.all.collect { companionCount = it.size } }
         viewModelScope.launch {
             val s = c.settings.current()
-            val ta = c.companions.current()
-            companionId = ta.id
-            baseUrl = ta.apiBaseUrl
-            model = ta.apiModel
-            aiName = ta.name
+            load(c.companions.current())
             userName = s.userName
-            persona = ta.persona
             historySize = s.historySize
             weatherCity = s.weatherCity
             loaded = true
@@ -99,12 +99,32 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             .collect { persist() }
     }
 
+    /** Which TA the fields edit. Everything is set in one go, with nothing in between. */
+    private fun load(ta: CompanionEntity) {
+        companionId = ta.id
+        baseUrl = ta.apiBaseUrl
+        model = ta.apiModel
+        aiName = ta.name
+        persona = ta.persona
+        keyInput = ""
+        models = null
+        checkResult = null
+    }
+
     private suspend fun persist() {
         if (!loaded || deleted) return
-        c.companions.update(companionId) {
-            it.copy(apiBaseUrl = baseUrl.trim(), apiModel = model.trim(), name = aiName.trim(), persona = persona.take(PERSONA_LIMIT))
-        }
-        c.settings.update { it.copy(userName = userName.trim(), historySize = historySize, weatherCity = weatherCity.trim()) }
+        // Read before suspending: the fields can be loaded with another TA meanwhile (an
+        // import), and the old TA must not get the new one's values.
+        val id = companionId
+        val url = baseUrl.trim()
+        val m = model.trim()
+        val name = aiName.trim()
+        val p = persona.take(PERSONA_LIMIT)
+        val user = userName.trim()
+        val history = historySize
+        val city = weatherCity.trim()
+        c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name, persona = p) }
+        c.settings.update { it.copy(userName = user, historySize = history, weatherCity = city) }
     }
 
     /** Removes this TA with their conversations and diary; [then] leaves the screen. */
@@ -236,6 +256,63 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun undoRestore() = runBackup("撤销了，回到恢复前：") {
         c.chat.stopAll()
         c.backup.undoRestore()
+    }
+
+    /** A file from another app, read and waiting for the person's yes. */
+    var pendingImport by mutableStateOf<ImportPlan?>(null)
+        private set
+
+    fun readImport(uri: Uri) {
+        if (backupBusy) return
+        backupBusy = true
+        backupMessage = null
+        viewModelScope.launch {
+            try {
+                pendingImport = c.imports.read(uri)
+            } catch (e: ImportException) {
+                backupMessage = e.message
+            } catch (e: Exception) {
+                backupMessage = "出错了：${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                backupBusy = false
+            }
+        }
+    }
+
+    fun cancelImport() {
+        pendingImport = null
+    }
+
+    /** Brings the file in as a new TA called [name]; this screen then edits that TA. */
+    fun confirmImport(name: String) {
+        val plan = pendingImport ?: return
+        pendingImport = null
+        backupBusy = true
+        backupMessage = null
+        c.appScope.launch {
+            val message = try {
+                // What was typed here belongs to the TA the screen was editing until now.
+                persist()
+                val ta = c.imports.import(plan, name)
+                val keyed = c.secrets.hasKey(ta.apiBaseUrl).first()
+                withContext(Dispatchers.Main) { load(ta) }
+                val shown = ta.name.ifEmpty { "TA" }
+                buildString {
+                    append("导入好了：新的 TA「$shown」，${plan.conversations.size} 段对话（${plan.messageCount} 条消息）、")
+                    append("${plan.diary.size} 篇日记")
+                    if (plan.memoryWritten > 0) append("，性格里写进了它记得的 ${plan.memoryWritten} 件事")
+                    append("。这一页上面现在设置的就是$shown")
+                    if (!keyed) append("；它用的接口还没有 Key，填在最上面")
+                    append("。")
+                }
+            } catch (e: Exception) {
+                "导入没成：${e.message ?: e.javaClass.simpleName}。什么都没有写进去。"
+            }
+            withContext(Dispatchers.Main) {
+                backupMessage = message
+                backupBusy = false
+            }
+        }
     }
 
     // App scope: a restore half done because the screen was closed is the worst outcome.

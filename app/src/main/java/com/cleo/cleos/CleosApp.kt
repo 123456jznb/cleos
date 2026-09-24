@@ -11,6 +11,7 @@ import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
 import com.cleo.cleos.data.BackupService
 import com.cleo.cleos.data.Companions
+import com.cleo.cleos.data.ForeignImport
 import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
@@ -60,6 +61,7 @@ class AppContainer(context: Context) {
     )
     val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, appScope)
     val backup = BackupService(context, db, settings, images)
+    val imports = ForeignImport(context, db, companions)
 
     init {
         // The first TA is made from the old settings before anything asks who is being talked to.
