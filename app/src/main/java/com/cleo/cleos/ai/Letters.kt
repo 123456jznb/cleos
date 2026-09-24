@@ -9,6 +9,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -106,10 +107,18 @@ object LetterRules {
 object LetterPrompt {
     const val SKIP = "SKIP"
 
-    fun system(settings: AppSettings, ta: CompanionEntity, own: Boolean): String = buildList {
+    fun system(
+        settings: AppSettings,
+        ta: CompanionEntity,
+        own: Boolean,
+        memories: List<MemoryEntity> = emptyList(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String = buildList {
         if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("对方叫${settings.userName.trim()}。")
         if (ta.persona.isNotBlank()) add(ta.persona.trim())
+        // No tools in a letter, so the details come along with each topic.
+        MemoryDigest.forLetter(memories, zone)?.let(::add)
         add(
             "你正在给对方写一封信。信不是聊天：它慢、有距离，可以说些平时聊天里不会说的话。" +
                 "不要预设你们是什么关系，也别给这段关系起名字，那由你们相处的方式决定。",
@@ -312,7 +321,16 @@ class Letters(
         val own = if (ToolGroup.AiDiary in s.tools) ta.id else -1L
         val diary = db.diary().since(since, mine = ToolGroup.Diary in s.tools, own = own, limit = LetterPrompt.DIARY_LATELY)
         val messages = listOf(
-            ApiMessage("system", LetterPrompt.system(s, ta, own = replyTo == null)),
+            ApiMessage(
+                "system",
+                LetterPrompt.system(
+                    s,
+                    ta,
+                    own = replyTo == null,
+                    memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList(),
+                    zone = z,
+                ),
+            ),
             ApiMessage(
                 "user",
                 LetterPrompt.material(

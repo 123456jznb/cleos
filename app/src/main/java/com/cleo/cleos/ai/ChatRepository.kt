@@ -241,7 +241,9 @@ class ChatRepository(
         val now = ZonedDateTime.now()
         var groups = if (endpointKey in refusesTools) emptySet() else s.tools
         var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
-        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages))
+        // What the TA remembers, read once for this reply.
+        val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
+        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories))
         var rounds = 0
         // What the last refusal made this reply leave out, and when.
         var leftOut: LeftOut? = null
@@ -257,7 +259,7 @@ class ChatRepository(
                         // Pictures go first: many more models take tools than take pictures.
                         leftOut = LeftOut(images = withImages, at = System.currentTimeMillis())
                         if (withImages) withImages = false else groups = emptySet()
-                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages))
+                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories))
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {

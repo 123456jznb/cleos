@@ -58,6 +58,7 @@ fun MainScreen(
     onOpenDiaryEntry: (id: Long, secret: Boolean) -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenLetters: () -> Unit,
+    onOpenMemory: () -> Unit,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val holder = rememberSaveableStateHolder()
@@ -86,7 +87,7 @@ fun MainScreen(
                     0 -> ChatTab(bottomInset, onOpenSettings, onOpenConversations, onOpenImage)
                     1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
                     2 -> TodoTab(bottomInset, onOpenSettings)
-                    else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters)
+                    else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters, onOpenMemory)
                 }
             }
         }

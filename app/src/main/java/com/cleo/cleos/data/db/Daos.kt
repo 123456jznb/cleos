@@ -236,6 +236,42 @@ interface DiaryDao {
 }
 
 @Dao
+interface MemoryDao {
+    @Query("SELECT * FROM memories WHERE companionId = :companionId ORDER BY createdAt, id")
+    fun observeFor(companionId: Long): Flow<List<MemoryEntity>>
+
+    @Query("SELECT * FROM memories WHERE companionId = :companionId ORDER BY createdAt, id")
+    suspend fun allFor(companionId: Long): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE id = :id")
+    fun observe(id: Long): Flow<MemoryEntity?>
+
+    @Query("SELECT * FROM memories WHERE id = :id")
+    suspend fun get(id: Long): MemoryEntity?
+
+    @Insert
+    suspend fun insert(memory: MemoryEntity): Long
+
+    @Update
+    suspend fun update(memory: MemoryEntity)
+
+    @Query("DELETE FROM memories WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM memories WHERE companionId = :companionId")
+    suspend fun deleteFor(companionId: Long)
+
+    @Query("SELECT * FROM memories")
+    suspend fun all(): List<MemoryEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<MemoryEntity>)
+
+    @Query("DELETE FROM memories")
+    suspend fun clear()
+}
+
+@Dao
 interface LetterDao {
     @Query("SELECT * FROM letters WHERE companionId = :companionId ORDER BY createdAt DESC, id DESC")
     fun observeFor(companionId: Long): Flow<List<LetterEntity>>

@@ -31,6 +31,38 @@ data class CompanionEntity(
 )
 
 /**
+ * Something one TA keeps in mind, about the person or about themselves: a topic, not a
+ * single fact. Its one-line [summary] goes with every message; the [details] only when the
+ * TA opens it. Only that TA has it.
+ */
+@Serializable
+@Entity(tableName = "memories", indices = [Index("companionId")])
+data class MemoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val companionId: Long,
+    /** One of MemoryKinds: profile, interest, recent, rapport, self. */
+    val kind: String,
+    /** A short title: 怎么称呼, 读书口味. */
+    val name: String,
+    /** What the topic is about, in one line. */
+    val summary: String,
+    /** A JSON array of strings (MemoryDetails). */
+    val details: String = "[]",
+    /** Pinned by the person: the TA can't change or delete it. */
+    val pinned: Boolean = false,
+    /** Who wrote it: [SOURCE_AI], [SOURCE_ME], or [SOURCE_IMPORT]. */
+    val source: String = SOURCE_AI,
+    val createdAt: Long,
+    val updatedAt: Long,
+) {
+    companion object {
+        const val SOURCE_AI = "ai"
+        const val SOURCE_ME = "me"
+        const val SOURCE_IMPORT = "import"
+    }
+}
+
+/**
  * A letter between the person and one TA. Theirs alone: other TAs don't see it.
  *
  * The person's start as drafts and are sent once, then stay as sent. A TA's is written

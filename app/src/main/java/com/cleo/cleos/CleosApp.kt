@@ -7,6 +7,7 @@ import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Letters
+import com.cleo.cleos.ai.PersonaMemory
 import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
@@ -60,6 +61,7 @@ class AppContainer(context: Context) {
         requests = { id -> db.messages().requestsBy(id).mapNotNull { SecretRequests.decode(it.content) } },
         avatar = AiSelfAvatar(db, images, companions),
         letters = { id -> db.letters().allFor(id) },
+        memories = db.memories(),
     )
     val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, appScope)
     val backup = BackupService(context, db, settings, images)
@@ -68,6 +70,10 @@ class AppContainer(context: Context) {
 
     init {
         // The first TA is made from the old settings before anything asks who is being talked to.
-        appScope.launch { companions.ensure() }
+        appScope.launch {
+            companions.ensure()
+            // What a TA brought from another app used to sit in their persona; it moves into their memory, once.
+            PersonaMemory.migrate(db, System.currentTimeMillis())
+        }
     }
 }

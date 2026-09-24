@@ -6,6 +6,8 @@ import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import com.cleo.cleos.data.db.MemoryEntity
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -37,12 +39,23 @@ object Prompt {
      */
     const val MAX_IMAGES = 4
 
-    fun system(settings: AppSettings, ta: CompanionEntity, tools: Set<ToolGroup> = emptySet()): String = buildList {
+    /**
+     * What the TA remembers comes last: it changes whenever they remember something, and
+     * everything before it stays the same, so the cached prefix survives a new memory.
+     */
+    fun system(
+        settings: AppSettings,
+        ta: CompanionEntity,
+        tools: Set<ToolGroup> = emptySet(),
+        memories: List<MemoryEntity> = emptyList(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): String = buildList {
         if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
         if (ta.persona.isNotBlank()) add(ta.persona.trim())
         toolRule(tools)?.let(::add)
         add(FORMAT_RULE)
+        if (ToolGroup.Memory in tools) MemoryDigest.forChat(memories, zone)?.let(::add)
     }.joinToString("\n\n")
 
     /**
@@ -64,6 +77,7 @@ object Prompt {
         if (ToolGroup.Secrets in tools) {
             add("对方可以把日记设成小秘密，你看不到。想看就用 request_secret 问，对方点头才会给你看；被拒绝了就别追着要。")
         }
+        if (ToolGroup.Memory in tools) add(MemoryDigest.RULES)
         if (ToolGroup.Letters in tools) {
             add("你们之间也写信（在 App 的信箱里）。对方提到信的时候，用 read_letters 看了再说；别在聊天里整段复述信。")
         }
@@ -84,6 +98,7 @@ object Prompt {
         now: ZonedDateTime,
         tools: Set<ToolGroup> = emptySet(),
         images: Boolean = false,
+        memories: List<MemoryEntity> = emptyList(),
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
@@ -116,7 +131,7 @@ object Prompt {
         if (lastUser >= 0) {
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
         }
-        return listOf(ApiMessage("system", system(settings, ta, tools))) + merged
+        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone))) + merged
     }
 
     /**

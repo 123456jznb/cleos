@@ -300,7 +300,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 buildString {
                     append("导入好了：新的 TA「$shown」，${plan.conversations.size} 段对话（${plan.messageCount} 条消息）、")
                     append("${plan.diary.size} 篇日记")
-                    if (plan.memoryWritten > 0) append("，性格里写进了它记得的 ${plan.memoryWritten} 件事")
+                    if (plan.memories.isNotEmpty()) append("，它记得关于你的 ${plan.memories.size} 件事")
                     append("。这一页上面现在设置的就是$shown")
                     if (!keyed) append("；它用的接口还没有 Key，填在最上面")
                     append("。")

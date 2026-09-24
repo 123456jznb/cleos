@@ -8,6 +8,7 @@ import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +73,8 @@ data class BackupFile(
     val companions: List<CompanionEntity> = emptyList(),
     /** Absent in backups from before there were letters. */
     val letters: List<LetterEntity> = emptyList(),
+    /** Absent in backups from before TAs kept memories. */
+    val memories: List<MemoryEntity> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "cleos-backup"
@@ -177,6 +180,7 @@ class BackupService(
             todos = db.todos().all(),
             companions = companions,
             letters = db.letters().all(),
+            memories = db.memories().all(),
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
             data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
@@ -267,6 +271,7 @@ class BackupService(
                 db.diary().clear()
                 db.todos().clear()
                 db.letters().clear()
+                db.memories().clear()
                 db.companions().clear()
                 db.companions().insertAll(companions)
                 db.conversations().insertAll(d.conversations)
@@ -274,6 +279,7 @@ class BackupService(
                 db.diary().insertAll(diary)
                 db.todos().insertAll(d.todos)
                 db.letters().insertAll(d.letters)
+                db.memories().insertAll(d.memories)
             }
             settings.update {
                 it.copy(

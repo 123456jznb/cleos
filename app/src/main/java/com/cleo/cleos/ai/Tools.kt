@@ -7,6 +7,7 @@ import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryDao
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.data.db.MemoryDao
 import com.cleo.cleos.data.db.TodoDao
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.serialization.Serializable
@@ -34,7 +35,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -167,6 +168,68 @@ object ToolSpecs {
     /** What a sent message answers the model with. */
     const val SENT = "已发出。"
 
+    /**
+     * One tool with four actions rather than four tools: they belong together, and the
+     * model knows the four words (remember, open, update, forget) either way.
+     */
+    val memory = ToolSpec(
+        name = "memory",
+        groups = setOf(ToolGroup.Memory),
+        action = "记东西",
+        description = "长期记忆：关于对方是谁的事，以及关于你自己的事。一条记忆是一个话题：名字、一行摘要、若干条细节。" +
+            "摘要一直在你上下文里，细节要 open 才看得到。\n" +
+            "action 四选一：\n" +
+            "· open：取出一条的细节。要说到具体内容就先 open，别照着摘要猜。\n" +
+            "· remember：开一条新的。先看已有的，能归进某个已有话题就用 update 加细节，别另开一条。\n" +
+            "· update：改一条：加细节、改摘要，或整体重写细节。事情变了、当初记错了就改它，别留两条互相矛盾的；「最近」那类过期了尤其要改。\n" +
+            "· forget：整条删掉。只是变了就用 update；对方明确说别记了才删。",
+        parameters = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("action") {
+                    put("type", "string")
+                    putJsonArray("enum") { listOf("open", "remember", "update", "forget").forEach { add(it) } }
+                    put("description", "要做哪件事")
+                }
+                putJsonObject("id") {
+                    put("type", "integer")
+                    put("description", "open / update / forget 要：那条前面方括号里的编号，比如 12")
+                }
+                putJsonObject("category") {
+                    put("type", "string")
+                    putJsonArray("enum") { MemoryKinds.all.forEach { add(it.key) } }
+                    put("description", "remember 要；update 只在换分类时给。\n" + MemoryKinds.all.joinToString("\n") { "${it.key}：${it.help}" })
+                }
+                putJsonObject("name") {
+                    put("type", "string")
+                    put("description", "话题名，短，像个标题：「怎么称呼」「读书口味」。remember 要；update 不改名就别给。")
+                }
+                putJsonObject("summary") {
+                    put("type", "string")
+                    put(
+                        "description",
+                        "一行，说清这条讲什么，不是内容本身。它会一直在你上下文里，也是你以后判断要不要打开这条的唯一依据。remember 要；update 不改就别给。",
+                    )
+                }
+                putJsonObject("details") {
+                    put("type", "array")
+                    putJsonObject("items") { put("type", "string") }
+                    put("description", "remember 用：具体内容，一条一件事。写具体的，不写性格判断；尽量带上从哪儿知道的（「对方自己说的」）。")
+                }
+                putJsonObject("add_detail") {
+                    put("type", "string")
+                    put("description", "update 用：追加一条细节。最常用，不动已有的。")
+                }
+                putJsonObject("set_details") {
+                    put("type", "array")
+                    putJsonObject("items") { put("type", "string") }
+                    put("description", "update 用：整体替换所有细节。要删掉或改写某条细节时才用；先 open 读出来，把要留的一起写回去。")
+                }
+            }
+            putJsonArray("required") { add("action") }
+        },
+    )
+
     val readLetters = ToolSpec(
         name = "read_letters",
         groups = setOf(ToolGroup.Letters),
@@ -209,6 +272,7 @@ object ToolSpecs {
         listSecrets,
         requestSecret,
         readLetters,
+        memory,
         setMyAvatar,
         getWeather,
     )
@@ -275,9 +339,12 @@ class ToolBox(
     private val avatar: SelfAvatar? = null,
     /** The letters between one TA and the person, any order. */
     private val letters: suspend (companionId: Long) -> List<LetterEntity> = { emptyList() },
+    memories: MemoryDao? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
+    private val book = memories?.let { MemoryBook(it, clock) }
+
     fun specs(groups: Set<ToolGroup>): List<ToolSpec> = ToolSpecs.offered(groups)
 
     fun activity(name: String): String = ToolSpecs.byName[name]?.activity ?: "在用工具"
@@ -313,6 +380,7 @@ class ToolBox(
                 // Sent messages become bubbles in ChatRepository; this is only reached by mistake.
                 ToolSpecs.sendMessage.name -> ToolOutcome(ToolSpecs.SENT, "")
                 ToolSpecs.readLetters.name -> readLetters(args, today, companionId)
+                ToolSpecs.memory.name -> (book ?: throw ToolFailure("现在记不了。", "这里记不了")).act(args, companionId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {

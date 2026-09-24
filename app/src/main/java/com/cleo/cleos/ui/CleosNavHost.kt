@@ -16,6 +16,8 @@ import com.cleo.cleos.ui.diary.ImageViewerScreen
 import com.cleo.cleos.ui.lab.GlassLabScreen
 import com.cleo.cleos.ui.letters.LetterScreen
 import com.cleo.cleos.ui.letters.LettersScreen
+import com.cleo.cleos.ui.memory.MemoryEditScreen
+import com.cleo.cleos.ui.memory.MemoryScreen
 import com.cleo.cleos.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
@@ -45,6 +47,13 @@ object LettersRoute
 @Serializable
 data class LetterRoute(val id: Long)
 
+@Serializable
+object MemoryRoute
+
+/** id 0 means a new memory, written by the person, for the current TA. */
+@Serializable
+data class MemoryEditRoute(val id: Long)
+
 /**
  * Screens cross-fade rather than slide. Glass samples what is behind it at the position
  * it was last laid out at; a screen sliding in via a transform moves without being laid
@@ -68,10 +77,13 @@ fun CleosNavHost() {
                 onOpenDiaryEntry = { id, secret -> nav.go(DiaryRoute(id, secret)) },
                 onOpenImage = { nav.go(ImageRoute(it)) },
                 onOpenLetters = { nav.go(LettersRoute) },
+                onOpenMemory = { nav.go(MemoryRoute) },
             )
         }
         composable<LettersRoute> { LettersScreen(onBack = nav::back, onOpen = { nav.go(LetterRoute(it)) }) }
         composable<LetterRoute> { entry -> LetterScreen(entry.toRoute<LetterRoute>().id, onBack = nav::back) }
+        composable<MemoryRoute> { MemoryScreen(onBack = nav::back, onOpen = { nav.go(MemoryEditRoute(it)) }) }
+        composable<MemoryEditRoute> { entry -> MemoryEditScreen(entry.toRoute<MemoryEditRoute>().id, onBack = nav::back) }
         composable<SettingsRoute> {
             SettingsScreen(onBack = nav::back, onOpenLab = { nav.go(LabRoute) })
         }

@@ -227,7 +227,7 @@ class PhoneAssistantBackupTest {
     }
 
     @Test
-    fun whatItNotedAboutThePersonGoesIntoThePersona() {
+    fun whatItNotedAboutThePersonComesAsMemories() {
         val notes = buildJsonArray {
             add(topic("self", "我自己", "我发现我说话太长"))
             add(topic("interest", "读书", "最近在读小说", listOf("喜欢睡前读")))
@@ -239,54 +239,60 @@ class PhoneAssistantBackupTest {
                     put("id", "old")
                     put("content", "不喜欢被反问")
                     put("why", "说过一次")
+                    put("pinned", true)
                     put("createdAt", "2026-07-01T10:00:00.000")
                 },
             )
             add(topic("rapport", "未命名", "吵架后先道歉"))
+            add(topic("mood", "心情", "一种它不认识的分类"))
         }
         val older = conversation("早先", listOf(msg("user", "早", "2026-08-01T08:00:00.000")), updated = "2026-08-01T09:00:00.000", persona = "旧的性格")
         val latest = conversation("最近", listOf(msg("user", "晚", "2026-09-20T22:00:00.000")), updated = "2026-09-20T22:00:00.000", persona = "你说话很短。")
         val plan = parse(backup(mapOf("a" to older, "b" to latest), prefs = mapOf("memory_facts" to stringPref(notes.toString()))))
 
-        val p = plan.persona
+        assertEquals("the persona is only the one set there", "你说话很短。", plan.persona)
         assertTrue(plan.hadPersona)
-        assertTrue(p, p.startsWith("你说话很短。\n\n你以前记下的关于对方的事"))
-        assertFalse(p.contains("旧的性格"))
-        assertFalse("its notes about itself stay behind", p.contains("说话太长"))
-        assertTrue(p.indexOf("对方的基本情况：") < p.indexOf("对方在意的事："))
-        assertTrue(p.indexOf("对方在意的事：") < p.indexOf("对方最近的情况"))
-        assertTrue(p.contains("\n- 不喜欢被反问\n  · 说过一次"))
-        assertTrue("oldest first within a kind", p.indexOf("不喜欢被反问") < p.indexOf("称呼：喜欢被叫小名"))
-        assertTrue(p.contains("\n- 读书：最近在读小说\n  · 喜欢睡前读"))
-        assertTrue(p.contains("在准备考试（9月20日记下）"))
-        assertTrue(p.contains("\n- 吵架后先道歉"))
-        assertFalse(p.contains("未命名"))
-        assertEquals(5, plan.memoryWritten)
-        assertEquals(0, plan.memoryLeftOut)
+        val m = plan.memories
+        assertFalse("its notes about itself stay behind", m.any { it.summary.contains("说话太长") })
+        assertEquals(
+            "kind by kind, oldest first; an unknown kind reads as profile",
+            listOf("profile", "profile", "profile", "interest", "recent", "rapport"),
+            m.map { it.kind },
+        )
+        val flat = m.first()
+        assertEquals("不喜欢被反问", flat.summary)
+        assertEquals("a flat note's name comes from its words", "不喜欢被反问", flat.name)
+        assertEquals(listOf("说过一次"), flat.details)
+        assertTrue(flat.pinned)
+        assertEquals(listOf("喜欢睡前读"), m.first { it.name == "读书" }.details)
+        assertEquals("吵架后先道歉", m.first { it.kind == "rapport" }.name)
+        assertEquals(millis(2026, 9, 20, 10, 0), m.first { it.kind == "recent" }.updatedAt)
     }
 
     @Test
-    fun theNotesFitThePersonasLengthDetailsGoFirst() {
-        val notes = buildJsonArray {
-            for (i in 1..6) add(topic("interest", "话题$i", "这是第 $i 件在意的事", listOf("细节".repeat(40)), created = "2026-09-0${i}T10:00:00.000"))
+    fun onlyTheMemoriesCanBeReadToFillInATa() {
+        val notes = buildJsonArray { add(topic("interest", "读书", "最近在读小说", List(14) { "细节$it" })) }
+        val text = backup(oneLine, mapOf("memory_facts" to stringPref(notes.toString())))
+        val m = PhoneAssistantBackup.parseMemories(text, zone).single()
+        assertEquals("every detail comes; the cap is applied when stored", 14, m.details.size)
+        try {
+            PhoneAssistantBackup.parseMemories(backup(oneLine), zone)
+            fail("a backup without notes has nothing to fill in")
+        } catch (_: ImportException) {
         }
-        val prefs = mapOf("memory_facts" to stringPref(notes.toString()))
-        // Room for the six lines but not for their details.
-        val plan = parse(backup(oneLine, prefs), limit = 200)
-        assertTrue(plan.persona.length <= 200)
-        assertEquals(6, plan.memoryWritten)
-        assertFalse(plan.persona.contains("  · "))
-        // Too little room for all six lines: the ones that fit, the rest counted.
-        val tight = parse(backup(oneLine, prefs), limit = 100)
-        assertTrue(tight.persona.length <= 100)
-        assertEquals(6, tight.memoryWritten + tight.memoryLeftOut)
-        assertTrue(tight.memoryLeftOut > 0)
-        // A persona longer than the limit is cut, and nothing else fits next to it.
+        try {
+            PhoneAssistantBackup.parseMemories("{}", zone)
+            fail("not that app's backup")
+        } catch (_: ImportException) {
+        }
+    }
+
+    @Test
+    fun aPersonaLongerThanAPersonaHereIsCut() {
         val long = conversation("长", listOf(msg("user", "嗯", "2026-09-01T08:00:00.000")), persona = "性".repeat(300))
-        val cut = parse(backup(mapOf("a" to long), prefs), limit = 200)
+        val cut = parse(backup(mapOf("a" to long)), limit = 200)
         assertTrue(cut.personaCut)
         assertEquals(200, cut.persona.length)
-        assertEquals(0, cut.memoryWritten)
     }
 
     @Test

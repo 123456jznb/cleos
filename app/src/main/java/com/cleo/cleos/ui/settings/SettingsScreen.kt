@@ -220,6 +220,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     vm.setTool(ToolGroup.Secrets, it)
                 }
                 ToolSwitch(
+                    "记忆",
+                    "TA 会自己记下关于你的事和它自己的事，下次还知道。在主页「记忆」里能看、能改、能钉住。",
+                    ToolGroup.Memory in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Memory, it)
+                }
+                ToolSwitch(
                     "写信",
                     "TA 隔几天、有话可写时会主动给你写信；聊天里提到信，TA 也接得上。关掉后只回你寄去的信。",
                     ToolGroup.Letters in settings.tools,
@@ -331,9 +338,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${plan.conversations.size} 段对话（${plan.messageCount} 条消息）、${plan.diary.size} 篇它写的日记。")
-                    if (plan.memoryWritten > 0) {
-                        val more = if (plan.memoryLeftOut > 0) "（另有 ${plan.memoryLeftOut} 件放不下）" else ""
-                        Text("它记得的关于你的 ${plan.memoryWritten} 件事写进它的性格$more。")
+                    if (plan.memories.isNotEmpty()) {
+                        Text("它记得的关于你的 ${plan.memories.size} 件事（${plan.memories.sumOf { it.details.size }} 条细节）成为它在这里的记忆。")
                     }
                     Text(
                         when {

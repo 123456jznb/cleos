@@ -19,8 +19,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DiaryEntryEntity::class,
         TodoEntity::class,
         LetterEntity::class,
+        MemoryEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -34,6 +35,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 4, to = 5, spec = AppDatabase.OneTaBefore::class),
         // 5 -> 6: letters (a table), and when each TA last tried to write one (a nullable column).
         AutoMigration(from = 5, to = 6),
+        // 6 -> 7: what each TA keeps in mind (a table).
+        AutoMigration(from = 6, to = 7),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -43,6 +46,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun diary(): DiaryDao
     abstract fun todos(): TodoDao
     abstract fun letters(): LetterDao
+    abstract fun memories(): MemoryDao
 
     /**
      * Before version 5 there was one TA, so every entry a TA wrote was TA 1's. (Conversations

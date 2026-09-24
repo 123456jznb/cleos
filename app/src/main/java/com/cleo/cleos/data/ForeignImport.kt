@@ -7,6 +7,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
+import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -38,18 +39,29 @@ data class ImportedConversation(
 
 data class ImportedDiary(val day: Long, val text: String, val at: Long)
 
+/** A topic the model had noted about the person there, with all its details. */
+data class ImportedMemory(
+    val kind: String,
+    val name: String,
+    val summary: String,
+    val details: List<String>,
+    val pinned: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
 /** What a file from another app would bring in, shown to the person before anything is written. */
 data class ImportPlan(
     val conversations: List<ImportedConversation>,
     val diary: List<ImportedDiary>,
-    /** The new TA's persona: the one set in that app's conversations, then what the model noted about the person. */
+    /** The new TA's persona: the one set in that app's conversations, if there was one. */
     val persona: String,
     /** Whether that app's conversations had a persona of their own. Its default one lives in its code, not in the backup. */
     val hadPersona: Boolean,
     /** That persona was longer than a persona here can be, and was cut. */
     val personaCut: Boolean,
-    val memoryWritten: Int,
-    val memoryLeftOut: Int,
+    /** What the model had noted about the person: the new TA's memory. */
+    val memories: List<ImportedMemory>,
     /** The service and model that app was using, when they could be told; else the current TA's are used. */
     val baseUrl: String?,
     val model: String?,
@@ -71,30 +83,34 @@ data class ImportPlan(
  * ("[表情：困了]"). Deleted conversations and the per-book discussions stay behind.
  *
  * Its diary is written by the model, so it becomes the new TA's diary. Of what the model
- * noted (memory topics), the four kinds about the person go into the persona, so the TA
- * still knows them here; its notes about itself stay behind.
+ * noted (memory topics), the four kinds about the person become the new TA's memory, with
+ * every detail, so they still know the person here; its notes about itself stay behind.
  */
 object PhoneAssistantBackup {
     const val APP = "phone_ai_assistant"
     private const val FORMAT_VERSION = 1
 
-    /** The kinds of note that are about the person, in that app's order, and how they are headed here. */
-    private val ABOUT_THE_PERSON = listOf(
-        "profile" to "对方的基本情况",
-        "interest" to "对方在意的事",
-        "recent" to "对方最近的情况（记下的时候是这样，可能已经过去了）",
-        "rapport" to "对方希望你怎么相处",
-    )
+    /** The kinds of note about the person. That app reads a kind it doesn't know as "profile", and so does this. */
+    private val ABOUT_THE_PERSON = setOf("profile", "interest", "recent", "rapport")
 
-    private const val MEMORY_HEADER = "你以前记下的关于对方的事（从原来那个 App 带过来）："
-
-    fun parse(text: String, zone: ZoneId, personaLimit: Int): ImportPlan {
+    private fun checked(text: String): JsonObject {
         val root = runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonObject
             ?: throw ImportException("读不出来：这不是一个 JSON 备份文件")
         if (root.str("app") != APP) throw ImportException("认不出这个文件：现在只认 $APP 导出的备份（日记备份-….json）")
         val version = root.int("formatVersion")
         if (version == null || version > FORMAT_VERSION) throw ImportException("这份备份的格式（版本 $version）比这里认得的新")
-        val prefs = root["prefs"] as? JsonObject ?: JsonObject(emptyMap())
+        return root
+    }
+
+    private fun prefsOf(root: JsonObject) = root["prefs"] as? JsonObject ?: JsonObject(emptyMap())
+
+    /** Only what the model noted: for filling in the memory of a TA brought over before there was any. */
+    fun parseMemories(text: String, zone: ZoneId): List<ImportedMemory> =
+        memories(prefsOf(checked(text)), zone).ifEmpty { throw ImportException("这份备份里没有关于你的记忆") }
+
+    fun parse(text: String, zone: ZoneId, personaLimit: Int): ImportPlan {
+        val root = checked(text)
+        val prefs = prefsOf(root)
 
         var pictures = 0
         val personas = mutableListOf<Pair<Long, String>>()
@@ -122,28 +138,23 @@ object PhoneAssistantBackup {
             ImportedDiary(day.toEpochDay(), body, at)
         }.sortedBy { it.at }
 
-        val topics = prefList(prefs, "memory_facts").mapNotNull { topic(it, zone) }
-            .sortedWith(compareBy<Topic> { it.kind }.thenBy { it.created })
+        val memories = memories(prefs, zone)
 
         // A persona set in a conversation replaced that app's default one there. The latest
         // one set is the one the TA was last talking with.
         val set = personas.maxByOrNull { it.first }?.second
-        val base = set?.take(personaLimit).orEmpty()
-        val room = personaLimit - base.length - (if (base.isEmpty()) 0 else 2)
-        val memory = renderMemory(topics, room)
 
         val (baseUrl, model) = service(prefs)
-        if (conversations.isEmpty() && diary.isEmpty() && memory.written == 0) {
+        if (conversations.isEmpty() && diary.isEmpty() && memories.isEmpty()) {
             throw ImportException("这份备份里没有能带过来的对话、日记或记忆")
         }
         return ImportPlan(
             conversations = conversations,
             diary = diary,
-            persona = listOf(base, memory.text).filter { it.isNotEmpty() }.joinToString("\n\n"),
+            persona = set?.take(personaLimit).orEmpty(),
             hadPersona = set != null,
             personaCut = set != null && set.length > personaLimit,
-            memoryWritten = memory.written,
-            memoryLeftOut = memory.leftOut,
+            memories = memories,
             baseUrl = baseUrl,
             model = model,
             picturesLeftBehind = pictures,
@@ -171,80 +182,39 @@ object PhoneAssistantBackup {
         }
     }
 
-    internal class Topic(val kind: Int, val line: String, val details: List<String>, val created: Long)
+    /** In that app's order: kind by kind, oldest first. */
+    private fun memories(prefs: JsonObject, zone: ZoneId): List<ImportedMemory> =
+        prefList(prefs, "memory_facts").mapNotNull { memory(it, zone) }
+            .sortedWith(compareBy<ImportedMemory> { KIND_ORDER.indexOf(it.kind) }.thenBy { it.createdAt })
 
-    private fun topic(e: JsonElement, zone: ZoneId): Topic? {
+    private val KIND_ORDER = listOf("profile", "interest", "recent", "rapport")
+
+    private fun memory(e: JsonElement, zone: ZoneId): ImportedMemory? {
         val t = e as? JsonObject ?: return null
         // "self" is what the model noted about itself. Any other kind it doesn't know (and the
         // first, flat version, which had none) that app reads as "profile", and so does this.
         val category = t.str("category")
         if (category == "self") return null
-        val kind = ABOUT_THE_PERSON.indexOfFirst { it.first == category }.coerceAtLeast(0)
+        val kind = category?.takeIf { it in ABOUT_THE_PERSON } ?: "profile"
         val name = t.str("name")?.trim().orEmpty().takeUnless { it == "未命名" }.orEmpty()
         val summary = (t.str("summary") ?: t.str("content"))?.trim().orEmpty()
-        var line = listOf(name, summary).filter { it.isNotEmpty() }.joinToString("：")
-        if (line.isEmpty()) return null
+        if (name.isEmpty() && summary.isEmpty()) return null
         val created = time(t.str("createdAt"), zone) ?: 0L
         val updated = time(t.str("updatedAt"), zone) ?: created
-        // How recent "recent" is: without a date it reads as true today.
-        if (ABOUT_THE_PERSON[kind].first == "recent" && updated > 0) {
-            val d = java.time.Instant.ofEpochMilli(updated).atZone(zone).toLocalDate()
-            line += "（${d.monthValue}月${d.dayOfMonth}日记下）"
-        }
         val details = (t["details"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
             ?: listOfNotNull(t.str("why")?.trim())
-        return Topic(kind, line, details.filter { it.isNotEmpty() }, created)
+        return ImportedMemory(
+            kind = kind,
+            name = name.ifEmpty { summary.take(NAME_FROM_SUMMARY) },
+            summary = summary.ifEmpty { name },
+            details = details.filter { it.isNotEmpty() },
+            pinned = t.bool("pinned") == true,
+            createdAt = created,
+            updatedAt = updated,
+        )
     }
 
-    internal class Memory(val text: String, val written: Int, val leftOut: Int)
-
-    /**
-     * The notes as persona text, no longer than [budget]. Every note's one line first, so the
-     * TA knows what there is; then the details, as far as they fit.
-     */
-    internal fun renderMemory(topics: List<Topic>, budget: Int): Memory {
-        if (topics.isEmpty()) return Memory("", 0, 0)
-        var used = MEMORY_HEADER.length
-        if (used > budget) return Memory("", 0, topics.size)
-        val kept = mutableListOf<Topic>()
-        val opened = mutableSetOf<Int>()
-        var leftOut = 0
-        for (t in topics) {
-            val heading = if (t.kind in opened) 0 else ABOUT_THE_PERSON[t.kind].second.length + 2 // "\n" + heading + "："
-            val cost = heading + 3 + t.line.length // "\n- " + line
-            if (used + cost <= budget) {
-                kept += t
-                opened += t.kind
-                used += cost
-            } else {
-                leftOut++
-            }
-        }
-        if (kept.isEmpty()) return Memory("", 0, leftOut)
-        val details = kept.map { mutableListOf<String>() }
-        kept.forEachIndexed { i, t ->
-            for (d in t.details) {
-                val cost = 5 + d.length // "\n  · " + detail
-                if (used + cost <= budget) {
-                    details[i] += d
-                    used += cost
-                }
-            }
-        }
-        val text = buildString {
-            append(MEMORY_HEADER)
-            var kind = -1
-            kept.forEachIndexed { i, t ->
-                if (t.kind != kind) {
-                    append('\n').append(ABOUT_THE_PERSON[t.kind].second).append('：')
-                    kind = t.kind
-                }
-                append("\n- ").append(t.line)
-                for (d in details[i]) append("\n  · ").append(d)
-            }
-        }
-        return Memory(text, kept.size, leftOut)
-    }
+    private const val NAME_FROM_SUMMARY = 12
 
     /**
      * The service that app was set to, if it speaks the same (OpenAI-compatible) way as this
@@ -349,6 +319,7 @@ class ForeignImport(
                     c.messages.map { MessageEntity(conversationId = conversation, role = it.role, content = it.content, createdAt = it.at) },
                 )
             }
+            db.memories().insertAll(plan.memories.map { it.entity(id, now = ta.createdAt) })
             db.diary().insertAll(
                 plan.diary.map {
                     DiaryEntryEntity(
@@ -368,6 +339,50 @@ class ForeignImport(
         ta.copy(id = id)
     }
 
+    /**
+     * Fills in a TA's memory from a backup of that app: what they don't have yet is added,
+     * and a topic they have (by name) gets the details it is missing. For a TA brought over
+     * before memories were kept, whose persona could only hold some of the details.
+     */
+    suspend fun fillMemories(uri: Uri, companionId: Long): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val bytes = resolver.openInputStream(uri)?.use { readAtMost(it, MAX_BYTES) } ?: throw ImportException("打不开这个文件")
+        val imported = PhoneAssistantBackup.parseMemories(bytes.decodeToString(), ZoneId.systemDefault())
+        var added = 0
+        var details = 0
+        val now = System.currentTimeMillis()
+        db.withTransaction {
+            val have = db.memories().allFor(companionId)
+            for (m in imported) {
+                val same = have.firstOrNull { it.name.trim() == m.name.trim() }
+                if (same == null) {
+                    db.memories().insert(m.entity(companionId, now))
+                    added++
+                    continue
+                }
+                val old = MemoryDetails.decode(same.details)
+                val merged = (old + m.details.filter { it !in old }).take(MEMORY_DETAILS)
+                if (merged.size > old.size) {
+                    // Filling in isn't news: the topic keeps the date it was last noted.
+                    db.memories().update(same.copy(details = MemoryDetails.encode(merged), updatedAt = maxOf(same.updatedAt, m.updatedAt)))
+                    details += merged.size - old.size
+                }
+            }
+        }
+        added to details
+    }
+
+    private fun ImportedMemory.entity(companionId: Long, now: Long) = MemoryEntity(
+        companionId = companionId,
+        kind = kind,
+        name = name,
+        summary = summary,
+        details = MemoryDetails.encode(details.take(MEMORY_DETAILS)),
+        pinned = pinned,
+        source = MemoryEntity.SOURCE_IMPORT,
+        createdAt = createdAt.takeIf { it > 0 } ?: now,
+        updatedAt = updatedAt.takeIf { it > 0 } ?: now,
+    )
+
     private fun readAtMost(input: InputStream, max: Int): ByteArray {
         val out = ByteArrayOutputStream()
         val buffer = ByteArray(64 * 1024)
@@ -386,5 +401,8 @@ class ForeignImport(
         // Text only, even years of chat stay far below this. Old exports with pictures inside
         // ran to hundreds of MB, more than a phone can hold as one JSON tree.
         private const val MAX_BYTES = 32 * 1024 * 1024
+
+        /** The same as a TA's own topics (MemoryKinds.DETAILS), and as that app's. */
+        private const val MEMORY_DETAILS = 12
     }
 }

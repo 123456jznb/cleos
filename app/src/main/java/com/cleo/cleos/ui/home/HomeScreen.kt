@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MailOutline
 import androidx.compose.material.icons.rounded.MarkEmailUnread
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -98,7 +99,7 @@ private enum class Who { Me, Ai }
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Unit) {
+fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Unit, onOpenMemory: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
     val scope = rememberCoroutineScope()
@@ -114,6 +115,8 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
     val letters by remember(taId) { taId?.let { c.db.letters().observeFor(it) } ?: flowOf(emptyList()) }
         .collectAsStateWithLifecycle(emptyList())
     val now by rememberNow()
+    val remembered by remember(taId) { taId?.let { c.db.memories().observeFor(it) } ?: flowOf(emptyList()) }
+        .collectAsStateWithLifecycle(emptyList())
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     var pickingFor by remember { mutableStateOf<Who?>(null) }
@@ -231,6 +234,7 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
             }
 
             LetterCard(ai, letters, now, onOpenLetters)
+            MemoryCard(ai, remembered.size, onOpenMemory)
 
             GlassSurface(
                 modifier = Modifier.fillMaxWidth(),
@@ -327,6 +331,29 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
                     }
                 },
             ) { DatePicker(state) }
+        }
+    }
+}
+
+/** What this TA keeps in mind, in one line; the page behind it lists and edits it. */
+@Composable
+private fun MemoryCard(ai: String, count: Int, onOpen: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    GlassSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "打开记忆", onClick = onOpen),
+        shape = GlassShape.Rounded(24.dp),
+        contentPadding = PaddingValues(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Psychology, contentDescription = null, tint = palette.contentSecondary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("记忆", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(if (count == 0) "${ai}还没记下什么" else "${ai}记着 $count 件事", color = palette.contentSecondary, fontSize = 12.sp)
+            }
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.contentSecondary)
         }
     }
 }
