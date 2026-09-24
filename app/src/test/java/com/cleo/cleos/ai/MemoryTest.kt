@@ -38,8 +38,8 @@ class MemoryTest {
         val id = dao.rows.single().id
         val opened = act("""{"action":"open","id":$id}""")
         assertTrue(opened.result, opened.result.startsWith("【#$id 称呼】喜欢被叫小名\n1. 别叫全名"))
-        assertEquals("改了记忆「称呼」", act("""{"action":"update","id":"#$id","add_detail":"朋友叫她小雨"}""").note)
-        assertEquals(listOf("别叫全名", "朋友叫她小雨"), MemoryDetails.decode(dao.rows.single().details))
+        assertEquals("改了记忆「称呼」", act("""{"action":"update","id":"#$id","add_detail":"朋友叫小雨"}""").note)
+        assertEquals(listOf("别叫全名", "朋友叫小雨"), MemoryDetails.decode(dao.rows.single().details))
         act("""{"action":"update","id":$id,"set_details":["只留这一条"],"summary":"喜欢被叫小名，不喜欢全名"}""")
         assertEquals(listOf("只留这一条"), MemoryDetails.decode(dao.rows.single().details))
         assertEquals("喜欢被叫小名，不喜欢全名", dao.rows.single().summary)
