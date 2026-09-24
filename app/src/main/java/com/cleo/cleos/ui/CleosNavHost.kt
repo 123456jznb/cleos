@@ -14,6 +14,8 @@ import com.cleo.cleos.ui.chat.ConversationsScreen
 import com.cleo.cleos.ui.diary.DiaryEditorScreen
 import com.cleo.cleos.ui.diary.ImageViewerScreen
 import com.cleo.cleos.ui.lab.GlassLabScreen
+import com.cleo.cleos.ui.letters.LetterScreen
+import com.cleo.cleos.ui.letters.LettersScreen
 import com.cleo.cleos.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
@@ -35,6 +37,13 @@ data class DiaryRoute(val id: Long, val secret: Boolean = false)
 
 @Serializable
 data class ImageRoute(val file: String)
+
+@Serializable
+object LettersRoute
+
+/** id 0 means a new letter to the current TA. */
+@Serializable
+data class LetterRoute(val id: Long)
 
 /**
  * Screens cross-fade rather than slide. Glass samples what is behind it at the position
@@ -58,8 +67,11 @@ fun CleosNavHost() {
                 onOpenConversations = { nav.go(ConversationsRoute) },
                 onOpenDiaryEntry = { id, secret -> nav.go(DiaryRoute(id, secret)) },
                 onOpenImage = { nav.go(ImageRoute(it)) },
+                onOpenLetters = { nav.go(LettersRoute) },
             )
         }
+        composable<LettersRoute> { LettersScreen(onBack = nav::back, onOpen = { nav.go(LetterRoute(it)) }) }
+        composable<LetterRoute> { entry -> LetterScreen(entry.toRoute<LetterRoute>().id, onBack = nav::back) }
         composable<SettingsRoute> {
             SettingsScreen(onBack = nav::back, onOpenLab = { nav.go(LabRoute) })
         }

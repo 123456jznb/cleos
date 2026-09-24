@@ -7,6 +7,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
+import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +70,8 @@ data class BackupFile(
     val todos: List<TodoEntity>,
     /** Absent in backups from before there could be several TAs. */
     val companions: List<CompanionEntity> = emptyList(),
+    /** Absent in backups from before there were letters. */
+    val letters: List<LetterEntity> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "cleos-backup"
@@ -76,8 +79,16 @@ data class BackupFile(
     }
 }
 
-data class BackupSummary(val tas: Int, val conversations: Int, val messages: Int, val diary: Int, val todos: Int, val images: Int) {
-    override fun toString() = "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$todos 条待办、$images 张图"
+data class BackupSummary(
+    val tas: Int,
+    val conversations: Int,
+    val messages: Int,
+    val diary: Int,
+    val letters: Int,
+    val todos: Int,
+    val images: Int,
+) {
+    override fun toString() = "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$letters 封信、$todos 条待办、$images 张图"
 }
 
 class BackupException(message: String) : Exception(message)
@@ -165,6 +176,7 @@ class BackupService(
             diary = db.diary().all(),
             todos = db.todos().all(),
             companions = companions,
+            letters = db.letters().all(),
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
             data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
@@ -185,7 +197,7 @@ class BackupService(
                 written++
             }
         }
-        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.todos.size, written)
+        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.letters.size, data.todos.size, written)
     }
 
     private suspend fun restoreFrom(input: InputStream, takeSnapshot: Boolean): BackupSummary {
@@ -254,12 +266,14 @@ class BackupService(
                 db.conversations().clear()
                 db.diary().clear()
                 db.todos().clear()
+                db.letters().clear()
                 db.companions().clear()
                 db.companions().insertAll(companions)
                 db.conversations().insertAll(d.conversations)
                 db.messages().insertAll(d.messages)
                 db.diary().insertAll(diary)
                 db.todos().insertAll(d.todos)
+                db.letters().insertAll(d.letters)
             }
             settings.update {
                 it.copy(
@@ -281,7 +295,7 @@ class BackupService(
             }
             settings.setCurrentCompanion(companions.first().id)
             settings.setCurrentConversation(null)
-            return BackupSummary(companions.size, d.conversations.size, d.messages.size, d.diary.size, d.todos.size, pictures.size)
+            return BackupSummary(companions.size, d.conversations.size, d.messages.size, d.diary.size, d.letters.size, d.todos.size, pictures.size)
         } finally {
             staging.deleteRecursively()
         }

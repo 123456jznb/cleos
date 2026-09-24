@@ -109,6 +109,21 @@ interface MessageDao {
     )
     fun observeSaidCount(companionId: Long): Flow<Int>
 
+    /** What was said with one TA lately, across their conversations, newest first: a letter's material. */
+    @Query(
+        "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role IN ('user', 'assistant') AND m.note IS NULL " +
+            "AND m.error IS NULL AND m.content != '' ORDER BY m.createdAt DESC, m.id DESC LIMIT :limit",
+    )
+    suspend fun saidLately(companionId: Long, limit: Int): List<MessageEntity>
+
+    /** How much the person has said to one TA since [since]. */
+    @Query(
+        "SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role = 'user' AND m.note IS NULL AND m.createdAt > :since",
+    )
+    suspend fun saidSince(companionId: Long, since: Long): Int
+
     /** One TA's requests to see a secret, from any of their conversations, oldest first. */
     @Query(
         "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversationId " +
@@ -187,6 +202,14 @@ interface DiaryDao {
     )
     suspend fun search(pattern: String, mine: Boolean, own: Long, limit: Int): List<DiaryEntryEntity>
 
+    /** Written after [since], newest first, with the same reach as the three above. */
+    @Query(
+        "SELECT * FROM diary_entries WHERE secret = 0 AND createdAt > :since " +
+            "AND ((:mine AND author = 'me') OR (author = 'ai' AND companionId = :own)) " +
+            "ORDER BY createdAt DESC LIMIT :limit",
+    )
+    suspend fun since(since: Long, mine: Boolean, own: Long, limit: Int): List<DiaryEntryEntity>
+
     @Query("SELECT * FROM diary_entries WHERE secret = 1 ORDER BY day DESC, createdAt DESC")
     suspend fun secrets(): List<DiaryEntryEntity>
 
@@ -209,6 +232,49 @@ interface DiaryDao {
     suspend fun insertAll(items: List<DiaryEntryEntity>)
 
     @Query("DELETE FROM diary_entries")
+    suspend fun clear()
+}
+
+@Dao
+interface LetterDao {
+    @Query("SELECT * FROM letters WHERE companionId = :companionId ORDER BY createdAt DESC, id DESC")
+    fun observeFor(companionId: Long): Flow<List<LetterEntity>>
+
+    @Query("SELECT * FROM letters WHERE companionId = :companionId ORDER BY createdAt DESC, id DESC")
+    suspend fun allFor(companionId: Long): List<LetterEntity>
+
+    @Query("SELECT * FROM letters WHERE id = :id")
+    fun observe(id: Long): Flow<LetterEntity?>
+
+    @Query("SELECT * FROM letters WHERE id = :id")
+    suspend fun get(id: Long): LetterEntity?
+
+    /** The person's sent letters that no letter answers yet: replies still to write. */
+    @Query(
+        "SELECT * FROM letters l WHERE author = 'me' AND deliverAt IS NOT NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM letters r WHERE r.replyTo = l.id) ORDER BY deliverAt",
+    )
+    suspend fun unanswered(): List<LetterEntity>
+
+    @Insert
+    suspend fun insert(letter: LetterEntity): Long
+
+    @Update
+    suspend fun update(letter: LetterEntity)
+
+    @Query("DELETE FROM letters WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM letters WHERE companionId = :companionId")
+    suspend fun deleteFor(companionId: Long)
+
+    @Query("SELECT * FROM letters")
+    suspend fun all(): List<LetterEntity>
+
+    @Insert
+    suspend fun insertAll(items: List<LetterEntity>)
+
+    @Query("DELETE FROM letters")
     suspend fun clear()
 }
 

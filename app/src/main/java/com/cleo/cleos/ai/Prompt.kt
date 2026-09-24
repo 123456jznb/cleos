@@ -64,6 +64,9 @@ object Prompt {
         if (ToolGroup.Secrets in tools) {
             add("对方可以把日记设成小秘密，你看不到。想看就用 request_secret 问，对方点头才会给你看；被拒绝了就别追着要。")
         }
+        if (ToolGroup.Letters in tools) {
+            add("你们之间也写信（在 App 的信箱里）。对方提到信的时候，用 read_letters 看了再说；别在聊天里整段复述信。")
+        }
         if (ToolGroup.Avatar in tools) add("你可以用 set_my_avatar 换自己的头像：用对方发来的一张图，或者一个表情。")
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
     }.takeIf { it.isNotEmpty() }?.joinToString("")

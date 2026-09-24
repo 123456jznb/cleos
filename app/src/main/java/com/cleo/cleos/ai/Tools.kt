@@ -6,6 +6,7 @@ import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryDao
 import com.cleo.cleos.data.db.DiaryEntryEntity
+import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.TodoDao
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.serialization.Serializable
@@ -33,7 +34,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -166,6 +167,14 @@ object ToolSpecs {
     /** What a sent message answers the model with. */
     const val SENT = "已发出。"
 
+    val readLetters = ToolSpec(
+        name = "read_letters",
+        groups = setOf(ToolGroup.Letters),
+        action = "翻信",
+        description = "看你和对方之间写过的信，最新的在前。对方提到信的时候用。",
+        parameters = schema("limit" to prop("integer", "最多几封，默认 3，最多 10")),
+    )
+
     val setMyAvatar = ToolSpec(
         name = "set_my_avatar",
         groups = setOf(ToolGroup.Avatar),
@@ -190,7 +199,19 @@ object ToolSpecs {
         ),
     )
 
-    val all = listOf(sendMessage, addTodo, listTodos, updateTodo, readDiary, writeDiary, listSecrets, requestSecret, setMyAvatar, getWeather)
+    val all = listOf(
+        sendMessage,
+        addTodo,
+        listTodos,
+        updateTodo,
+        readDiary,
+        writeDiary,
+        listSecrets,
+        requestSecret,
+        readLetters,
+        setMyAvatar,
+        getWeather,
+    )
     val byName = all.associateBy { it.name }
 
     /** What to offer for the groups that are on, each worded for what it can reach. */
@@ -252,6 +273,8 @@ class ToolBox(
     /** One TA's requests to see a secret so far, oldest first, from any of their conversations. */
     private val requests: suspend (companionId: Long) -> List<SecretRequest> = { emptyList() },
     private val avatar: SelfAvatar? = null,
+    /** The letters between one TA and the person, any order. */
+    private val letters: suspend (companionId: Long) -> List<LetterEntity> = { emptyList() },
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -289,6 +312,7 @@ class ToolBox(
                 ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId, companionId)
                 // Sent messages become bubbles in ChatRepository; this is only reached by mistake.
                 ToolSpecs.sendMessage.name -> ToolOutcome(ToolSpecs.SENT, "")
+                ToolSpecs.readLetters.name -> readLetters(args, today, companionId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
@@ -485,6 +509,28 @@ class ToolBox(
         }
     }
 
+    /**
+     * What has arrived: the person's sent letters and the TA's delivered ones. Drafts are
+     * not letters yet, and a letter still on its way is not in the person's hands.
+     */
+    private suspend fun readLetters(a: JsonObject, today: LocalDate, companionId: Long): ToolOutcome {
+        val now = clock()
+        val limit = (ToolArgs.int(a["limit"]) ?: 3).coerceIn(1, 10)
+        val shown = letters(companionId)
+            .filter { !it.draft && (it.author == LetterEntity.AUTHOR_ME || (it.deliverAt ?: Long.MAX_VALUE) <= now) }
+            .sortedByDescending { it.deliverAt ?: it.createdAt }
+            .take(limit)
+        if (shown.isEmpty()) return ToolOutcome("你们还没有写过信。", "翻了翻信：还没有")
+        val text = shown.joinToString("\n\n") { l ->
+            val mine = l.author == LetterEntity.AUTHOR_AI
+            val day = Instant.ofEpochMilli(l.deliverAt ?: l.createdAt).atZone(zone()).toLocalDate()
+            val unread = if (mine && l.readAt == null) "（对方还没拆开）" else ""
+            val body = l.content.trim().let { if (it.length > LETTER_MAX) it.take(LETTER_MAX) + "……（后面还有 ${it.length - LETTER_MAX} 字）" else it }
+            "【${Describe.date(day, today)} · ${if (mine) "你写的" else "对方写的"}】$unread\n$body"
+        }
+        return ToolOutcome(text, "翻了翻你们的信（${shown.size} 封）")
+    }
+
     private suspend fun getWeather(a: JsonObject, settings: AppSettings): ToolOutcome {
         val city = ToolArgs.text(a, "city")?.trim().orEmpty().ifEmpty { settings.weatherCity.trim() }
         if (city.isEmpty()) {
@@ -506,6 +552,7 @@ class ToolBox(
         const val DIARY_MAX = 5000
         const val REASON_MAX = 120
         const val EMOJI_MAX = 8
+        const val LETTER_MAX = 2000
     }
 }
 

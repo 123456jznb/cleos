@@ -28,7 +28,10 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.MailOutline
+import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -64,6 +67,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.AppContainer
 import com.cleo.cleos.data.db.CompanionEntity
+import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.ui.letters.Mailbox
+import com.cleo.cleos.ui.letters.rememberNow
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassSurface
@@ -92,7 +98,7 @@ private enum class Who { Me, Ai }
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
+fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
     val scope = rememberCoroutineScope()
@@ -105,6 +111,9 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
     val said by remember(taId) { taId?.let { c.db.messages().observeSaidCount(it) } ?: flowOf(0) }.collectAsStateWithLifecycle(0)
     val written by remember(taId) { taId?.let { c.db.diary().observeWrittenBy(it) } ?: flowOf(0) }.collectAsStateWithLifecycle(0)
     val done by remember { c.db.todos().observeDoneCount() }.collectAsStateWithLifecycle(0)
+    val letters by remember(taId) { taId?.let { c.db.letters().observeFor(it) } ?: flowOf(emptyList()) }
+        .collectAsStateWithLifecycle(emptyList())
+    val now by rememberNow()
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     var pickingFor by remember { mutableStateOf<Who?>(null) }
@@ -221,6 +230,8 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                 }
             }
 
+            LetterCard(ai, letters, now, onOpenLetters)
+
             GlassSurface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = GlassShape.Rounded(24.dp),
@@ -316,6 +327,41 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                     }
                 },
             ) { DatePicker(state) }
+        }
+    }
+}
+
+/** The mailbox with this TA: what is new in it, in one line. */
+@Composable
+private fun LetterCard(ai: String, letters: List<LetterEntity>, now: Long, onOpen: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    val unread = Mailbox.unread(letters, now)
+    val shown = Mailbox.shown(letters, now)
+    val line = when {
+        unread > 0 -> if (unread == 1) "${ai}给你写了一封信" else "${ai}给你写了 $unread 封信"
+        Mailbox.replyOnTheWay(letters, now) -> "你的信寄出了，回信在路上"
+        shown.isEmpty() -> "还没有信。写一封给$ai？"
+        else -> "${shown.size} 封信"
+    }
+    GlassSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "打开信箱", onClick = onOpen),
+        shape = GlassShape.Rounded(24.dp),
+        contentPadding = PaddingValues(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (unread > 0) Icons.Rounded.MarkEmailUnread else Icons.Rounded.MailOutline,
+                contentDescription = null,
+                tint = if (unread > 0) palette.accentContent else palette.contentSecondary,
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("信", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(line, color = if (unread > 0) palette.accentContent else palette.contentSecondary, fontSize = 12.sp)
+            }
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.contentSecondary)
         }
     }
 }

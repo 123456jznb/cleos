@@ -11,10 +11,11 @@ import com.cleo.cleos.ui.CleosNavHost
 import com.cleo.cleos.ui.theme.CleosTheme
 
 class MainActivity : ComponentActivity() {
+    private val container get() = (application as CleosApp).container
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val container = (application as CleosApp).container
         setContent {
             // null until the settings file has been read once (a few milliseconds);
             // drawing before that would flash the default wallpaper and colours.
@@ -23,5 +24,12 @@ class MainActivity : ComponentActivity() {
                 CleosTheme(s, container.images) { CleosNavHost() }
             }
         }
+    }
+
+    // Letters due get written when the app comes to the front: a background job would be
+    // killed on many phones, so nothing waits for one.
+    override fun onResume() {
+        super.onResume()
+        container.letters.tick()
     }
 }

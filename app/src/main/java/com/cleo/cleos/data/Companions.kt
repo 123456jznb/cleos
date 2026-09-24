@@ -93,7 +93,8 @@ class Companions(
 
     /**
      * Removes a TA with everything that was only theirs: conversations (and the pictures
-     * sent in them), the diary entries they wrote, their avatar. The last TA stays.
+     * sent in them), the diary entries they wrote, the letters between them, their avatar.
+     * The last TA stays.
      */
     suspend fun delete(id: Long) {
         val list = ensure()
@@ -104,6 +105,7 @@ class Companions(
         db.withTransaction {
             conversations.forEach { db.conversations().delete(it) }
             db.diary().deleteWrittenBy(id)
+            db.letters().deleteFor(id)
             db.companions().delete(id)
         }
         images.delete(pictures + listOfNotNull(gone.avatar))

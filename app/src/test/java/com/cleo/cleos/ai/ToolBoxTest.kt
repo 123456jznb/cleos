@@ -6,6 +6,7 @@ import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.db.DiaryDao
 import com.cleo.cleos.data.db.DiaryEntryEntity
+import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.TodoDao
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.coroutines.flow.Flow
@@ -35,11 +36,13 @@ class ToolBoxTest {
     }
     /** Requests to see a secret, with the TA who asked. */
     private val asked = mutableListOf<Pair<Long, SecretRequest>>()
+    private val letters = mutableListOf<LetterEntity>()
     private val box = ToolBox(
         todos,
         diary,
         weather,
         requests = { ta -> asked.filter { it.first == ta }.map { it.second } },
+        letters = { ta -> letters.filter { it.companionId == ta } },
         clock = { nowMillis },
         zone = { zone },
     )
@@ -229,6 +232,28 @@ class ToolBoxTest {
     }
 
     @Test
+    fun lettersAreReadAsTheyArrivedNotBefore() {
+        val hour = 3_600_000L
+        fun letter(id: Long, author: String, text: String, at: Long, deliverAt: Long?, readAt: Long? = null, ta: Long = Companions.FIRST) =
+            LetterEntity(id = id, companionId = ta, author = author, content = text, createdAt = at, deliverAt = deliverAt, readAt = readAt)
+        assertEquals("翻了翻信：还没有", run("read_letters", "{}").note)
+        letters += letter(1, LetterEntity.AUTHOR_ME, "最近睡得不好", nowMillis - 48 * hour, nowMillis - 48 * hour)
+        letters += letter(2, LetterEntity.AUTHOR_AI, "那就早点关灯", nowMillis - 46 * hour, nowMillis - 44 * hour, readAt = nowMillis - 30 * hour)
+        letters += letter(3, LetterEntity.AUTHOR_ME, "还没写完的草稿", nowMillis - hour, null)
+        letters += letter(4, LetterEntity.AUTHOR_AI, "还在路上的回信", nowMillis - hour, nowMillis + 3 * hour)
+        letters += letter(5, LetterEntity.AUTHOR_AI, "刚到、还没拆的", nowMillis - 2 * hour, nowMillis - hour)
+        letters += letter(6, LetterEntity.AUTHOR_AI, "别的 TA 的信", nowMillis - hour, nowMillis - hour, ta = 2)
+        val out = run("read_letters", "{}")
+        assertEquals("翻了翻你们的信（3 封）", out.note)
+        val r = out.result
+        assertFalse(r.contains("草稿") || r.contains("还在路上") || r.contains("别的 TA"))
+        assertTrue("newest first", r.indexOf("刚到") < r.indexOf("早点关灯") && r.indexOf("早点关灯") < r.indexOf("睡得不好"))
+        assertTrue(r.contains("你写的】（对方还没拆开）\n刚到、还没拆的"))
+        assertTrue(r.contains("对方写的】\n最近睡得不好"))
+        assertEquals("翻了翻信：还没有", run("read_letters", "{}", companionId = 3).note)
+    }
+
+    @Test
     fun weatherFallsBackToTheCityInSettingsAndAsksWhenThereIsNone() {
         assertEquals("查了杭州的天气", run("get_weather", "{}", all.copy(weatherCity = "杭州")).note)
         assertEquals(listOf("杭州"), weatherCalls)
@@ -312,6 +337,8 @@ private class FakeDiary : DiaryDao {
         return newest.filter { readable(it, mine, own) && (it.title.contains(q, ignoreCase = true) || it.blocks.contains(q, ignoreCase = true)) }
             .take(limit)
     }
+    override suspend fun since(since: Long, mine: Boolean, own: Long, limit: Int) =
+        newest.filter { it.createdAt > since && readable(it, mine, own) }.take(limit)
     override suspend fun secrets() = newest.filter { it.secret }
     override suspend fun secretsOnDay(day: Long) = rows.count { it.secret && it.day == day }
     override suspend fun insert(entry: DiaryEntryEntity): Long {

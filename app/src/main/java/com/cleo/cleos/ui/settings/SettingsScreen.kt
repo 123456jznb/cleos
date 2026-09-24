@@ -219,6 +219,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 ToolSwitch("小秘密", "TA 知道你有小秘密，但看不到；想看会在聊天里问你，你点头才给看。", ToolGroup.Secrets in settings.tools) {
                     vm.setTool(ToolGroup.Secrets, it)
                 }
+                ToolSwitch(
+                    "写信",
+                    "TA 隔几天、有话可写时会主动给你写信；聊天里提到信，TA 也接得上。关掉后只回你寄去的信。",
+                    ToolGroup.Letters in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Letters, it)
+                }
                 ToolSwitch("换自己的头像", "TA 可以把你发来的图、或者一个表情，换成自己的头像。", ToolGroup.Avatar in settings.tools) {
                     vm.setTool(ToolGroup.Avatar, it)
                 }

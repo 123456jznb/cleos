@@ -26,7 +26,40 @@ data class CompanionEntity(
     /** LocalDate.toEpochDay() the home page counts from; null counts from the first message. */
     val knownSince: Long? = null,
     val createdAt: Long,
+    /** When this TA last tried to write a letter of their own, written or not: the wait between tries counts from it. */
+    val lastLetterTry: Long? = null,
 )
+
+/**
+ * A letter between the person and one TA. Theirs alone: other TAs don't see it.
+ *
+ * The person's start as drafts and are sent once, then stay as sent. A TA's is written
+ * ahead of time and appears at [deliverAt], a while later, the way letters arrive.
+ */
+@Serializable
+@Entity(tableName = "letters", indices = [Index("companionId")])
+data class LetterEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val companionId: Long,
+    /** [AUTHOR_ME] or [AUTHOR_AI]. */
+    val author: String,
+    val content: String,
+    /** Written (a TA's) or last edited (a draft); for a sent letter, when it was sent. */
+    val createdAt: Long,
+    /** A TA's letter shows from then on. The person's: when it was sent, null while a draft. */
+    val deliverAt: Long? = null,
+    /** When the person opened a TA's letter; null while it is unread. */
+    val readAt: Long? = null,
+    /** For a TA's reply: the person's letter it answers. */
+    val replyTo: Long? = null,
+) {
+    val draft: Boolean get() = author == AUTHOR_ME && deliverAt == null
+
+    companion object {
+        const val AUTHOR_ME = "me"
+        const val AUTHOR_AI = "ai"
+    }
+}
 
 @Serializable
 @Entity(tableName = "conversations", indices = [Index("companionId")])

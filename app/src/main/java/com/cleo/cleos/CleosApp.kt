@@ -6,6 +6,7 @@ import androidx.room.Room
 import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
@@ -58,10 +59,12 @@ class AppContainer(context: Context) {
         OpenMeteo(http),
         requests = { id -> db.messages().requestsBy(id).mapNotNull { SecretRequests.decode(it.content) } },
         avatar = AiSelfAvatar(db, images, companions),
+        letters = { id -> db.letters().allFor(id) },
     )
     val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, appScope)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
+    val letters = Letters(db, settings, secrets, chatClient, appScope)
 
     init {
         // The first TA is made from the old settings before anything asks who is being talked to.
