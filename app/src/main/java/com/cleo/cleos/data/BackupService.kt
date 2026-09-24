@@ -7,6 +7,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
+import com.cleo.cleos.ai.ReplyWhen
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
@@ -55,10 +56,8 @@ data class BackupSettings(
     val aiAvatarEmoji: String? = null,
     val chatAvatars: Boolean = true,
     val knownSince: Long? = null,
-    /** Absent from backups made before letters could be paced: the defaults then. */
-    val letterReplyMin: Int = 60,
-    val letterReplyMax: Int = 360,
-    val letterQuietNight: Boolean = true,
+    /** Absent from backups made before these could be set: the defaults then. */
+    val letterReply: String? = null,
     val letterEveryDays: Int = 5,
 )
 
@@ -177,9 +176,7 @@ class BackupService(
                 aiAvatar = lead?.avatar,
                 aiAvatarEmoji = lead?.avatarEmoji,
                 chatAvatars = s.chatAvatars,
-                letterReplyMin = s.letterReplyMin,
-                letterReplyMax = s.letterReplyMax,
-                letterQuietNight = s.letterQuietNight,
+                letterReply = s.letterReply.key,
                 letterEveryDays = s.letterEveryDays,
                 knownSince = lead?.knownSince,
             ),
@@ -306,9 +303,7 @@ class BackupService(
                     weatherCity = bs.weatherCity,
                     userAvatar = picture(bs.userAvatar),
                     chatAvatars = bs.chatAvatars,
-                    letterReplyMin = bs.letterReplyMin,
-                    letterReplyMax = bs.letterReplyMax,
-                    letterQuietNight = bs.letterQuietNight,
+                    letterReply = ReplyWhen.of(bs.letterReply),
                     letterEveryDays = bs.letterEveryDays,
                 )
             }

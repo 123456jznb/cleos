@@ -84,6 +84,8 @@ data class LetterEntity(
     val readAt: Long? = null,
     /** For a TA's reply: the person's letter it answers. */
     val replyTo: Long? = null,
+    /** For the person's sent letter: when its reply arrives, as they picked on sending. */
+    val replyDueAt: Long? = null,
 ) {
     val draft: Boolean get() = author == AUTHOR_ME && deliverAt == null
 

@@ -144,14 +144,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    fun setLetterReply(minMinutes: Int, maxMinutes: Int) {
-        viewModelScope.launch { c.settings.update { it.copy(letterReplyMin = minMinutes, letterReplyMax = maxMinutes) } }
-    }
-
-    fun setLetterQuietNight(on: Boolean) {
-        viewModelScope.launch { c.settings.update { it.copy(letterQuietNight = on) } }
-    }
-
     fun setLetterEveryDays(days: Int) {
         viewModelScope.launch { c.settings.update { it.copy(letterEveryDays = days) } }
     }

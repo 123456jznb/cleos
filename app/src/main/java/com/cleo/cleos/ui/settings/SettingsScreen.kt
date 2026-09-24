@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
@@ -37,7 +36,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -61,7 +59,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.cleo.cleos.ai.LetterTiming
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
 import com.cleo.cleos.data.AppSettings
@@ -239,7 +236,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 ) {
                     vm.setTool(ToolGroup.Letters, it)
                 }
-                LetterPace(settings, vm)
+                if (ToolGroup.Letters in settings.tools) LetterPace(settings, vm)
                 ToolSwitch("换自己的头像", "TA 可以把你发来的图、或者一个表情，换成自己的头像。", ToolGroup.Avatar in settings.tools) {
                     vm.setTool(ToolGroup.Avatar, it)
                 }
@@ -464,19 +461,14 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 /**
- * How letters are paced, in a panel under the letters switch. The reply's wait is a range;
- * each reply lands somewhere in it at random. The gap between a TA's own letters shows only
- * while they write them. A slider is saved when it is let go, not at every step of a drag.
+ * How often a TA writes of their own accord, in a panel under the letters switch while it
+ * is on. When a reply comes is picked on each letter as it is sent, not here. The slider is
+ * saved when it is let go, not at every step of a drag.
  */
 @Composable
 private fun LetterPace(settings: AppSettings, vm: SettingsViewModel) {
     val palette = LocalGlassPalette.current
-    val steps = LetterTiming.REPLY_STEPS
-    var reply by remember(settings.letterReplyMin, settings.letterReplyMax) {
-        mutableStateOf(LetterTiming.stepOf(settings.letterReplyMin).toFloat()..LetterTiming.stepOf(settings.letterReplyMax).toFloat())
-    }
     var every by remember(settings.letterEveryDays) { mutableFloatStateOf(settings.letterEveryDays.toFloat()) }
-    fun minutes(at: Float) = steps[at.roundToInt().coerceIn(0, steps.lastIndex)]
     Column(
         Modifier
             .fillMaxWidth()
@@ -485,52 +477,24 @@ private fun LetterPace(settings: AppSettings, vm: SettingsViewModel) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            LetterTiming.describeReply(minutes(reply.start), minutes(reply.endInclusive)),
+            "TA 自己写信，两封至少隔 ${every.roundToInt()} 天",
             color = palette.content,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
         )
-        RangeSlider(
-            value = reply,
-            onValueChange = { reply = it },
-            onValueChangeFinished = { vm.setLetterReply(minutes(reply.start), minutes(reply.endInclusive)) },
-            valueRange = 0f..steps.lastIndex.toFloat(),
-            steps = steps.size - 2,
+        Slider(
+            value = every,
+            onValueChange = { every = it },
+            onValueChangeFinished = { vm.setLetterEveryDays(every.roundToInt()) },
+            valueRange = 1f..14f,
+            steps = 12,
         )
         Text(
-            "两头都能拖。每封回信在这段时间里随便哪一刻到；改了只管以后寄的信，已经在路上的照原来的时间到。",
+            "隔够了也不一定写：这段时间聊过一阵，或者有新日记，TA 才会动笔。你寄的信，回信什么时候到在寄的时候选。",
             color = palette.contentSecondary,
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
-        Spacer(Modifier.height(10.dp))
-        ToolSwitch(
-            "夜里不来信",
-            "夜里 11 点到早上 8 点之间要到的信，推到第二天早上 8～9 点。",
-            settings.letterQuietNight,
-        ) { vm.setLetterQuietNight(it) }
-        if (ToolGroup.Letters in settings.tools) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "TA 自己写信，两封至少隔 ${every.roundToInt()} 天",
-                color = palette.content,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            Slider(
-                value = every,
-                onValueChange = { every = it },
-                onValueChangeFinished = { vm.setLetterEveryDays(every.roundToInt()) },
-                valueRange = 1f..14f,
-                steps = 12,
-            )
-            Text(
-                "隔够了也不一定写：这段时间聊过一阵，或者有新日记，TA 才会动笔。",
-                color = palette.contentSecondary,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-            )
-        }
     }
 }
 

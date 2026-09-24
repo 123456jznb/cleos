@@ -22,62 +22,52 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import kotlin.math.abs
 import kotlin.random.Random
 
+/** When the person wants the reply to a letter, picked as they send it. */
+enum class ReplyWhen(val key: String, val label: String) {
+    Soon("soon", "写好就到"),
+    Hour("hour", "一小时内"),
+    Hours("hours", "几个小时"),
+    Morning("morning", "明早"),
+    ;
+
+    companion object {
+        /** A stored choice; nothing, or one this version doesn't know, is the hours. */
+        fun of(key: String?): ReplyWhen = entries.firstOrNull { it.key == key } ?: Hours
+    }
+}
+
 /**
- * When a TA's letter arrives. Letters are slow unless the person sets them otherwise: an
- * answer a moment after the person sends theirs is a chat, not a letter. The wait is random
- * within the range they set, so it is not read as a timer ("half an hour after I send,
- * every time"), and it is seeded by the letter, so a reply written late (the phone was
- * offline) still arrives when it was due.
+ * When a TA's letter arrives. For a reply the person picks ([ReplyWhen]); within the choice
+ * the wait is random, so it is not read as a timer ("half an hour after I send, every
+ * time"), and seeded by the letter, so it comes out the same however often it is worked out.
  */
 object LetterTiming {
     private val NIGHT_START: LocalTime = LocalTime.of(23, 0)
     private val MORNING: LocalTime = LocalTime.of(8, 0)
 
-    /** The choices for how long a reply takes, in minutes: from as soon as it is written to a day. */
-    val REPLY_STEPS = listOf(0, 5, 15, 30, 60, 120, 180, 360, 720, 1440)
-
-    /**
-     * A reply: [minMinutes] to [maxMinutes] after the person's letter was sent (1 to 6 hours
-     * unless they changed it). With [quietNight], not in the night.
-     */
-    fun replyAt(
-        sentAt: Long,
-        seed: Long,
-        zone: ZoneId,
-        minMinutes: Int = 60,
-        maxMinutes: Int = 360,
-        quietNight: Boolean = true,
-    ): Long {
+    /** When the reply to a letter sent at [sentAt] arrives. Hours unless another was picked. */
+    fun replyAt(sentAt: Long, seed: Long, zone: ZoneId, choice: ReplyWhen = ReplyWhen.Hours): Long {
         val r = Random(seed)
-        val lo = minMinutes.coerceAtLeast(0)
-        val hi = maxMinutes.coerceAtLeast(lo)
-        val at = sentAt + r.nextLong(Duration.ofMinutes(lo.toLong()).toMillis(), Duration.ofMinutes(hi.toLong()).toMillis() + 1)
-        return if (quietNight) awake(at, r, zone) else at
+        return when (choice) {
+            // Picked by someone who is up and waiting for it: the night doesn't hold these back.
+            ReplyWhen.Soon -> sentAt
+            ReplyWhen.Hour -> sentAt + r.nextLong(Duration.ofMinutes(10).toMillis(), Duration.ofHours(1).toMillis() + 1)
+            ReplyWhen.Hours -> awake(sentAt + r.nextLong(Duration.ofHours(1).toMillis(), Duration.ofHours(6).toMillis() + 1), r, zone)
+            ReplyWhen.Morning -> morningAfter(sentAt, zone) + r.nextLong(0, Duration.ofHours(1).toMillis())
+        }
     }
 
-    /** The step nearest a number of minutes, for a slider over [REPLY_STEPS]. */
-    fun stepOf(minutes: Int): Int = REPLY_STEPS.indices.minBy { abs(REPLY_STEPS[it] - minutes) }
-
-    /** The wait as the person reads it: "回信过 1～6 小时到". */
-    fun describeReply(minMinutes: Int, maxMinutes: Int): String {
-        fun say(m: Int) = when {
-            m == 1440 -> "一天"
-            m > 1440 && m % 1440 == 0 -> "${m / 1440} 天"
-            m < 60 -> "$m 分钟"
-            else -> "${m / 60} 小时"
-        }
-        // A space between Chinese and a number, none before "一天".
-        fun after(s: String) = if (s.first().isDigit()) " $s" else s
-        val sameUnit = maxMinutes < 1440 && (minMinutes < 60) == (maxMinutes < 60)
-        return when {
-            maxMinutes <= 0 -> "回信一写好就到"
-            minMinutes <= 0 -> "回信${after(say(maxMinutes))}以内到"
-            minMinutes >= maxMinutes -> "回信过${after(say(minMinutes))}到"
-            sameUnit -> "回信过 ${say(minMinutes).substringBefore(' ')}～${say(maxMinutes)}到"
-            else -> "回信过${after(say(minMinutes))}～${say(maxMinutes)}到"
+    /** The choice as the person reads it before sending. */
+    fun describe(choice: ReplyWhen, now: Long, zone: ZoneId): String = when (choice) {
+        ReplyWhen.Soon -> "回信一写好就到，夜里也是。"
+        ReplyWhen.Hour -> "回信 1 小时以内到，夜里也是。"
+        ReplyWhen.Hours -> "回信过 1～6 小时到，夜里的等到早上。"
+        ReplyWhen.Morning -> {
+            val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+            val day = Instant.ofEpochMilli(morningAfter(now, zone)).atZone(zone).toLocalDate()
+            if (day == today) "回信早上 8～9 点到。" else "回信明天早上 8～9 点到。"
         }
     }
 
@@ -85,29 +75,31 @@ object LetterTiming {
      * A letter the TA wrote of their own accord: 25 to 100 minutes after it was written,
      * after the person has put the phone down, not as the answer to something they did.
      */
-    fun ownAt(writtenAt: Long, seed: Long, zone: ZoneId, quietNight: Boolean = true): Long {
+    fun ownAt(writtenAt: Long, seed: Long, zone: ZoneId): Long {
         val r = Random(seed)
-        val at = writtenAt + r.nextLong(Duration.ofMinutes(25).toMillis(), Duration.ofMinutes(100).toMillis() + 1)
-        return if (quietNight) awake(at, r, zone) else at
+        return awake(writtenAt + r.nextLong(Duration.ofMinutes(25).toMillis(), Duration.ofMinutes(100).toMillis() + 1), r, zone)
     }
 
     /** Nothing arrives in the night: what would, comes the next morning, some time after 8. */
     internal fun awake(at: Long, r: Random, zone: ZoneId): Long {
+        val t = Instant.ofEpochMilli(at).atZone(zone).toLocalTime()
+        if (t >= MORNING && t < NIGHT_START) return at
+        return morningAfter(at, zone) + r.nextLong(0, Duration.ofHours(1).toMillis())
+    }
+
+    /** The first 8 o'clock after [at]: this morning's while it is still before 8, else tomorrow's. */
+    private fun morningAfter(at: Long, zone: ZoneId): Long {
         val t = Instant.ofEpochMilli(at).atZone(zone)
-        val morning = when {
-            t.toLocalTime() >= NIGHT_START -> t.toLocalDate().plusDays(1)
-            t.toLocalTime() < MORNING -> t.toLocalDate()
-            else -> return at
-        }
-        return ZonedDateTime.of(morning, MORNING, zone).toInstant().toEpochMilli() + r.nextLong(0, Duration.ofHours(1).toMillis())
+        val day = if (t.toLocalTime() < MORNING) t.toLocalDate() else t.toLocalDate().plusDays(1)
+        return ZonedDateTime.of(day, MORNING, zone).toInstant().toEpochMilli()
     }
 }
 
 /**
  * When a TA writes a letter of their own. At least the gap the person set ([COOLDOWN] unless
- * changed) after their last try, whether it became a letter or not, so a TA with nothing to say doesn't try every time the app
- * opens. And only with something to write about since their last letter: talk, or a diary
- * entry. The model still decides; it can answer SKIP.
+ * changed) after their last try, whether it became a letter or not, so a TA with nothing to
+ * say doesn't try every time the app opens. And only with something to write about since
+ * their last letter: talk, or a diary entry. The model still decides; it can answer SKIP.
  *
  * Material counts from the last letter actually written, not the last try: counting from
  * the try would throw away what piled up every time the model skipped, and someone who
@@ -280,13 +272,15 @@ class Letters(
     }
 
     /**
-     * Sends a draft; the reply is written right after, to arrive hours later. Waits for a
-     * tick already running rather than skipping: that one has already listed what to answer.
+     * Sends a draft, with when its reply should come. The reply is written right after, to
+     * arrive then. Waits for a tick already running rather than skipping: that one has
+     * already listed what to answer.
      */
-    suspend fun send(id: Long) {
+    suspend fun send(id: Long, choice: ReplyWhen = ReplyWhen.Hours) {
         val draft = db.letters().get(id)?.takeIf { it.draft && it.content.isNotBlank() } ?: return
         val now = clock()
-        db.letters().update(draft.copy(content = draft.content.trim(), createdAt = now, deliverAt = now))
+        val reply = LetterTiming.replyAt(now, seed = id, zone = zone(), choice = choice)
+        db.letters().update(draft.copy(content = draft.content.trim(), createdAt = now, deliverAt = now, replyDueAt = reply))
         scope.launch { writing.withLock { due() } }
     }
 
@@ -328,16 +322,8 @@ class Letters(
         for (sent in db.letters().unanswered()) {
             val ta = db.companions().get(sent.companionId) ?: continue
             val text = write(ta, sent) ?: continue
-            // The pace as it is now: a reply already written keeps the time it was given.
-            val s = settings.current()
-            val at = LetterTiming.replyAt(
-                sent.deliverAt ?: sent.createdAt,
-                seed = sent.id,
-                zone = zone(),
-                minMinutes = s.letterReplyMin,
-                maxMinutes = s.letterReplyMax,
-                quietNight = s.letterQuietNight,
-            )
+            // Picked when it was sent. One sent before there was a choice gets the hours.
+            val at = sent.replyDueAt ?: LetterTiming.replyAt(sent.deliverAt ?: sent.createdAt, seed = sent.id, zone = zone())
             db.letters().insert(
                 LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = clock(), deliverAt = at, replyTo = sent.id),
             )
@@ -359,7 +345,7 @@ class Letters(
             db.companions().get(ta.id)?.let { db.companions().update(it.copy(lastLetterTry = now)) }
             if (LetterPrompt.isSkip(text)) continue
             db.letters().insert(
-                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone(), quietNight = s.letterQuietNight)),
+                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone())),
             )
         }
     }

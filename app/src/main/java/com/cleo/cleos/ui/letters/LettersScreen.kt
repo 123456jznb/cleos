@@ -40,7 +40,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.cleo.cleos.ai.LetterTiming
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.db.LetterEntity
@@ -102,7 +101,7 @@ fun LettersScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
             if (shown.isEmpty()) {
                 item(key = "empty") {
                     val own = if (ToolGroup.Letters in settings.tools) "$name 有时也会自己写来。" else ""
-                    Notice("还没有信。右上角写一封给$name，${LetterTiming.describeReply(settings.letterReplyMin, settings.letterReplyMax)}。$own")
+                    Notice("还没有信。右上角写一封给$name，寄的时候可以选回信什么时候到。$own")
                 }
             }
             items(shown, key = { it.id }) { letter ->

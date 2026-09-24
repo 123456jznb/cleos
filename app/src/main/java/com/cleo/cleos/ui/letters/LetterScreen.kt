@@ -1,7 +1,11 @@
 package com.cleo.cleos.ui.letters
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,7 +34,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -42,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
 import com.cleo.cleos.ai.LetterTiming
+import com.cleo.cleos.ai.ReplyWhen
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.glass.GlassIconButton
@@ -58,6 +66,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import java.time.ZoneId
 
 /**
  * One letter. The person's draft is written here and saved as it is typed; once sent, it
@@ -106,13 +115,14 @@ class LetterViewModel(private val c: AppContainer, startId: Long) : ViewModel() 
         id = c.letters.saveDraft(companionId, id, text)
     }
 
-    /** Sends it; the reply is written now and arrives hours later. */
-    fun send(then: () -> Unit) {
+    /** Sends it; the reply is written now and arrives when [choice] says. The choice is kept for next time. */
+    fun send(choice: ReplyWhen, then: () -> Unit) {
         viewModelScope.launch {
             save()
             if (id != 0L && text.isNotBlank()) {
                 done = true
-                c.letters.send(id)
+                c.letters.send(id, choice)
+                c.settings.update { it.copy(letterReply = choice) }
             }
             then()
         }
@@ -224,14 +234,29 @@ fun LetterScreen(id: Long, onBack: () -> Unit) {
     }
 
     if (confirmSend) {
+        // What was picked last time, each time the dialog opens.
+        var choice by remember { mutableStateOf(settings.letterReply) }
         AlertDialog(
             onDismissRequest = { confirmSend = false },
             title = { Text("寄给$name？") },
-            text = { Text("寄出后就改不了了。${LetterTiming.describeReply(settings.letterReplyMin, settings.letterReplyMax)}。") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("寄出后就改不了了。回信什么时候到？")
+                    // Two by two, all the same width: four in a row don't fit, and three and one look dropped.
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (pair in ReplyWhen.entries.chunked(2)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                for (w in pair) Pill(w.label, selected = choice == w, modifier = Modifier.weight(1f)) { choice = w }
+                            }
+                        }
+                    }
+                    Text(LetterTiming.describe(choice, System.currentTimeMillis(), ZoneId.systemDefault()), fontSize = 13.sp, lineHeight = 19.sp)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmSend = false
-                    vm.send(onBack)
+                    vm.send(choice, onBack)
                 }) { Text("寄出") }
             },
             dismissButton = { TextButton(onClick = { confirmSend = false }) { Text("再看看") } },
@@ -250,5 +275,20 @@ fun LetterScreen(id: Long, onBack: () -> Unit) {
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
         )
+    }
+}
+
+/** A plain pill, not glass: it sits in a dialog (see the settings screen's chips). */
+@Composable
+private fun Pill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    Box(
+        modifier
+            .background(if (selected) palette.accent else palette.content.copy(alpha = 0.07f), CircleShape)
+            .clickable(interactionSource = null, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = if (selected) Color.White else palette.content, fontSize = 14.sp)
     }
 }
