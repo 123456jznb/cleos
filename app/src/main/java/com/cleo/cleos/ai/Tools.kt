@@ -255,7 +255,8 @@ class ToolBox(
         }
         val args = ToolArgs.parse(call.arguments)
             ?: return ToolOutcome("参数不是合法的 JSON 对象，按参数说明重新调用。", "${spec.action}没成：参数写错了")
-        val today = LocalDate.now(zone())
+        // From the same clock as every "now" in here, not the wall clock beside it.
+        val today = Instant.ofEpochMilli(clock()).atZone(zone()).toLocalDate()
         return try {
             when (spec.name) {
                 ToolSpecs.addTodo.name -> addTodo(args, today)
