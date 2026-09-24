@@ -22,31 +22,73 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import kotlin.math.abs
 import kotlin.random.Random
 
 /**
- * When a TA's letter arrives. Letters are slow on purpose: an answer a moment after the
- * person sends theirs is a chat, not a letter. The wait is random so it is not read as a
- * timer ("half an hour after I send, every time"), and it is seeded by the letter, so a
- * reply written late (the phone was offline) still arrives when it was due.
+ * When a TA's letter arrives. Letters are slow unless the person sets them otherwise: an
+ * answer a moment after the person sends theirs is a chat, not a letter. The wait is random
+ * within the range they set, so it is not read as a timer ("half an hour after I send,
+ * every time"), and it is seeded by the letter, so a reply written late (the phone was
+ * offline) still arrives when it was due.
  */
 object LetterTiming {
     private val NIGHT_START: LocalTime = LocalTime.of(23, 0)
     private val MORNING: LocalTime = LocalTime.of(8, 0)
 
-    /** A reply: 1 to 6 hours after the person's letter was sent. */
-    fun replyAt(sentAt: Long, seed: Long, zone: ZoneId): Long {
+    /** The choices for how long a reply takes, in minutes: from as soon as it is written to a day. */
+    val REPLY_STEPS = listOf(0, 5, 15, 30, 60, 120, 180, 360, 720, 1440)
+
+    /**
+     * A reply: [minMinutes] to [maxMinutes] after the person's letter was sent (1 to 6 hours
+     * unless they changed it). With [quietNight], not in the night.
+     */
+    fun replyAt(
+        sentAt: Long,
+        seed: Long,
+        zone: ZoneId,
+        minMinutes: Int = 60,
+        maxMinutes: Int = 360,
+        quietNight: Boolean = true,
+    ): Long {
         val r = Random(seed)
-        return awake(sentAt + r.nextLong(Duration.ofHours(1).toMillis(), Duration.ofHours(6).toMillis() + 1), r, zone)
+        val lo = minMinutes.coerceAtLeast(0)
+        val hi = maxMinutes.coerceAtLeast(lo)
+        val at = sentAt + r.nextLong(Duration.ofMinutes(lo.toLong()).toMillis(), Duration.ofMinutes(hi.toLong()).toMillis() + 1)
+        return if (quietNight) awake(at, r, zone) else at
+    }
+
+    /** The step nearest a number of minutes, for a slider over [REPLY_STEPS]. */
+    fun stepOf(minutes: Int): Int = REPLY_STEPS.indices.minBy { abs(REPLY_STEPS[it] - minutes) }
+
+    /** The wait as the person reads it: "回信过 1～6 小时到". */
+    fun describeReply(minMinutes: Int, maxMinutes: Int): String {
+        fun say(m: Int) = when {
+            m == 1440 -> "一天"
+            m > 1440 && m % 1440 == 0 -> "${m / 1440} 天"
+            m < 60 -> "$m 分钟"
+            else -> "${m / 60} 小时"
+        }
+        // A space between Chinese and a number, none before "一天".
+        fun after(s: String) = if (s.first().isDigit()) " $s" else s
+        val sameUnit = maxMinutes < 1440 && (minMinutes < 60) == (maxMinutes < 60)
+        return when {
+            maxMinutes <= 0 -> "回信一写好就到"
+            minMinutes <= 0 -> "回信${after(say(maxMinutes))}以内到"
+            minMinutes >= maxMinutes -> "回信过${after(say(minMinutes))}到"
+            sameUnit -> "回信过 ${say(minMinutes).substringBefore(' ')}～${say(maxMinutes)}到"
+            else -> "回信过${after(say(minMinutes))}～${say(maxMinutes)}到"
+        }
     }
 
     /**
      * A letter the TA wrote of their own accord: 25 to 100 minutes after it was written,
      * after the person has put the phone down, not as the answer to something they did.
      */
-    fun ownAt(writtenAt: Long, seed: Long, zone: ZoneId): Long {
+    fun ownAt(writtenAt: Long, seed: Long, zone: ZoneId, quietNight: Boolean = true): Long {
         val r = Random(seed)
-        return awake(writtenAt + r.nextLong(Duration.ofMinutes(25).toMillis(), Duration.ofMinutes(100).toMillis() + 1), r, zone)
+        val at = writtenAt + r.nextLong(Duration.ofMinutes(25).toMillis(), Duration.ofMinutes(100).toMillis() + 1)
+        return if (quietNight) awake(at, r, zone) else at
     }
 
     /** Nothing arrives in the night: what would, comes the next morning, some time after 8. */
@@ -62,8 +104,8 @@ object LetterTiming {
 }
 
 /**
- * When a TA writes a letter of their own. At least [COOLDOWN] after their last try, whether
- * it became a letter or not, so a TA with nothing to say doesn't try every time the app
+ * When a TA writes a letter of their own. At least the gap the person set ([COOLDOWN] unless
+ * changed) after their last try, whether it became a letter or not, so a TA with nothing to say doesn't try every time the app
  * opens. And only with something to write about since their last letter: talk, or a diary
  * entry. The model still decides; it can answer SKIP.
  *
@@ -83,12 +125,13 @@ object LetterRules {
         letters: List<LetterEntity>,
         saidSince: Int,
         diarySince: Int,
+        cooldown: Duration = COOLDOWN,
     ): Boolean {
         val own = letters.filter { it.author == LetterEntity.AUTHOR_AI }
         // One waiting to be read (or still on its way) is enough; a second would pile up.
         if (own.any { it.readAt == null }) return false
         val last = maxOf(ta.lastLetterTry ?: 0L, own.maxOfOrNull { it.createdAt } ?: 0L, ta.createdAt)
-        if (now - last < COOLDOWN.toMillis()) return false
+        if (now - last < cooldown.toMillis()) return false
         return saidSince >= ENOUGH_SAID || diarySince > 0
     }
 
@@ -285,7 +328,16 @@ class Letters(
         for (sent in db.letters().unanswered()) {
             val ta = db.companions().get(sent.companionId) ?: continue
             val text = write(ta, sent) ?: continue
-            val at = LetterTiming.replyAt(sent.deliverAt ?: sent.createdAt, seed = sent.id, zone = zone())
+            // The pace as it is now: a reply already written keeps the time it was given.
+            val s = settings.current()
+            val at = LetterTiming.replyAt(
+                sent.deliverAt ?: sent.createdAt,
+                seed = sent.id,
+                zone = zone(),
+                minMinutes = s.letterReplyMin,
+                maxMinutes = s.letterReplyMax,
+                quietNight = s.letterQuietNight,
+            )
             db.letters().insert(
                 LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = clock(), deliverAt = at, replyTo = sent.id),
             )
@@ -295,18 +347,19 @@ class Letters(
     private suspend fun writeOwn() {
         val s = settings.current()
         if (ToolGroup.Letters !in s.tools) return
+        val cooldown = Duration.ofDays(s.letterEveryDays.coerceIn(1, 30).toLong())
         for (ta in db.companions().all()) {
             val letters = db.letters().allFor(ta.id)
             val since = LetterRules.materialSince(ta, letters)
             val own = if (ToolGroup.AiDiary in s.tools) ta.id else -1L
             val diary = db.diary().since(since, mine = ToolGroup.Diary in s.tools, own = own, limit = LetterPrompt.DIARY_LATELY)
             val now = clock()
-            if (!LetterRules.ready(now, ta, letters, db.messages().saidSince(ta.id, since), diary.size)) continue
+            if (!LetterRules.ready(now, ta, letters, db.messages().saidSince(ta.id, since), diary.size, cooldown)) continue
             val text = write(ta, null) ?: continue
             db.companions().get(ta.id)?.let { db.companions().update(it.copy(lastLetterTry = now)) }
             if (LetterPrompt.isSkip(text)) continue
             db.letters().insert(
-                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone())),
+                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone(), quietNight = s.letterQuietNight)),
             )
         }
     }

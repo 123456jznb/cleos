@@ -58,6 +58,13 @@ data class AppSettings(
     val userAvatar: String? = null,
     /** Avatars beside the bubbles in the chat. */
     val chatAvatars: Boolean = true,
+    /** A reply to the person's letter arrives between these many minutes after it was sent. */
+    val letterReplyMin: Int = 60,
+    val letterReplyMax: Int = 360,
+    /** Letters that would arrive between 23:00 and 08:00 come the next morning instead. */
+    val letterQuietNight: Boolean = true,
+    /** The least time, in days, between two letters a TA writes of their own. */
+    val letterEveryDays: Int = 5,
 )
 
 /**
@@ -115,6 +122,10 @@ class SettingsRepository(private val context: Context) {
         val weatherCity = stringPreferencesKey("weather_city")
         val userAvatar = stringPreferencesKey("user_avatar")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
+        val letterReplyMin = intPreferencesKey("letter_reply_min")
+        val letterReplyMax = intPreferencesKey("letter_reply_max")
+        val letterQuietNight = booleanPreferencesKey("letter_quiet_night")
+        val letterEveryDays = intPreferencesKey("letter_every_days")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
     }
@@ -140,6 +151,10 @@ class SettingsRepository(private val context: Context) {
             weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
             userAvatar = this[Keys.userAvatar],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
+            letterReplyMin = this[Keys.letterReplyMin] ?: d.letterReplyMin,
+            letterReplyMax = this[Keys.letterReplyMax] ?: d.letterReplyMax,
+            letterQuietNight = this[Keys.letterQuietNight] ?: d.letterQuietNight,
+            letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
         )
     }
 
@@ -161,6 +176,10 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.weatherCity] = next.weatherCity
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
             prefs[Keys.chatAvatars] = next.chatAvatars
+            prefs[Keys.letterReplyMin] = next.letterReplyMin
+            prefs[Keys.letterReplyMax] = next.letterReplyMax
+            prefs[Keys.letterQuietNight] = next.letterQuietNight
+            prefs[Keys.letterEveryDays] = next.letterEveryDays
         }
     }
 

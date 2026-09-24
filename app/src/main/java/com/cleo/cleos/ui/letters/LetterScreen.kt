@@ -41,6 +41,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
+import com.cleo.cleos.ai.LetterTiming
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
@@ -150,6 +152,7 @@ fun LetterScreen(id: Long, onBack: () -> Unit) {
     val letter = vm.letter
     val fromTa = letter?.author == LetterEntity.AUTHOR_AI
     var confirmSend by remember { mutableStateOf(false) }
+    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
     var confirmDelete by remember { mutableStateOf(false) }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -224,7 +227,7 @@ fun LetterScreen(id: Long, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmSend = false },
             title = { Text("寄给$name？") },
-            text = { Text("寄出后就改不了了。回信过几个小时到。") },
+            text = { Text("寄出后就改不了了。${LetterTiming.describeReply(settings.letterReplyMin, settings.letterReplyMax)}。") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmSend = false

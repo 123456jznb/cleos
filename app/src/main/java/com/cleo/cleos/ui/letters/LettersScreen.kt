@@ -40,6 +40,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.ai.LetterTiming
+import com.cleo.cleos.ai.ToolGroup
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
@@ -67,6 +70,7 @@ fun LettersScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
         .collectAsStateWithLifecycle(true)
     val now by rememberNow()
     var confirm by remember { mutableStateOf<LetterEntity?>(null) }
+    val settings by c.settings.settings.collectAsStateWithLifecycle(AppSettings())
     val name = ta?.name?.trim()?.ifEmpty { null } ?: "TA"
     val shown = Mailbox.shown(letters, now)
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -97,7 +101,8 @@ fun LettersScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
             }
             if (shown.isEmpty()) {
                 item(key = "empty") {
-                    Notice("还没有信。右上角写一封给$name，回信过几个小时到。$name 有时也会自己写来。")
+                    val own = if (ToolGroup.Letters in settings.tools) "$name 有时也会自己写来。" else ""
+                    Notice("还没有信。右上角写一封给$name，${LetterTiming.describeReply(settings.letterReplyMin, settings.letterReplyMax)}。$own")
                 }
             }
             items(shown, key = { it.id }) { letter ->

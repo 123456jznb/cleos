@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
@@ -28,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -43,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,8 +61,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.ai.LetterTiming
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
@@ -233,6 +239,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 ) {
                     vm.setTool(ToolGroup.Letters, it)
                 }
+                LetterPace(settings, vm)
                 ToolSwitch("换自己的头像", "TA 可以把你发来的图、或者一个表情，换成自己的头像。", ToolGroup.Avatar in settings.tools) {
                     vm.setTool(ToolGroup.Avatar, it)
                 }
@@ -284,7 +291,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
 
             Section("数据") {
                 Text(
-                    "把每个 TA、聊天、日记、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
+                    "把每个 TA、聊天、日记、信、记忆、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
@@ -302,7 +309,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 }
                 Text(
                     "从别的 App 搬过来：现在认得 phone_ai_assistant 导出的备份（日记备份-….json）。会新建一个 TA，" +
-                        "带上那边的对话和它写的日记，它记得的关于你的事写进这个 TA 的性格。这里已有的都不动。",
+                        "带上那边的对话和它写的日记，它记得的关于你的事成为这个 TA 的记忆。这里已有的都不动。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
@@ -452,6 +459,77 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, color = palette.accentContent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             content()
+        }
+    }
+}
+
+/**
+ * How letters are paced, in a panel under the letters switch. The reply's wait is a range;
+ * each reply lands somewhere in it at random. The gap between a TA's own letters shows only
+ * while they write them. A slider is saved when it is let go, not at every step of a drag.
+ */
+@Composable
+private fun LetterPace(settings: AppSettings, vm: SettingsViewModel) {
+    val palette = LocalGlassPalette.current
+    val steps = LetterTiming.REPLY_STEPS
+    var reply by remember(settings.letterReplyMin, settings.letterReplyMax) {
+        mutableStateOf(LetterTiming.stepOf(settings.letterReplyMin).toFloat()..LetterTiming.stepOf(settings.letterReplyMax).toFloat())
+    }
+    var every by remember(settings.letterEveryDays) { mutableFloatStateOf(settings.letterEveryDays.toFloat()) }
+    fun minutes(at: Float) = steps[at.roundToInt().coerceIn(0, steps.lastIndex)]
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(palette.content.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            LetterTiming.describeReply(minutes(reply.start), minutes(reply.endInclusive)),
+            color = palette.content,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        RangeSlider(
+            value = reply,
+            onValueChange = { reply = it },
+            onValueChangeFinished = { vm.setLetterReply(minutes(reply.start), minutes(reply.endInclusive)) },
+            valueRange = 0f..steps.lastIndex.toFloat(),
+            steps = steps.size - 2,
+        )
+        Text(
+            "两头都能拖。每封回信在这段时间里随便哪一刻到；改了只管以后寄的信，已经在路上的照原来的时间到。",
+            color = palette.contentSecondary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        ToolSwitch(
+            "夜里不来信",
+            "夜里 11 点到早上 8 点之间要到的信，推到第二天早上 8～9 点。",
+            settings.letterQuietNight,
+        ) { vm.setLetterQuietNight(it) }
+        if (ToolGroup.Letters in settings.tools) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "TA 自己写信，两封至少隔 ${every.roundToInt()} 天",
+                color = palette.content,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Slider(
+                value = every,
+                onValueChange = { every = it },
+                onValueChangeFinished = { vm.setLetterEveryDays(every.roundToInt()) },
+                valueRange = 1f..14f,
+                steps = 12,
+            )
+            Text(
+                "隔够了也不一定写：这段时间聊过一阵，或者有新日记，TA 才会动笔。",
+                color = palette.contentSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
         }
     }
 }

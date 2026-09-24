@@ -63,6 +63,53 @@ class LettersTest {
     }
 
     @Test
+    fun thePersonSetsHowLongAReplyTakes() {
+        val afternoon = at(2026, 9, 24, 14)
+        for (seed in 1L..200L) {
+            val t = LetterTiming.replyAt(afternoon, seed, zone, minMinutes = 5, maxMinutes = 15)
+            assertTrue("5 to 15 minutes ($seed)", t - afternoon in Duration.ofMinutes(5).toMillis()..Duration.ofMinutes(15).toMillis())
+        }
+        assertEquals("as soon as it is written", afternoon, LetterTiming.replyAt(afternoon, 3, zone, minMinutes = 0, maxMinutes = 0))
+        // Out of order, or below zero (a hand-edited backup): still a time, not an exception.
+        assertEquals(afternoon + hour, LetterTiming.replyAt(afternoon, 3, zone, minMinutes = 60, maxMinutes = 10))
+        assertEquals(afternoon, LetterTiming.replyAt(afternoon, 3, zone, minMinutes = -5, maxMinutes = -5))
+        // The quiet night is on unless turned off; off, a letter may come in the night.
+        val late = at(2026, 9, 24, 23, 30)
+        val pushed = local(LetterTiming.replyAt(late, 3, zone, minMinutes = 0, maxMinutes = 0))
+        assertTrue("$pushed", pushed.toLocalDate() == LocalDate.of(2026, 9, 25) && pushed.toLocalTime() >= LocalTime.of(8, 0))
+        assertEquals(late, LetterTiming.replyAt(late, 3, zone, minMinutes = 0, maxMinutes = 0, quietNight = false))
+        val own = LetterTiming.ownAt(late, 7, zone, quietNight = false)
+        assertTrue(own - late in Duration.ofMinutes(25).toMillis()..Duration.ofMinutes(100).toMillis())
+    }
+
+    @Test
+    fun theWaitReadsTheWayItIsSet() {
+        assertEquals("回信过 1～6 小时到", LetterTiming.describeReply(60, 360))
+        assertEquals("回信一写好就到", LetterTiming.describeReply(0, 0))
+        assertEquals("回信 15 分钟以内到", LetterTiming.describeReply(0, 15))
+        assertEquals("回信一天以内到", LetterTiming.describeReply(0, 1440))
+        assertEquals("回信过 5～15 分钟到", LetterTiming.describeReply(5, 15))
+        assertEquals("回信过 30 分钟～2 小时到", LetterTiming.describeReply(30, 120))
+        assertEquals("回信过 12 小时～一天到", LetterTiming.describeReply(720, 1440))
+        assertEquals("回信过 3 小时到", LetterTiming.describeReply(180, 180))
+        assertEquals("回信过一天到", LetterTiming.describeReply(1440, 1440))
+        // The slider puts what it is given on the nearest step.
+        assertEquals(LetterTiming.REPLY_STEPS.indexOf(60), LetterTiming.stepOf(60))
+        assertEquals(LetterTiming.REPLY_STEPS.indexOf(360), LetterTiming.stepOf(400))
+        assertEquals(LetterTiming.REPLY_STEPS.lastIndex, LetterTiming.stepOf(5000))
+    }
+
+    @Test
+    fun theGapBetweenOwnLettersIsThePersonsToSet() {
+        val now = at(2026, 9, 24, 20)
+        val old = ta(created = now - 30 * day)
+        val twoDaysAgo = letter(1, LetterEntity.AUTHOR_AI, "前天的信", now - 2 * day, now - 2 * day, readAt = now - day)
+        assertFalse("five days unless changed", LetterRules.ready(now, old, listOf(twoDaysAgo), 20, 0))
+        assertTrue(LetterRules.ready(now, old, listOf(twoDaysAgo), 20, 0, cooldown = Duration.ofDays(1)))
+        assertFalse("still only with something to say", LetterRules.ready(now, old, listOf(twoDaysAgo), 0, 0, cooldown = Duration.ofDays(1)))
+    }
+
+    @Test
     fun aTaWritesOnlyAfterAWhileAndWithSomethingToSay() {
         val now = at(2026, 9, 24, 20)
         val old = ta(created = now - 30 * day)

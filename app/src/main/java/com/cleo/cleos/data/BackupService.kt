@@ -55,6 +55,11 @@ data class BackupSettings(
     val aiAvatarEmoji: String? = null,
     val chatAvatars: Boolean = true,
     val knownSince: Long? = null,
+    /** Absent from backups made before letters could be paced: the defaults then. */
+    val letterReplyMin: Int = 60,
+    val letterReplyMax: Int = 360,
+    val letterQuietNight: Boolean = true,
+    val letterEveryDays: Int = 5,
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -172,6 +177,10 @@ class BackupService(
                 aiAvatar = lead?.avatar,
                 aiAvatarEmoji = lead?.avatarEmoji,
                 chatAvatars = s.chatAvatars,
+                letterReplyMin = s.letterReplyMin,
+                letterReplyMax = s.letterReplyMax,
+                letterQuietNight = s.letterQuietNight,
+                letterEveryDays = s.letterEveryDays,
                 knownSince = lead?.knownSince,
             ),
             conversations = db.conversations().all(),
@@ -297,6 +306,10 @@ class BackupService(
                     weatherCity = bs.weatherCity,
                     userAvatar = picture(bs.userAvatar),
                     chatAvatars = bs.chatAvatars,
+                    letterReplyMin = bs.letterReplyMin,
+                    letterReplyMax = bs.letterReplyMax,
+                    letterQuietNight = bs.letterQuietNight,
+                    letterEveryDays = bs.letterEveryDays,
                 )
             }
             settings.setCurrentCompanion(companions.first().id)
