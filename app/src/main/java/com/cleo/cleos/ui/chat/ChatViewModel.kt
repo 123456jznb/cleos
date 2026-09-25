@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
+import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
@@ -42,6 +43,10 @@ data class ChatUiState(
     val userAvatar: String? = null,
     val chatAvatars: Boolean = false,
     val model: String = "",
+    /** What the TA keeps of the messages no longer sent verbatim. */
+    val recap: String? = null,
+    /** The last message folded into [recap]: its time and id. */
+    val recapUntil: Pair<Long, Long>? = null,
     val loaded: Boolean = false,
 )
 
@@ -65,16 +70,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     val state: StateFlow<ChatUiState> = conversationId.filterNotNull().flatMapLatest { id ->
         // The TA of the conversation on screen. Right after a switch that is still the
         // previous TA, until their latest conversation has been found.
-        val ta = combine(c.db.conversations().observe(id), c.companions.all) { conversation, list ->
-            list.firstOrNull { it.id == conversation?.companionId } ?: list.firstOrNull()
+        val here = combine(c.db.conversations().observe(id), c.companions.all) { conversation, list ->
+            (list.firstOrNull { it.id == conversation?.companionId } ?: list.firstOrNull())?.let { conversation to it }
         }.filterNotNull()
         combine(
             c.db.messages().observe(id),
             c.chat.streaming,
-            ta,
-            ta.map { it.apiBaseUrl }.distinctUntilChanged().flatMapLatest { c.secrets.hasKey(it) },
+            here,
+            here.map { it.second.apiBaseUrl }.distinctUntilChanged().flatMapLatest { c.secrets.hasKey(it) },
             c.settings.settings,
-        ) { messages, streaming, ta, hasKey, s ->
+        ) { messages, streaming, (conversation, ta), hasKey, s ->
             val live = streaming[id]
             // Once the stored copy of the live text is in the list, the live one steps
             // aside: all of it when the reply is over, only the text while tools still run.
@@ -98,6 +103,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 userAvatar = s.userAvatar,
                 chatAvatars = s.chatAvatars,
                 model = ta.apiModel,
+                recap = conversation?.recap,
+                recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },
                 loaded = true,
             )
         }
@@ -148,6 +155,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun delete(messageId: Long) = c.chat.deleteMessage(messageId)
+
+    /** The person's own version of the recap. Emptied, the TA keeps nothing of what came before. */
+    fun saveRecap(text: String) {
+        val id = state.value.conversationId ?: return
+        viewModelScope.launch { c.db.conversations().editRecap(id, text.trim().take(Recap.MAX_STORED).ifEmpty { null }) }
+    }
 
     fun answerSecret(requestMessageId: Long, grant: Boolean) {
         conversationId.value?.let { c.chat.answerSecretRequest(it, requestMessageId, grant) }

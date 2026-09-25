@@ -55,6 +55,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var aiName by mutableStateOf("")
     var userName by mutableStateOf("")
     var persona by mutableStateOf("")
+    var deepThinking by mutableStateOf(false)
+        private set
     var historySize by mutableIntStateOf(40)
     var weatherCity by mutableStateOf("")
     var keyInput by mutableStateOf("")
@@ -106,6 +108,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         model = ta.apiModel
         aiName = ta.name
         persona = ta.persona
+        deepThinking = ta.deepThinking
         keyInput = ""
         models = null
         checkResult = null
@@ -136,6 +139,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.companions.delete(id)
             then()
         }
+    }
+
+    /** Takes effect at once, like the tool switches. */
+    fun setThinking(on: Boolean) {
+        deepThinking = on
+        val id = companionId
+        viewModelScope.launch { c.companions.update(id) { it.copy(deepThinking = on) } }
     }
 
     fun setTool(group: ToolGroup, on: Boolean) {

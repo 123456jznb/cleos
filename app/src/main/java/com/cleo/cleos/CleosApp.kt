@@ -8,6 +8,7 @@ import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
+import com.cleo.cleos.ai.Recaps
 import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.ToolBox
@@ -63,7 +64,8 @@ class AppContainer(context: Context) {
         letters = { id -> db.letters().allFor(id) },
         memories = db.memories(),
     )
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, appScope)
+    val recaps = Recaps(db, settings, secrets, chatClient, appScope)
+    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, appScope)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
     val letters = Letters(db, settings, secrets, chatClient, appScope)

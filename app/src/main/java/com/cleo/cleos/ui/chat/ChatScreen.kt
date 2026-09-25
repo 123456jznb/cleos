@@ -53,10 +53,13 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
@@ -93,6 +96,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Prompt
+import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.SecretRequest
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.StreamingReply
@@ -149,6 +153,11 @@ private sealed interface ChatRow {
         override val key: Any get() = "t$at"
     }
 
+    /** Where the messages sent verbatim begin: before it, the TA has only the recap. */
+    data object RecapMark : ChatRow {
+        override val key: Any get() = "recap"
+    }
+
     /** [showFace]: the newest of a run of messages from one side, which alone gets the avatar. */
     data class Message(val message: MessageEntity, val isLast: Boolean, val showFace: Boolean = true) : ChatRow {
         override val key: Any get() = message.id
@@ -169,16 +178,26 @@ private fun MessageEntity.side(): Boolean? = when {
     else -> null
 }
 
+/** Whether the message is folded into a recap that ends at [until] (a time, then an id). */
+private fun MessageEntity.foldedBy(until: Pair<Long, Long>) = createdAt < until.first || (createdAt == until.first && id <= until.second)
+
 /**
  * Newest first, because the list is laid out bottom-up. Several messages in a row from one
  * side show the avatar once, beside the newest, the way chat apps stack them; a line or a
- * time between them starts a new run.
+ * time between them starts a new run. With a recap, its mark goes between the last message
+ * folded into it and the first one after.
  */
-private fun buildRows(messages: List<MessageEntity>): List<ChatRow> {
+private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long>? = null): List<ChatRow> {
     val rows = ArrayList<ChatRow>(messages.size + 8)
     var newerSide: Boolean? = null
+    var marked = false
     for (i in messages.indices.reversed()) {
         val m = messages[i]
+        if (recapUntil != null && !marked && m.foldedBy(recapUntil)) {
+            rows += ChatRow.RecapMark
+            marked = true
+            newerSide = null
+        }
         if (m.silent()) continue
         val side = m.side()
         rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = side == null || side != newerSide)
@@ -204,6 +223,7 @@ fun ChatTab(
     val c = appContainer()
     val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
     var switching by remember { mutableStateOf(false) }
+    var readingRecap by remember { mutableStateOf(false) }
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -216,7 +236,7 @@ fun ChatTab(
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
     val inputBottom = if (imeBottom > bottomInset) imeBottom + 8.dp else bottomInset
-    val rows = remember(state.messages) { buildRows(state.messages) }
+    val rows = remember(state.messages, state.recapUntil) { buildRows(state.messages, state.recapUntil) }
     val faces = if (!state.chatAvatars) {
         null
     } else {
@@ -312,6 +332,7 @@ fun ChatTab(
                 items(rows, key = { it.key }) { row ->
                     when (row) {
                         is ChatRow.Stamp -> TimeStamp(row.at)
+                        ChatRow.RecapMark -> RecapMark(state.aiName) { readingRecap = true }
                         is ChatRow.Message -> {
                             val m = row.message
                             val note = m.note
@@ -355,6 +376,18 @@ fun ChatTab(
             }
         }
     }
+
+    if (readingRecap) {
+        RecapDialog(
+            aiName = state.aiName,
+            recap = state.recap,
+            onSave = {
+                vm.saveRecap(it)
+                readingRecap = false
+            },
+            onDismiss = { readingRecap = false },
+        )
+    }
 }
 
 @Composable
@@ -377,6 +410,49 @@ private fun TimeStamp(at: Long) {
             Text(Dates.chatStamp(at), color = palette.contentSecondary, fontSize = 12.sp)
         }
     }
+}
+
+/** Where the messages sent verbatim begin; tapping it shows the recap. */
+@Composable
+private fun RecapMark(aiName: String, onClick: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+        GlassSurface(
+            modifier = Modifier.clickable(interactionSource = null, indication = null, onClick = onClick),
+            style = palette.bar,
+            shape = GlassShape.Capsule,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        ) {
+            Text("往上的，${aiName.ifBlank { "TA" }}记成了前情提要 ›", color = palette.contentSecondary, fontSize = 12.sp)
+        }
+    }
+}
+
+/** The recap, to read and to put right. */
+@Composable
+private fun RecapDialog(aiName: String, recap: String?, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(recap.orEmpty()) }
+    val name = aiName.ifBlank { "TA" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("前情提要") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "往上的聊天不再原样发给$name，${name}靠这段记着；聊得越多，它会自己往下续。哪里记得不对，可以改。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.take(Recap.MAX_STORED) },
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text("存") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

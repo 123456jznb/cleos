@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LetterEntity::class,
         MemoryEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -39,6 +39,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 6, to = 7),
         // 7 -> 8: when the reply to a letter comes, picked as it is sent (a nullable column).
         AutoMigration(from = 7, to = 8),
+        // 8 -> 9: each conversation's recap and where it ends (nullable columns), and the
+        // thinking switch on each TA (off to begin with).
+        AutoMigration(from = 8, to = 9),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {

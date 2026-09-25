@@ -155,4 +155,30 @@ class RequestBodyTest {
         val params = b["tools"]!!.jsonArray[0].jsonObject["function"]!!.jsonObject["parameters"]!!.jsonObject
         assertEquals("title", params["required"]!!.jsonArray.single().jsonPrimitive.content)
     }
+
+    @Test
+    fun thinkingIsAskedForAndEveryReplyCarriesItsReasoning() {
+        // An earlier turn, then a turn still under way with a call and its result.
+        val messages = listOf(
+            ApiMessage("system", "s"),
+            ApiMessage("user", "早"),
+            ApiMessage("assistant", "早呀"),
+            ApiMessage("user", "记一下"),
+            ApiMessage("assistant", "", listOf(call), reasoning = "想了想"),
+            ApiMessage("tool", "已添加", toolCallId = "call_1"),
+        )
+        val on = Json.parseToJsonElement(requestBody("m", messages, emptyList(), thinking = true).toString()).jsonObject
+        assertEquals("enabled", on["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        val sent = on["messages"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("", sent[2]["reasoning_content"]!!.jsonPrimitive.content)
+        assertEquals("想了想", sent[4]["reasoning_content"]!!.jsonPrimitive.content)
+        assertFalse("reasoning_content" in sent[1])
+        assertFalse("reasoning_content" in sent[5])
+        // Without it, only the call in the turn under way carries its reasoning.
+        val off = body(messages)
+        assertFalse("thinking" in off)
+        val plain = off["messages"]!!.jsonArray.map { it.jsonObject }
+        assertFalse("reasoning_content" in plain[2])
+        assertEquals("想了想", plain[4]["reasoning_content"]!!.jsonPrimitive.content)
+    }
 }

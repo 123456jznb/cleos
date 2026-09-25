@@ -40,8 +40,9 @@ object Prompt {
     const val MAX_IMAGES = 4
 
     /**
-     * What the TA remembers comes last: it changes whenever they remember something, and
-     * everything before it stays the same, so the cached prefix survives a new memory.
+     * What changes as the conversation goes on comes last: what the TA remembers, which
+     * changes whenever they remember something, then the [recap], which changes every so many
+     * messages. Everything before stays the same, so the cached prefix survives both.
      */
     fun system(
         settings: AppSettings,
@@ -49,6 +50,7 @@ object Prompt {
         tools: Set<ToolGroup> = emptySet(),
         memories: List<MemoryEntity> = emptyList(),
         zone: ZoneId = ZoneId.systemDefault(),
+        recap: String? = null,
     ): String = buildList {
         if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
@@ -56,6 +58,7 @@ object Prompt {
         toolRule(tools)?.let(::add)
         add(FORMAT_RULE)
         if (ToolGroup.Memory in tools) MemoryDigest.forChat(memories, zone)?.let(::add)
+        Recap.forChat(recap)?.let(::add)
     }.joinToString("\n\n")
 
     /**
@@ -99,6 +102,7 @@ object Prompt {
         tools: Set<ToolGroup> = emptySet(),
         images: Boolean = false,
         memories: List<MemoryEntity> = emptyList(),
+        recap: String? = null,
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
@@ -131,7 +135,7 @@ object Prompt {
         if (lastUser >= 0) {
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
         }
-        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone))) + merged
+        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap))) + merged
     }
 
     /**

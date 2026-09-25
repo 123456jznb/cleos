@@ -61,6 +61,17 @@ interface ConversationDao {
     @Query("UPDATE conversations SET title = :title WHERE id = :id")
     suspend fun rename(id: Long, title: String)
 
+    /**
+     * A fold's result, kept only if the recap is still the one the fold started from: an edit
+     * made meanwhile wins. Returns the rows changed.
+     */
+    @Query("UPDATE conversations SET recap = :recap, recapUntilAt = :at, recapUntilId = :messageId WHERE id = :id AND recap IS :was")
+    suspend fun foldRecap(id: Long, recap: String, at: Long, messageId: Long, was: String?): Int
+
+    /** The person's own version of the recap. */
+    @Query("UPDATE conversations SET recap = :recap WHERE id = :id")
+    suspend fun editRecap(id: Long, recap: String?)
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun delete(id: Long)
 
@@ -137,6 +148,13 @@ interface MessageDao {
     /** The newest [limit] messages, newest first. Callers reverse them for the API. */
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun newest(conversationId: Long, limit: Int): List<MessageEntity>
+
+    /** The messages after a point in the conversation (a time, then an id: the order they are read in), oldest first. */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId " +
+            "AND (createdAt > :at OR (createdAt = :at AND id > :id)) ORDER BY createdAt, id",
+    )
+    suspend fun after(conversationId: Long, at: Long, id: Long): List<MessageEntity>
 
     @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
     suspend fun count(conversationId: Long): Int

@@ -160,6 +160,11 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                 vm.checkResult?.let {
                     Text(it, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 19.sp)
                 }
+                ToolSwitch(
+                    "深度思考",
+                    "回答前先想一想：前后更连贯，推理也更好；每次要多等几秒，也多花一点 token。DeepSeek、智谱这类模型认这个开关，不认的会自动照常回复。",
+                    vm.deepThinking,
+                ) { vm.setThinking(it) }
             }
 
             Section("称呼") {
@@ -176,20 +181,21 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "每次带上最近 ${vm.historySize} 条消息",
+                    "每次原样带上最近 ${vm.historySize} 条消息",
                     color = palette.content,
                     fontSize = 14.sp,
                 )
                 Slider(
                     value = vm.historySize.toFloat(),
                     onValueChange = { vm.historySize = (it / 10f).roundToInt() * 10 },
-                    valueRange = 10f..100f,
-                    steps = 8,
+                    valueRange = 10f..200f,
+                    steps = 18,
                 )
                 Text(
-                    "带得越多，TA 记得越久，每次花的 token 也越多。",
+                    "更早的，TA 会自己整理成前情提要带着，不会一下子忘掉；在聊天里往上翻，能看到分界的那一行，点开能看、能改。原样带得越多，细节记得越清楚，每次花的 token 也越多。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
+                    lineHeight = 17.sp,
                 )
                 if (vm.companionCount > 1) {
                     Chip("删除$ta", selected = false) { confirmDelete = true }

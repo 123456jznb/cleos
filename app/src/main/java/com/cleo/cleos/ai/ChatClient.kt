@@ -75,16 +75,18 @@ class ChatException(message: String, val status: Int? = null) : Exception(messag
 class ChatClient(private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** [thinking]: ask the model to think first (see [requestBody]). */
     fun stream(
         endpoint: ApiEndpoint,
         messages: List<ApiMessage>,
         tools: List<ToolSpec> = emptyList(),
+        thinking: Boolean = false,
     ): Flow<ChatEvent> = callbackFlow {
         val request = Request.Builder()
             .url(endpoint.chatUrl)
             .header("Authorization", "Bearer ${endpoint.apiKey}")
             .header("Accept", "text/event-stream")
-            .post(requestBody(endpoint.model, messages, tools).toString().toRequestBody(JSON_TYPE))
+            .post(requestBody(endpoint.model, messages, tools, thinking).toString().toRequestBody(JSON_TYPE))
             .build()
         val call = http.newCall(request)
 
@@ -173,10 +175,15 @@ class ChatClient(private val http: OkHttpClient) {
  * tools goes back with its calls, and with null content when it said nothing (the
  * canonical shape, what the OpenAI SDK itself sends); each result follows as a "tool"
  * message naming its call.
+ *
+ * With [thinking], the switch DeepSeek and GLM take for thinking before answering. DeepSeek
+ * then wants every earlier reply to carry its reasoning too: the turn under way sends its
+ * own back, earlier turns an empty one.
  */
-internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>): JsonObject = buildJsonObject {
+internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>, thinking: Boolean = false): JsonObject = buildJsonObject {
     put("model", model)
     put("stream", true)
+    if (thinking) putJsonObject("thinking") { put("type", "enabled") }
     putJsonArray("messages") {
         for (m in messages) {
             addJsonObject {
@@ -201,7 +208,7 @@ internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<
                     put("content", m.content)
                 } else {
                     if (m.content.isEmpty()) put("content", JsonNull) else put("content", m.content)
-                    m.reasoning?.let { put("reasoning_content", it) }
+                    if (!thinking) m.reasoning?.let { put("reasoning_content", it) }
                     putJsonArray("tool_calls") {
                         for (c in m.toolCalls) {
                             addJsonObject {
@@ -215,6 +222,7 @@ internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<
                         }
                     }
                 }
+                if (thinking && m.role == "assistant") put("reasoning_content", m.reasoning ?: "")
                 m.toolCallId?.let { put("tool_call_id", it) }
             }
         }

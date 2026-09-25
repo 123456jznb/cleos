@@ -28,6 +28,9 @@ data class CompanionEntity(
     val createdAt: Long,
     /** When this TA last tried to write a letter of their own, written or not: the wait between tries counts from it. */
     val lastLetterTry: Long? = null,
+    /** Asks the model to think before it answers (the switch DeepSeek and GLM take). */
+    @ColumnInfo(defaultValue = "0")
+    val deepThinking: Boolean = false,
 )
 
 /**
@@ -105,6 +108,11 @@ data class ConversationEntity(
     /** Whose conversation it is. Everything from before there were several TAs is TA 1's. */
     @ColumnInfo(defaultValue = "1")
     val companionId: Long = 1,
+    /** What the TA keeps of the messages no longer sent verbatim: a running summary (ai/Recap.kt). */
+    val recap: String? = null,
+    /** The last message folded into [recap], by the order messages are read in: its time, then its id. */
+    val recapUntilAt: Long? = null,
+    val recapUntilId: Long? = null,
 )
 
 @Serializable

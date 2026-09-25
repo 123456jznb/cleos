@@ -61,6 +61,7 @@ class ChatRepository(
     private val tools: ToolBox,
     private val images: ImageStore,
     private val companions: Companions,
+    private val recaps: Recaps,
     private val scope: CoroutineScope,
 ) {
     /** The replies being written, by conversation. */
@@ -76,6 +77,9 @@ class ChatRepository(
 
     /** The same for pictures: models that can't look at images are sent the text only. */
     private val refusesImages = ConcurrentHashMap.newKeySet<String>()
+
+    /** And for the thinking switch: models that don't take it are asked the plain way. */
+    private val refusesThinking = ConcurrentHashMap.newKeySet<String>()
 
     /** Whether a reply is under way in [conversationId], including while its tools run. */
     fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true
@@ -237,29 +241,47 @@ class ChatRepository(
         }
         val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
         val endpointKey = endpoint.chatUrl + "|" + endpoint.model
-        val history = db.messages().newest(conversationId, s.historySize).reversed()
+        // What isn't folded into the recap yet, as much of it as the window takes. The recap
+        // stands in for everything before.
+        val conversation = db.conversations().get(conversationId)
+        val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
+        val recap = conversation?.recap
         val now = ZonedDateTime.now()
         var groups = if (endpointKey in refusesTools) emptySet() else s.tools
         var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
+        var thinking = ta.deepThinking && endpointKey !in refusesThinking
         // What the TA remembers, read once for this reply.
         val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
-        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories))
+        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap))
         var rounds = 0
         // What the last refusal made this reply leave out, and when.
         var leftOut: LeftOut? = null
         try {
             while (true) {
-                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || withImages)
-                when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse)) {
+                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || withImages || thinking)
+                when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse, thinking)) {
                     is Step.Ended -> {
-                        if (step.ok) remember(leftOut, conversationId, endpointKey)
+                        if (step.ok) {
+                            remember(leftOut, conversationId, endpointKey)
+                            recaps.foldLater(conversationId)
+                        }
                         return
                     }
                     Step.Refused -> {
-                        // Pictures go first: many more models take tools than take pictures.
-                        leftOut = LeftOut(images = withImages, at = System.currentTimeMillis())
-                        if (withImages) withImages = false else groups = emptySet()
-                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories))
+                        // The thinking switch goes first: it was asked for on top of the rest. Then
+                        // pictures: many more models take tools than take pictures.
+                        val what = when {
+                            thinking -> Left.Thinking
+                            withImages -> Left.Images
+                            else -> Left.Tools
+                        }
+                        leftOut = LeftOut(what, at = System.currentTimeMillis())
+                        when (what) {
+                            Left.Thinking -> thinking = false
+                            Left.Images -> withImages = false
+                            Left.Tools -> groups = emptySet()
+                        }
+                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap))
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
@@ -272,6 +294,7 @@ class ChatRepository(
                         // nothing new, or a "发好了".
                         if (step.message.toolCalls.all { it.name == ToolSpecs.sendMessage.name }) {
                             remember(leftOut, conversationId, endpointKey)
+                            recaps.foldLater(conversationId)
                             hide(conversationId)
                             return
                         }
@@ -287,7 +310,9 @@ class ChatRepository(
         }
     }
 
-    private class LeftOut(val images: Boolean, val at: Long)
+    private enum class Left { Thinking, Images, Tools }
+
+    private class LeftOut(val what: Left, val at: Long)
 
     /**
      * Once a reply got through without what a refusal made it leave out, that is what the
@@ -295,8 +320,12 @@ class ChatRepository(
      */
     private suspend fun remember(out: LeftOut?, conversationId: Long, endpointKey: String) {
         if (out == null) return
-        if (out.images) refusesImages += endpointKey else refusesTools += endpointKey
-        note(conversationId, if (out.images) IMAGES_REFUSED else TOOLS_REFUSED, at = out.at - 1)
+        val line = when (out.what) {
+            Left.Thinking -> THINKING_REFUSED.also { refusesThinking += endpointKey }
+            Left.Images -> IMAGES_REFUSED.also { refusesImages += endpointKey }
+            Left.Tools -> TOOLS_REFUSED.also { refusesTools += endpointKey }
+        }
+        note(conversationId, line, at = out.at - 1)
     }
 
     /** Pictures become data: URLs just before sending; one that can't be read is left out. */
@@ -324,6 +353,7 @@ class ChatRepository(
         messages: List<ApiMessage>,
         specs: List<ToolSpec>,
         mayRefuse: Boolean,
+        thinking: Boolean,
     ): Step {
         val startedAt = System.currentTimeMillis()
         val text = StringBuilder()
@@ -333,7 +363,7 @@ class ChatRepository(
         var status: Int? = null
         show(StreamingReply(conversationId, "", thinking = false))
         try {
-            client.stream(endpoint, messages, specs).collect { event ->
+            client.stream(endpoint, messages, specs, thinking).collect { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
                         text.append(event.text)
@@ -355,8 +385,8 @@ class ChatRepository(
         } catch (e: Exception) {
             error = "出错了：${e.message ?: e.javaClass.simpleName}"
         }
-        // A model that can't take tools or pictures turns the first request down before
-        // writing a word. The caller asks again without them.
+        // A model that can't take tools, pictures or the thinking switch turns the first
+        // request down before writing a word. The caller asks again without them.
         if (error != null && mayRefuse && text.isEmpty() && status in REFUSED_STATUSES) return Step.Refused
 
         return withContext(NonCancellable) {
@@ -537,6 +567,7 @@ class ChatRepository(
         private val REFUSED_STATUSES = setOf(400, 404, 422)
         private const val TOOLS_REFUSED = "这个模型不接受工具调用，这次没带工具。想让 TA 记待办、查天气，换一个支持工具的模型。"
         private const val IMAGES_REFUSED = "这个模型看不了图片，这次只发了文字。想让 TA 看图，换一个能看图的模型。"
+        private const val THINKING_REFUSED = "这个模型不认深度思考的开关，这次照常回复了，之后也不再带这个开关。"
         private const val TOO_MANY_ROUNDS = "连着用了太多次工具，先停在这里。"
     }
 }
