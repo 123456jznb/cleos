@@ -11,6 +11,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -38,6 +40,8 @@ data class StreamingReply(
     val activity: String? = null,
     /** The reply is over; this is only the hand-over to the stored bubble. */
     val finished: Boolean = false,
+    /** A call to an outside service waiting for the person to allow it. */
+    val asking: McpAsk? = null,
 )
 
 /**
@@ -62,6 +66,7 @@ class ChatRepository(
     private val images: ImageStore,
     private val companions: Companions,
     private val recaps: Recaps,
+    private val mcp: McpHub,
     private val scope: CoroutineScope,
 ) {
     /** The replies being written, by conversation. */
@@ -80,6 +85,12 @@ class ChatRepository(
 
     /** And for the thinking switch: models that don't take it are asked the plain way. */
     private val refusesThinking = ConcurrentHashMap.newKeySet<String>()
+
+    /** The person's answer to a card asking whether the TA may use an outside service's tool. */
+    enum class Answer { Yes, Always, No }
+
+    /** Calls waiting on the person, by conversation. */
+    private val asks = ConcurrentHashMap<Long, CompletableDeferred<Answer>>()
 
     /** Whether a reply is under way in [conversationId], including while its tools run. */
     fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true
@@ -248,18 +259,21 @@ class ChatRepository(
         val recap = conversation?.recap
         val now = ZonedDateTime.now()
         var groups = if (endpointKey in refusesTools) emptySet() else s.tools
+        // The tools of the MCP services switched on come along whenever tools do.
+        var outside = if (endpointKey in refusesTools) emptyList() else mcp.tools()
         var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
         var thinking = ta.deepThinking && endpointKey !in refusesThinking
         // What the TA remembers, read once for this reply.
         val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
-        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap))
+        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
         var rounds = 0
         // What the last refusal made this reply leave out, and when.
         var leftOut: LeftOut? = null
         try {
             while (true) {
-                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || withImages || thinking)
-                when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse, thinking)) {
+                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || outside.isNotEmpty() || withImages || thinking)
+                val specs = tools.specs(groups) + outside.map { it.spec }
+                when (val step = step(conversationId, endpoint, messages, specs, mayRefuse, thinking)) {
                     is Step.Ended -> {
                         if (step.ok) {
                             remember(leftOut, conversationId, endpointKey)
@@ -279,9 +293,12 @@ class ChatRepository(
                         when (what) {
                             Left.Thinking -> thinking = false
                             Left.Images -> withImages = false
-                            Left.Tools -> groups = emptySet()
+                            Left.Tools -> {
+                                groups = emptySet()
+                                outside = emptyList()
+                            }
                         }
-                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap))
+                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
@@ -289,7 +306,7 @@ class ChatRepository(
                             hide(conversationId)
                             return
                         }
-                        val results = runTools(conversationId, step, s, ta.id)
+                        val results = runTools(conversationId, step, s, ta.id, outside, ta.name)
                         // Only messages sent: that was the whole reply. Asking again would bring
                         // nothing new, or a "发好了".
                         if (step.message.toolCalls.all { it.name == ToolSpecs.sendMessage.name }) {
@@ -429,7 +446,14 @@ class ChatRepository(
      * way messages arrive when someone types them one by one. Then the other calls, in order.
      * The results go back in the order of the calls.
      */
-    private suspend fun runTools(conversationId: Long, step: Step.Called, s: AppSettings, companionId: Long): List<ApiMessage> {
+    private suspend fun runTools(
+        conversationId: Long,
+        step: Step.Called,
+        s: AppSettings,
+        companionId: Long,
+        outside: List<McpTool>,
+        ai: String,
+    ): List<ApiMessage> {
         val said = step.message.content
         val (sends, others) = step.message.toolCalls.partition { it.name == ToolSpecs.sendMessage.name }
         val results = HashMap<String, ApiMessage>()
@@ -474,23 +498,23 @@ class ChatRepository(
             }
         }
         for (call in others) {
+            val outer = outside.firstOrNull { it.fnName == call.name }
             // What was said before the calls stays up; the screen switches to the stored
             // copy (savedId) as soon as it is in the list.
-            show(
-                StreamingReply(
-                    conversationId,
-                    said,
-                    thinking = false,
-                    savedId = step.savedId.takeIf { said.isNotEmpty() },
-                    activity = tools.activity(call.name),
-                ),
+            val live = StreamingReply(
+                conversationId,
+                said,
+                thinking = false,
+                savedId = step.savedId.takeIf { said.isNotEmpty() },
+                activity = outer?.let { "在用${it.serverName}" } ?: tools.activity(call.name),
             )
+            show(live)
             val outcome = try {
-                tools.run(call, s, conversationId, companionId)
+                if (outer != null) runOutside(conversationId, outer, call, live, ai) else tools.run(call, s, conversationId, companionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                ToolOutcome("工具出错了：${e.message ?: e.javaClass.simpleName}", "${tools.action(call.name)}出错了")
+                ToolOutcome("工具出错了：${e.message ?: e.javaClass.simpleName}", "${outer?.spec?.action ?: tools.action(call.name)}出错了")
             }
             // The tool has acted (a todo exists now), so its result is stored even if
             // stop was pressed meanwhile: the history should match what happened.
@@ -515,6 +539,52 @@ class ChatRepository(
             results[call.id] = ApiMessage("tool", outcome.result, toolCallId = call.id)
         }
         return step.message.toolCalls.mapNotNull { results[it.id] }
+    }
+
+    /**
+     * A call to an MCP service's tool. Unless the tool only reads, or the person said to always
+     * allow it, they are asked first, on a card in the chat: a service can take orders and
+     * payments, and a TA must not do that on its own.
+     */
+    private suspend fun runOutside(conversationId: Long, tool: McpTool, call: ToolCall, live: StreamingReply, ai: String): ToolOutcome {
+        val what = "${tool.serverName}的${tool.title}"
+        val server = mcp.servers.get(tool.serverId)?.takeIf { it.enabled }
+            ?: return ToolOutcome("这个服务在设置里关掉了，现在用不了。", "用${what}没成：设置里关掉了")
+        val args = ToolArgs.parse(call.arguments)
+            ?: return ToolOutcome("参数不是合法的 JSON 对象，按参数说明重新调用。", "用${what}没成：参数写错了")
+        if (server.askFirst && !tool.readOnly && tool.name !in server.allowed) {
+            when (ask(conversationId, live, McpAsk(tool.serverName, tool.title, Mcp.preview(args)))) {
+                Answer.No -> return ToolOutcome(
+                    "对方没有同意，这次没有调用。需要的话在聊天里问问对方。",
+                    "没让${ai.ifBlank { "TA" }}用$what",
+                )
+                Answer.Always -> mcp.servers.allow(server.id, tool.name)
+                Answer.Yes -> Unit
+            }
+            show(live)
+        }
+        return try {
+            ToolOutcome(mcp.call(server, tool, args), "用了$what")
+        } catch (e: McpException) {
+            ToolOutcome("没有调用成功：${e.message}。照实告诉对方没成，别编结果。", "用${what}没成：${e.message.orEmpty().lineSequence().first()}")
+        }
+    }
+
+    /** Shows the card and waits for the person. No answer in [ASK_WAIT] counts as no. */
+    private suspend fun ask(conversationId: Long, live: StreamingReply, question: McpAsk): Answer {
+        val answer = CompletableDeferred<Answer>()
+        asks[conversationId] = answer
+        show(live.copy(activity = null, asking = question))
+        return try {
+            withTimeoutOrNull(ASK_WAIT) { answer.await() } ?: Answer.No
+        } finally {
+            asks.remove(conversationId, answer)
+        }
+    }
+
+    /** The person answered the card in [conversationId]. */
+    fun answer(conversationId: Long, answer: Answer) {
+        asks[conversationId]?.complete(answer)
     }
 
     private suspend fun finish(conversationId: Long, startedAt: Long, body: String, error: String?, keepEmpty: Boolean) {
@@ -559,6 +629,9 @@ class ChatRepository(
 
         /** Messages sent in one go: past this it is a flood, not a conversation. */
         const val MAX_MESSAGES = 8
+
+        /** How long a call to an outside service waits for the person to allow it. */
+        private const val ASK_WAIT = 10 * 60_000L
 
         /**
          * How endpoints turn down tools or pictures a model can't take: 400 (SiliconFlow,

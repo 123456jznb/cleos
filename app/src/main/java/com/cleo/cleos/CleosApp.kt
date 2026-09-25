@@ -8,6 +8,8 @@ import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
+import com.cleo.cleos.ai.McpClient
+import com.cleo.cleos.ai.McpHub
 import com.cleo.cleos.ai.Recaps
 import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
@@ -16,6 +18,7 @@ import com.cleo.cleos.data.BackupService
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.ForeignImport
 import com.cleo.cleos.data.ImageStore
+import com.cleo.cleos.data.McpServers
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
@@ -65,7 +68,11 @@ class AppContainer(context: Context) {
         memories = db.memories(),
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, appScope)
+    val mcp = McpHub(
+        McpServers(secrets),
+        McpClient(http, runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"),
+    )
+    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, appScope)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
     val letters = Letters(db, settings, secrets, chatClient, appScope)

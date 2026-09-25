@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
+import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.StreamingReply
@@ -155,6 +156,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun delete(messageId: Long) = c.chat.deleteMessage(messageId)
+
+    /** The person's answer to a card asking whether the TA may use an outside service's tool. */
+    fun answerAsk(answer: ChatRepository.Answer) {
+        val id = state.value.conversationId ?: return
+        c.chat.answer(id, answer)
+    }
 
     /** The person's own version of the recap. Emptied, the TA keeps nothing of what came before. */
     fun saveRecap(text: String) {

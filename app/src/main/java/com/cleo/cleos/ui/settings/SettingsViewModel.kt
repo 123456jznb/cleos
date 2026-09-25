@@ -15,6 +15,7 @@ import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.McpServer
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.data.ImportException
@@ -79,6 +80,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .flatMapLatest { c.secrets.hasKey(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+    val mcpServers: StateFlow<List<McpServer>> = c.mcp.servers.all.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
         viewModelScope.launch { c.companions.all.collect { companionCount = it.size } }
@@ -139,6 +141,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.companions.delete(id)
             then()
         }
+    }
+
+    fun setMcpEnabled(id: String, on: Boolean) {
+        viewModelScope.launch { c.mcp.servers.setEnabled(id, on) }
     }
 
     /** Takes effect at once, like the tool switches. */

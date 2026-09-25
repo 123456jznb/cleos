@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
@@ -95,6 +97,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.McpAsk
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.SecretRequest
@@ -327,7 +330,7 @@ fun ChatTab(
                 verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
             ) {
                 state.streaming?.let { live ->
-                    item(key = "live") { LiveBubble(live) }
+                    item(key = "live") { LiveBubble(live, state.aiName, vm::answerAsk) }
                 }
                 items(rows, key = { it.key }) { row ->
                     when (row) {
@@ -633,7 +636,7 @@ private fun PictureGroup(pictures: List<MessageImage>, onOpen: (String) -> Unit,
 }
 
 @Composable
-private fun LiveBubble(live: StreamingReply) {
+private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepository.Answer) -> Unit) {
     val palette = LocalGlassPalette.current
     val faces = LocalFaces.current
     Column(
@@ -641,7 +644,7 @@ private fun LiveBubble(live: StreamingReply) {
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (live.text.isNotEmpty() || live.activity == null) {
+        if (live.text.isNotEmpty() || (live.activity == null && live.asking == null)) {
             Row {
                 if (faces != null) {
                     Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
@@ -667,7 +670,42 @@ private fun LiveBubble(live: StreamingReply) {
                 }
             }
         }
+        live.asking?.let { AskCard(it, aiName, onAnswer) }
         live.activity?.let { ToolNote(it + "…", Icons.Rounded.AutoAwesome, running = true) }
+    }
+}
+
+/** A TA's call to an outside service, waiting for the person to allow it. */
+@Composable
+private fun AskCard(ask: McpAsk, aiName: String, onAnswer: (ChatRepository.Answer) -> Unit) {
+    val palette = LocalGlassPalette.current
+    val who = aiName.ifBlank { "TA" }
+    GlassSurface(
+        modifier = Modifier
+            .padding(start = if (LocalFaces.current != null) AvatarSlot else 0.dp)
+            .widthIn(max = bubbleMaxWidth()),
+        style = palette.bubble,
+        shape = GlassShape.Rounded(20.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Extension, contentDescription = null, tint = palette.accentContent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("${who}想用${ask.service}的「${ask.tool}」", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Text(ask.arguments, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 19.sp)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                Pill("允许", accent = true, enabled = true) { onAnswer(ChatRepository.Answer.Yes) }
+                Pill("以后都允许", accent = false, enabled = true) { onAnswer(ChatRepository.Answer.Always) }
+                Pill("不允许", accent = false, enabled = true) { onAnswer(ChatRepository.Answer.No) }
+            }
+            Text("「以后都允许」只管这一个工具，在设置里能改回来。", color = palette.contentSecondary, fontSize = 12.sp)
+        }
     }
 }
 

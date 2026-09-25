@@ -54,14 +54,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.ai.Mcp
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.McpServer
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
@@ -75,8 +78,9 @@ import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String) -> Unit) {
     val vm = appViewModel { SettingsViewModel(it) }
+    val mcpServers by vm.mcpServers.collectAsStateWithLifecycle()
     val hasKey by vm.hasKey.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val palette = LocalGlassPalette.current
@@ -259,6 +263,20 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            }
+
+            Section("外部服务（MCP）") {
+                Text(
+                    "接上 MCP 服务，TA 就能用它们的工具，比如点咖啡、查路线。只支持 Streamable HTTP 的地址，电脑上 stdio 那种接不了。" +
+                        "地址和 Token 加密存在这台手机上，不进备份。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                for (server in mcpServers) {
+                    McpRow(server, onOpen = { onOpenMcp(server.id) }) { vm.setMcpEnabled(server.id, it) }
+                }
+                Chip("添加一个服务", selected = false) { onOpenMcp("") }
             }
 
             Section("外观") {
@@ -504,6 +522,37 @@ private fun LetterPace(settings: AppSettings, vm: SettingsViewModel) {
     }
 }
 
+/** One MCP service: tap it to edit, switch it on and off beside. */
+@Composable
+private fun McpRow(server: McpServer, onOpen: () -> Unit, onToggle: (Boolean) -> Unit) {
+    val palette = LocalGlassPalette.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            Modifier
+                .weight(1f)
+                .clickable(interactionSource = null, indication = null, onClick = onOpen),
+        ) {
+            Text(server.name.ifBlank { "没起名字" } + " ›", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            // Never the address as stored: a key in it would show.
+            Text(Mcp.displayUrl(server.url), color = palette.contentSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = server.enabled, onCheckedChange = onToggle, colors = glassSwitchColors())
+    }
+}
+
+@Composable
+internal fun glassSwitchColors() = LocalGlassPalette.current.let { palette ->
+    SwitchDefaults.colors(
+        checkedThumbColor = Color.White,
+        checkedTrackColor = palette.accent,
+        checkedBorderColor = palette.accent,
+        uncheckedThumbColor = palette.contentSecondary,
+        uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
+        uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
+    )
+}
+
 @Composable
 private fun ToolSwitch(title: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     val palette = LocalGlassPalette.current
@@ -525,18 +574,7 @@ private fun ToolSwitch(title: String, detail: String, checked: Boolean, onChange
         }
         Spacer(Modifier.width(12.dp))
         // The row is the control; the switch only shows its state (one target for a screen reader).
-        Switch(
-            checked = checked,
-            onCheckedChange = null,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = palette.accent,
-                checkedBorderColor = palette.accent,
-                uncheckedThumbColor = palette.contentSecondary,
-                uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
-                uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
-            ),
-        )
+        Switch(checked = checked, onCheckedChange = null, colors = glassSwitchColors())
     }
 }
 

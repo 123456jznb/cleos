@@ -53,6 +53,21 @@ class SecretStore(private val context: Context) {
         }
     }
 
+    private fun named(name: String) = stringPreferencesKey("secret:$name")
+
+    /** Any other secret by name, decrypted; null when it is unset or can't be read back. */
+    fun secret(name: String): Flow<String?> = context.secretsStore.data.map { prefs ->
+        prefs[named(name)]?.let { stored ->
+            runCatching { decrypt(stored) }
+                .onFailure { Log.w(TAG, "stored secret $name could not be decrypted; treating as unset", it) }
+                .getOrNull()
+        }
+    }
+
+    suspend fun setSecret(name: String, value: String?) {
+        context.secretsStore.edit { if (value.isNullOrEmpty()) it.remove(named(name)) else it[named(name)] = encrypt(value) }
+    }
+
     /** Files the one key of before under the address it was used with; the ciphertext moves as is. */
     suspend fun adoptLegacyKey(baseUrl: String) {
         context.secretsStore.edit { prefs ->

@@ -51,11 +51,12 @@ object Prompt {
         memories: List<MemoryEntity> = emptyList(),
         zone: ZoneId = ZoneId.systemDefault(),
         recap: String? = null,
+        outside: List<McpTool> = emptyList(),
     ): String = buildList {
         if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
         if (ta.persona.isNotBlank()) add(ta.persona.trim())
-        toolRule(tools)?.let(::add)
+        toolRule(tools, outside)?.let(::add)
         add(FORMAT_RULE)
         if (ToolGroup.Memory in tools) MemoryDigest.forChat(memories, zone)?.let(::add)
         Recap.forChat(recap)?.let(::add)
@@ -66,7 +67,7 @@ object Prompt {
      * "记好啦" without calling anything, or it goes through the diary unasked. Only the
      * rules for the tools actually offered are included.
      */
-    private fun toolRule(tools: Set<ToolGroup>): String? = buildList {
+    private fun toolRule(tools: Set<ToolGroup>, outside: List<McpTool> = emptyList()): String? = buildList {
         if (ToolGroup.Messages in tools) {
             add("想分成几条消息说的时候，用 send_message 一条一条发：一条只说一件事，要发几条就在同一次回复里调用几次。只说一句就直接回复。用 send_message 发过的话，别再在回复里写一遍，也别说「发好了」。")
         }
@@ -86,6 +87,14 @@ object Prompt {
         }
         if (ToolGroup.Avatar in tools) add("你可以用 set_my_avatar 换自己的头像：用对方发来的一张图，或者一个表情。")
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
+        if (outside.isNotEmpty()) {
+            val names = outside.map { it.serverName }.distinct().joinToString("、")
+            add(
+                "你还接了外部服务：$names，它们的工具名以 mcp_ 开头。对方要做和它们有关的事时再用。" +
+                    "下单、叫车、付款这类真花钱的，先在聊天里把要什么、多少、送到哪跟对方说清楚，对方同意了再调用；" +
+                    "结果照实说，没成就说没成，别编。",
+            )
+        }
     }.takeIf { it.isNotEmpty() }?.joinToString("")
 
     /**
@@ -103,8 +112,9 @@ object Prompt {
         images: Boolean = false,
         memories: List<MemoryEntity> = emptyList(),
         recap: String? = null,
+        outside: List<McpTool> = emptyList(),
     ): List<ApiMessage> {
-        val withTools = tools.isNotEmpty()
+        val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
         val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached)?.let { m.id to it } }
         val sendable = if (ToolGroup.Messages in tools) asSentMessages(converted) else converted.map { it.second }
@@ -135,7 +145,7 @@ object Prompt {
         if (lastUser >= 0) {
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
         }
-        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap))) + merged
+        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside))) + merged
     }
 
     /**
