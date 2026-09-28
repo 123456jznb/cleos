@@ -162,6 +162,10 @@ object ToolSpecs {
         parameters = schema(
             required = listOf("text"),
             "text" to prop("string", "这一条消息的内容"),
+            "quote" to prop(
+                "string",
+                "可不填。这条在回对方的哪句话：照抄那句话里的几个字。对方连着发了几条、你一条条回的时候，或者回到前面某句话时才用；一问一答不要填",
+            ),
         ),
     )
 

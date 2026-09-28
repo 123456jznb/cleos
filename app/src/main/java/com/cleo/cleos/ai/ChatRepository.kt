@@ -7,6 +7,8 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageQuote
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageThought
 import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.SecretStore
@@ -26,12 +28,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonObject
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** The reply being written right now. */
 data class StreamingReply(
@@ -106,18 +111,116 @@ class ChatRepository(
     /** Calls waiting on the person, by conversation. */
     private val asks = ConcurrentHashMap<Long, CompletableDeferred<Answer>>()
 
-    /** Whether a reply is under way in [conversationId], including while its tools run. */
+    /** Whether a reply is waiting or under way in [conversationId], including while its tools run. */
     fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true
+
+    /** Guards starting and ending a conversation's job, which messages sent from anywhere can race. */
+    private val lock = Any()
 
     /** Runs [block] as [conversationId]'s reply; false, and nothing runs, while one is under way there. */
     private fun start(conversationId: Long, block: suspend () -> Unit): Boolean {
-        if (busy(conversationId)) return false
-        // Registered before it starts, so a quick reply can't finish before it is on the map.
-        val job = scope.launch(start = CoroutineStart.LAZY) { block() }
+        synchronized(lock) {
+            if (busy(conversationId)) return false
+            launchFor(conversationId) { block() }
+            return true
+        }
+    }
+
+    /** [block] as [conversationId]'s job: registered before it starts, so a quick one can't finish before it is on the map. */
+    private fun launchFor(conversationId: Long, block: suspend CoroutineScope.() -> Unit) {
+        val job = scope.launch(start = CoroutineStart.LAZY, block = block)
         jobs[conversationId] = job
         job.invokeOnCompletion { jobs.remove(conversationId, job) }
         job.start()
-        return true
+    }
+
+    // Several messages in a row, the way people send them: the reply waits until the person
+    // has stopped for a moment, and whatever they send while it is being written is answered
+    // right after it.
+
+    /** How many times the person has sent something, by conversation: a reply can tell whether more came meanwhile. */
+    private val sends = ConcurrentHashMap<Long, Long>()
+
+    /** When they last sent something, by conversation. */
+    private val lastSent = ConcurrentHashMap<Long, Long>()
+
+    /** Conversations where the person is typing right now. */
+    private val typingIn = ConcurrentHashMap.newKeySet<Long>()
+
+    /** Voice messages still being turned into text, counted by conversation: a reply waits for their words. */
+    private val holds = ConcurrentHashMap<Long, Int>()
+
+    /** The newest of the person's messages the last reply here took in (its time), by conversation. */
+    private val answeredUpTo = ConcurrentHashMap<Long, Long>()
+
+    private val lastStamp = AtomicLong(0)
+
+    /** Now, but always after the last one handed out: messages sent in quick succession keep their order. */
+    private fun stamp(): Long = lastStamp.updateAndGet { maxOf(it + 1, System.currentTimeMillis()) }
+
+    /** Whether the person is writing something in [conversationId]: a reply waits for them, a while. */
+    fun typing(conversationId: Long, now: Boolean) {
+        if (now) typingIn += conversationId else typingIn -= conversationId
+    }
+
+    /**
+     * The person sent something here: a reply comes once they have stopped for a moment. One
+     * waiting already just waits a little longer; one being written is followed by another,
+     * for what came meanwhile.
+     */
+    private fun answerSoon(conversationId: Long) {
+        synchronized(lock) {
+            sends.merge(conversationId, 1L) { a, b -> a + b }
+            lastSent[conversationId] = System.currentTimeMillis()
+            if (busy(conversationId)) return
+            launchFor(conversationId) {
+                while (true) {
+                    awaitQuiet(conversationId)
+                    val seen = sends[conversationId]
+                    if (db.conversations().get(conversationId) != null && unanswered(conversationId)) reply(conversationId)
+                    synchronized(lock) {
+                        // Nothing sent meanwhile: done. Off the map here, under the lock, so a message
+                        // sent from now on starts a reply of its own instead of counting on this one.
+                        if (sends[conversationId] == seen) {
+                            jobs.remove(conversationId, coroutineContext.job)
+                            return@launchFor
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Until the person has stopped: [REPLY_WAIT] since they last sent something, and not
+     * typing or waiting on a voice message's words, which hold it up to [HOLD_MAX] at most.
+     */
+    private suspend fun awaitQuiet(conversationId: Long) {
+        while (true) {
+            val since = System.currentTimeMillis() - (lastSent[conversationId] ?: 0L)
+            val held = conversationId in typingIn || (holds[conversationId] ?: 0) > 0
+            if (since >= REPLY_WAIT && (!held || since >= HOLD_MAX)) return
+            delay(if (since < REPLY_WAIT) REPLY_WAIT - since else HOLD_CHECK)
+        }
+    }
+
+    /** Whether the person has said something since what the last reply took in. */
+    private suspend fun unanswered(conversationId: Long): Boolean {
+        val upTo = answeredUpTo[conversationId] ?: Long.MIN_VALUE
+        return db.messages().newest(conversationId, UNANSWERED_LOOKBACK).any { m ->
+            m.role == "user" && m.note == null && m.error == null && m.createdAt > upTo &&
+                (m.content.isNotBlank() || m.images != null)
+        }
+    }
+
+    /** [block] with the reply here held back (a voice message being turned into words). */
+    private suspend fun <T> holding(conversationId: Long, block: suspend () -> T): T {
+        holds.merge(conversationId, 1) { a, b -> a + b }
+        try {
+            return block()
+        } finally {
+            holds.compute(conversationId) { _, n -> if (n == null || n <= 1) null else n - 1 }
+        }
     }
 
     private fun show(reply: StreamingReply) = _streaming.update { it + (reply.conversationId to reply) }
@@ -146,22 +249,33 @@ class ChatRepository(
 
     /**
      * A voice message: stored at once, so it shows while it is being turned into text, then
-     * answered like a typed one. False when a reply is under way here: nothing was stored.
+     * answered like a typed one, even if it was sent while a reply was being written.
      */
-    fun sendVoice(conversationId: Long, clip: MessageAudio): Boolean = start(conversationId) {
-        val now = System.currentTimeMillis()
-        val id = db.messages().insert(
-            MessageEntity(conversationId = conversationId, role = "user", content = "", createdAt = now, audio = MessageAudios.encode(clip)),
-        )
-        db.conversations().touch(conversationId, now)
-        if (transcribe(id, clip)) reply(conversationId)
+    fun sendVoice(conversationId: Long, clip: MessageAudio, quote: MessageQuote? = null) {
+        val at = stamp()
+        scope.launch {
+            val id = db.messages().insert(
+                MessageEntity(
+                    conversationId = conversationId,
+                    role = "user",
+                    content = "",
+                    createdAt = at,
+                    audio = MessageAudios.encode(clip),
+                    quote = quote?.let(MessageQuotes::encode),
+                ),
+            )
+            db.conversations().touch(conversationId, at)
+            if (holding(conversationId) { transcribe(id, clip) }) answerSoon(conversationId)
+        }
     }
 
     /** A voice message that couldn't be turned into text, tried again; answered if it can be now. */
-    fun retryVoice(conversationId: Long, messageId: Long): Boolean = start(conversationId) {
-        val clip = db.messages().get(messageId)?.let { MessageAudios.decode(it.audio) } ?: return@start
-        db.messages().setError(messageId, null)
-        if (transcribe(messageId, clip)) reply(conversationId)
+    fun retryVoice(conversationId: Long, messageId: Long) {
+        scope.launch {
+            val clip = db.messages().get(messageId)?.let { MessageAudios.decode(it.audio) } ?: return@launch
+            db.messages().setError(messageId, null)
+            if (holding(conversationId) { transcribe(messageId, clip) }) answerSoon(conversationId)
+        }
     }
 
     /** Message [id]'s recording into its text; false, with the reason on the message, when it can't be. */
@@ -182,28 +296,34 @@ class ChatRepository(
         }
     }
 
-    /** False when nothing was sent (a reply is still under way here): the text stays in the box. */
-    fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()): Boolean {
+    /**
+     * Sends at once, also while a reply is being written; the answer comes once the person has
+     * stopped for a moment ([answerSoon]). [quote]: the message this one answers. False only
+     * when there is nothing to send.
+     */
+    fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList(), quote: MessageQuote? = null): Boolean {
         val content = text.trim()
         if (content.isEmpty() && pictures.isEmpty()) return false
-        return start(conversationId) {
-            val now = System.currentTimeMillis()
+        val at = stamp()
+        scope.launch {
             db.messages().insert(
                 MessageEntity(
                     conversationId = conversationId,
                     role = "user",
                     content = content,
-                    createdAt = now,
+                    createdAt = at,
                     images = MessageImages.encode(pictures),
+                    quote = quote?.let(MessageQuotes::encode),
                 ),
             )
             val conversation = db.conversations().get(conversationId)
             if (conversation != null && conversation.title == DEFAULT_TITLE) {
                 db.conversations().rename(conversationId, content.lineSequence().first().take(24).ifBlank { "[图片]" })
             }
-            db.conversations().touch(conversationId, now)
-            reply(conversationId)
+            db.conversations().touch(conversationId, at)
+            answerSoon(conversationId)
         }
+        return true
     }
 
     /** Throw away [assistantMessageId] (a failed or unwanted reply) and ask again. */
@@ -314,6 +434,8 @@ class ChatRepository(
             // stands in for everything before.
             val conversation = db.conversations().get(conversationId)
             val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
+            // What this reply takes in: whatever the person sends from here on is answered after it.
+            history.lastOrNull { it.role == "user" }?.let { m -> answeredUpTo.merge(conversationId, m.createdAt) { a, b -> maxOf(a, b) } }
             val recap = conversation?.recap
             val now = ZonedDateTime.now()
             // send_voice only once there is a voice to speak with.
@@ -551,8 +673,19 @@ class ChatRepository(
         var sent = 0
         // The step's thinking, while nothing it put in the chat has it yet.
         var thought = step.thought?.let(MessageThoughts::encode)
+        // What the person said lately, newest first: what a message's quote is looked up in.
+        var recent: List<MessageEntity>? = null
+        suspend fun quoteIn(args: JsonObject?): MessageQuote? {
+            val quoted = args?.let { ToolArgs.text(it, "quote") }?.trim().orEmpty()
+            if (quoted.isEmpty() || ToolArgs.isNone(quoted)) return null
+            val said = recent ?: db.messages().newest(conversationId, UNANSWERED_LOOKBACK)
+                .filter { it.role == "user" && it.note == null }
+                .also { recent = it }
+            return MessageQuotes.find(said, quoted)?.let(MessageQuotes::of)
+        }
         for (call in sends) {
-            val words = ToolArgs.parse(call.arguments)?.let { ToolArgs.text(it, "text") }?.trim().orEmpty()
+            val args = ToolArgs.parse(call.arguments)
+            val words = args?.let { ToolArgs.text(it, "text") }?.trim().orEmpty()
             val result = when {
                 words.isEmpty() -> "没有内容，没发出去。"
                 sent >= MAX_MESSAGES -> "一次最多发 $MAX_MESSAGES 条，这条没发出去。"
@@ -576,6 +709,8 @@ class ChatRepository(
                             why = e.message ?: e.javaClass.simpleName
                         }
                     }
+                    // One the model can't place is simply not shown as a quote.
+                    val quote = if (call.name == ToolSpecs.sendMessage.name) quoteIn(args) else null
                     withContext(NonCancellable) {
                         val at = System.currentTimeMillis()
                         db.messages().insert(
@@ -586,6 +721,7 @@ class ChatRepository(
                                 createdAt = at,
                                 audio = voice?.let(MessageAudios::encode),
                                 thought = thought,
+                                quote = quote?.let(MessageQuotes::encode),
                             ),
                         )
                         db.conversations().touch(conversationId, at)
@@ -764,6 +900,16 @@ class ChatRepository(
 
         /** Messages sent in one go: past this it is a flood, not a conversation. */
         const val MAX_MESSAGES = 8
+
+        /** How long the TA waits after the person's last message before answering: long enough for the next one. */
+        const val REPLY_WAIT = 2_000L
+
+        /** How long typing (or a voice message's words) can hold the answer up, counted from the last message. */
+        private const val HOLD_MAX = 20_000L
+        private const val HOLD_CHECK = 300L
+
+        /** How far back to look for what the person said and wasn't answered, or what the TA quotes. */
+        private const val UNANSWERED_LOOKBACK = 30
 
         /** How long a call to an outside service waits for the person to allow it. */
         private const val ASK_WAIT = 10 * 60_000L

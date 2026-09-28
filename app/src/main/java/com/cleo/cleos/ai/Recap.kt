@@ -2,6 +2,7 @@ package com.cleo.cleos.ai
 
 import android.util.Log
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
@@ -46,6 +47,9 @@ object Recap {
     const val CATCH_UP = 600
 
     private const val LINE_MAX = 400
+
+    /** A quoted message in a line of the transcript: enough to tell which one. */
+    private const val QUOTE_MAX = 40
     private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     private val HEADINGS = listOf("【新的前情提要】", "【前情提要】", "新的前情提要：", "前情提要：", "前情提要:")
 
@@ -127,11 +131,19 @@ object Recap {
                 listOfNotNull(words, if (pictures > 0) "[发了${pictures}张图]" else null)
                     .joinToString(" ")
                     .ifEmpty { null }
-                    ?.let { "对方：$it" }
+                    ?.let { "对方：${answering(m)}$it" }
             }
-            m.role == "assistant" && m.content.isNotBlank() -> "我：${said(m.content)}"
+            m.role == "assistant" && m.content.isNotBlank() -> "我：${answering(m)}${said(m.content)}"
             else -> null
         }
+    }
+
+    /** Which earlier message [m] answers, when it quotes one: 「回我说的“…”」, before its words. */
+    private fun answering(m: MessageEntity): String {
+        val q = MessageQuotes.decode(m.quote) ?: return ""
+        val words = q.text.replace('\n', ' ').take(QUOTE_MAX)
+        val whose = if (q.role == "assistant") "我" else "对方"
+        return "（回${whose}说的“$words”）"
     }
 
     /** The recap as the TA reads it, at the end of the chat's system prompt. */

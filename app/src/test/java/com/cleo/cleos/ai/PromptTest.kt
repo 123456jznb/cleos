@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import org.junit.Assert.assertEquals
@@ -193,6 +194,43 @@ class PromptTest {
         // Without the tool they are one reply, as before.
         val plain = Prompt.messages(AppSettings(), ta(), history, now)
         assertEquals("早呀\n\n今天下雨了", plain[2].content)
+    }
+
+    @Test
+    fun aQuotedMessageSaysWhatItAnswers() {
+        val said = msg("assistant", "盗走了")
+        val mine = msg("user", "早")
+        val history = listOf(
+            msg("user", "我的小蛋糕呢"),
+            said,
+            mine,
+            msg("user", "这样子").copy(quote = MessageQuotes.encode(MessageQuotes.of(said)!!)),
+            msg("user", "补一句").copy(quote = MessageQuotes.encode(MessageQuotes.of(mine)!!)),
+        )
+        val out = Prompt.messages(AppSettings(), ta(), history, now)
+        val last = out.last().content
+        assertTrue(last.contains("（回复你说的：「盗走了」）\n这样子"))
+        assertTrue(last.contains("（接着自己说的：「早」）\n补一句"))
+        // A voice message not turned into words yet says nothing, quote or not.
+        val silent = listOf(msg("user", "在吗"), msg("user", "").copy(audio = """{"file":"v.wav","ms":1000}""", quote = MessageQuotes.encode(MessageQuotes.of(said)!!)))
+        assertFalse(Prompt.messages(AppSettings(), ta(), silent, now).last().content.contains("回复你说的"))
+    }
+
+    @Test
+    fun theTasQuoteGoesBackAsTheSendMessageItWas() {
+        val asked = msg("user", "今天吃什么")
+        val history = listOf(
+            asked,
+            msg("assistant", "吃面吧").copy(quote = MessageQuotes.encode(MessageQuotes.of(asked)!!)),
+            msg("user", "好"),
+        )
+        val out = Prompt.messages(AppSettings(), ta(), history, now, setOf(ToolGroup.Messages))
+        // Even alone, so the model sees it quoted.
+        val call = out[2].toolCalls.single()
+        assertEquals("send_message", call.name)
+        assertTrue(call.arguments.contains("\"quote\":\"今天吃什么\""))
+        // Without the tool, it is a plain reply, as before.
+        assertEquals("吃面吧", Prompt.messages(AppSettings(), ta(), history, now)[2].content)
     }
 
     @Test

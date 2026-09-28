@@ -170,6 +170,8 @@ data class MessageEntity(
      * it. Unlike [reasoning] it is never sent back: it is kept to be read.
      */
     val thought: String? = null,
+    /** "user" or "assistant": the message this one answers (MessageQuote as JSON), shown under it. */
+    val quote: String? = null,
 )
 
 @Serializable

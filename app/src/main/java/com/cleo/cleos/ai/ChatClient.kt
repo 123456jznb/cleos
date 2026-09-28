@@ -42,6 +42,8 @@ data class ApiMessage(
     val images: List<String> = emptyList(),
     /** An assistant message that went as a voice message: Prompt gives it back as the send_voice it was. Not sent. */
     val spoken: Boolean = false,
+    /** An assistant message that quoted one of the person's: the words, for the send_message it was. Not sent. */
+    val quoted: String? = null,
 )
 
 /** Where to send a conversation. [baseUrl] may or may not already end in /chat/completions. */

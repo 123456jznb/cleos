@@ -14,6 +14,8 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
+import com.cleo.cleos.data.MessageQuote
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +69,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }.collect { (remembered, ta) ->
                 val id = c.chat.resolveConversation(remembered, ta)
                 if (id != remembered) c.settings.setCurrentConversation(id)
+                // A quote belongs to the conversation it was picked in, and typing to the one it was typed in.
+                conversationId.value?.takeIf { it != id }?.let {
+                    quoting = null
+                    c.chat.typing(it, false)
+                }
                 conversationId.value = id
             }
         }
@@ -140,15 +147,34 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.appScope.launch { c.images.delete(listOf(image.file)) }
     }
 
+    /** The message the next one answers, picked with 引用; shown above the input until it goes or is dropped. */
+    var quoting by mutableStateOf<MessageQuote?>(null)
+        private set
+
+    fun quote(message: MessageEntity) {
+        quoting = MessageQuotes.of(message)
+    }
+
+    fun unquote() {
+        quoting = null
+    }
+
+    /** Whether something is being written in the input: the TA waits for it, a while. */
+    fun typing(now: Boolean) {
+        conversationId.value?.let { c.chat.typing(it, now) }
+    }
+
     /** False when nothing went out: the text and pictures stay where they are. */
     fun send(text: String): Boolean {
         val id = conversationId.value ?: return false
-        if (!c.chat.send(id, text, attachments.toList())) return false
+        if (!c.chat.send(id, text, attachments.toList(), quoting)) return false
         attachments.clear()
+        quoting = null
         return true
     }
 
     override fun onCleared() {
+        conversationId.value?.let { c.chat.typing(it, false) }
         // Picked but never sent: nothing will ever point at these files.
         val unsent = attachments.map { it.file }
         if (unsent.isNotEmpty()) c.appScope.launch { c.images.delete(unsent) }
@@ -164,13 +190,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun delete(messageId: Long) = c.chat.deleteMessage(messageId)
 
-    /** Sends a recording. One that can't go now (a reply is under way) is thrown away, and false. */
+    /** Sends a recording, with the quote waiting if there is one. Without a conversation it is thrown away, and false. */
     fun sendVoice(clip: MessageAudio): Boolean {
         val id = state.value.conversationId
-        if (id == null || !c.chat.sendVoice(id, clip)) {
+        if (id == null) {
             c.images.delete(listOf(clip.file))
             return false
         }
+        c.chat.sendVoice(id, clip, quoting)
+        quoting = null
         return true
     }
 

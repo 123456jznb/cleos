@@ -2,6 +2,8 @@ package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageQuote
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.serialization.json.buildJsonObject
@@ -39,6 +41,9 @@ object Prompt {
      */
     const val MAX_IMAGES = 4
 
+    /** How much of a quoted message the model is shown: enough to know which one it is. */
+    private const val QUOTE_SHOWN = 100
+
     /**
      * What changes as the conversation goes on comes last: what the TA remembers, which
      * changes whenever they remember something, then the [recap], which changes every so many
@@ -70,6 +75,7 @@ object Prompt {
     private fun toolRule(tools: Set<ToolGroup>, outside: List<McpTool> = emptyList()): String? = buildList {
         if (ToolGroup.Messages in tools) {
             add("想分成几条消息说的时候，用 send_message 一条一条发：一条只说一件事，要发几条就在同一次回复里调用几次。只说一句就直接回复。用 send_message 发过的话，别再在回复里写一遍，也别说「发好了」。")
+            add("对方连着发了几条、你想一条条回的时候，send_message 可以带 quote（照抄你在回的那句里的几个字），对方就知道这条回的是哪句；回到前面说过的某句时也可以。平常一问一答不要引用。")
         }
         if (ToolGroup.Todos in tools) {
             add("对方让你记下、修改、完成或查看待办时，用工具去做，做完再告诉对方；没有调用工具，就不要说已经做好了。")
@@ -170,7 +176,7 @@ object Prompt {
         while (i < list.size) {
             var j = i
             while (j < list.size && list[j].second.said()) j++
-            if (j == i || (j - i == 1 && !list[i].second.spoken)) {
+            if (j == i || (j - i == 1 && !list[i].second.spoken && list[i].second.quoted == null)) {
                 val m = list[i].second
                 out += if (m.spoken) m.copy(content = "（语音）${m.content}") else m
                 i++
@@ -178,7 +184,11 @@ object Prompt {
             }
             val calls = list.subList(i, j).map { (id, m) ->
                 val name = if (m.spoken) ToolSpecs.sendVoice.name else ToolSpecs.sendMessage.name
-                ToolCall("send_$id", name, buildJsonObject { put("text", m.content) }.toString())
+                val args = buildJsonObject {
+                    put("text", m.content)
+                    m.quoted?.let { put("quote", it.replace('\n', ' ').take(QUOTE_SHOWN)) }
+                }
+                ToolCall("send_$id", name, args.toString())
             }
             out += ApiMessage("assistant", "", calls)
             calls.forEach { out += ApiMessage("tool", ToolSpecs.SENT, toolCallId = it.id) }
@@ -210,14 +220,26 @@ object Prompt {
         // A voice message goes as what it said; one not turned into text says nothing yet.
         val said = if (audio != null && content.isNotBlank()) "（语音）$content" else content
         val count = MessageImages.decode(images).size
-        if (count == 0) return said
-        val ids = (1..count).joinToString(" ") { "#$id-$it" }
-        val line = when {
-            attached -> "（附图 $ids）"
-            !canSee -> "（发了 $count 张图 $ids，你这边看不到图片）"
-            else -> "（早先发的 $count 张图 $ids，这里没再附上）"
+        val body = if (count == 0) {
+            said
+        } else {
+            val ids = (1..count).joinToString(" ") { "#$id-$it" }
+            val line = when {
+                attached -> "（附图 $ids）"
+                !canSee -> "（发了 $count 张图 $ids，你这边看不到图片）"
+                else -> "（早先发的 $count 张图 $ids，这里没再附上）"
+            }
+            if (said.isBlank()) line else "$line\n$said"
         }
-        return if (said.isBlank()) line else "$line\n$said"
+        // The message it answers goes first, when it answers one (and says something itself).
+        val quote = MessageQuotes.decode(quote)?.takeIf { body.isNotBlank() } ?: return body
+        return quoteLine(quote) + "\n" + body
+    }
+
+    /** How the model is told which message the person is answering. */
+    private fun quoteLine(q: MessageQuote): String {
+        val words = q.text.replace('\n', ' ').take(QUOTE_SHOWN)
+        return if (q.role == "assistant") "（回复你说的：「$words」）" else "（接着自己说的：「$words」）"
     }
 
     private fun MessageEntity.toApi(withTools: Boolean, canSee: Boolean, attached: Set<Long>): ApiMessage? = when (role) {
@@ -233,7 +255,7 @@ object Prompt {
                 // A half reply ending mid-sentence invites the model to continue it.
                 error != null -> null
                 calls.isNotEmpty() -> ApiMessage("assistant", content, calls, reasoning = reasoning)
-                content.isNotBlank() -> ApiMessage("assistant", content, spoken = audio != null)
+                content.isNotBlank() -> ApiMessage("assistant", content, spoken = audio != null, quoted = MessageQuotes.decode(quote)?.text)
                 else -> null
             }
         }

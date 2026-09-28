@@ -7,6 +7,7 @@ import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -94,6 +95,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -104,11 +107,13 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -127,6 +132,8 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageQuote
+import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.glass.Backdrop
@@ -265,6 +272,8 @@ fun ChatTab(
     var voiceHint by remember { mutableStateOf<String?>(null) }
     var askVoiceSetup by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf<String?>(null) }
+    // Counts what the person sends: sending takes the chat down to the newest, wherever it was.
+    var sentCount by remember { mutableIntStateOf(0) }
     val player = remember { arrayOfNulls<MediaPlayer>(1) }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         voiceHint = if (granted) "可以了，再按住说话" else "要给 Cleos 用话筒的权限，才能发语音"
@@ -326,7 +335,8 @@ fun ChatTab(
         val clip = recorder.stop()
         when {
             clip == null -> voiceHint = "说话时间太短了"
-            !vm.sendVoice(clip) -> voiceHint = "${state.aiName.ifBlank { "TA" }}还在回，等一下再说"
+            !vm.sendVoice(clip) -> voiceHint = "没发出去，再试一次"
+            else -> sentCount++
         }
     }
 
@@ -350,6 +360,8 @@ fun ChatTab(
         onDispose {
             stopPlaying()
             recorder.cancel()
+            // Off to another screen: nothing is being typed here any more.
+            vm.typing(false)
         }
     }
     val palette = LocalGlassPalette.current
@@ -377,6 +389,42 @@ fun ChatTab(
     // Follow new messages, unless the user has scrolled up to read something older.
     LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty(), state.streaming?.activity) {
         if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+    }
+    // Their own message is always followed down to, like in any chat.
+    LaunchedEffect(sentCount) {
+        if (sentCount > 0) listState.animateScrollToItem(0)
+    }
+    // Something in the box: the TA waits for it before answering.
+    LaunchedEffect(input.isNotBlank()) { vm.typing(input.isNotBlank()) }
+
+    val scope = rememberCoroutineScope()
+    val inputFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    // The message a quote was tapped to find, lit up for a moment.
+    var flashed by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(flashed) {
+        if (flashed != null) {
+            delay(1400)
+            flashed = null
+        }
+    }
+
+    fun quoteLabel(q: MessageQuote): String {
+        val who = if (q.role == "user") state.userName.ifBlank { "我" } else state.aiName.ifBlank { "TA" }
+        return "$who：${q.text}"
+    }
+
+    /** Scrolls to the message a quote is of; one no longer in the chat is said to be gone. */
+    fun jumpTo(id: Long) {
+        val index = rows.indexOfFirst { it is ChatRow.Message && it.message.id == id }
+        if (index < 0) {
+            voiceHint = "原消息已经不在了"
+            return
+        }
+        // The live reply, while there is one, is the list's first item.
+        val at = index + if (state.streaming != null) 1 else 0
+        scope.launch { listState.animateScrollToItem(at) }
+        flashed = id
     }
 
     GlassPage(
@@ -425,8 +473,16 @@ fun ChatTab(
                 attaching = vm.attaching,
                 onPick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onRemove = vm::detach,
+                quote = vm.quoting?.let { quoteLabel(it) },
+                onDropQuote = vm::unquote,
+                focus = inputFocus,
                 busy = state.replying,
-                onSend = { if (vm.send(input)) input = "" },
+                onSend = {
+                    if (vm.send(input)) {
+                        input = ""
+                        sentCount++
+                    }
+                },
                 onStop = vm::stop,
                 recording = recording,
                 onVoiceStart = { startVoice() },
@@ -493,18 +549,29 @@ fun ChatTab(
                                     val thought = remember(m.thought) { MessageThoughts.decode(m.thought) }
                                     if (thought != null) ThoughtLine(thought.text, thought.ms, key = m.id)
                                 }
-                                else -> MessageBubble(
-                                    message = m,
-                                    showFace = row.showFace,
-                                    canRetry = row.isLast && !state.replying,
-                                    onRetry = { vm.retry(m.id) },
-                                    onDelete = { vm.delete(m.id) },
-                                    onOpenImage = onOpenImage,
-                                    transcribing = m.id in state.transcribing,
-                                    playingFile = playing,
-                                    onPlay = { play(it) },
-                                    onRetryVoice = { vm.retryVoice(m.id) },
-                                )
+                                else -> {
+                                    val quote = remember(m.quote) { MessageQuotes.decode(m.quote) }
+                                    MessageBubble(
+                                        message = m,
+                                        showFace = row.showFace,
+                                        canRetry = row.isLast && !state.replying,
+                                        onRetry = { vm.retry(m.id) },
+                                        onDelete = { vm.delete(m.id) },
+                                        onOpenImage = onOpenImage,
+                                        transcribing = m.id in state.transcribing,
+                                        playingFile = playing,
+                                        onPlay = { play(it) },
+                                        onRetryVoice = { vm.retryVoice(m.id) },
+                                        quote = quote?.let { quoteLabel(it) },
+                                        onOpenQuote = { quote?.let { jumpTo(it.id) } },
+                                        onQuote = {
+                                            vm.quote(m)
+                                            inputFocus.requestFocus()
+                                            keyboard?.show()
+                                        },
+                                        highlighted = m.id == flashed,
+                                    )
+                                }
                             }
                         }
                     }
@@ -636,9 +703,14 @@ private fun MessageBubble(
     playingFile: String? = null,
     onPlay: (String) -> Unit = {},
     onRetryVoice: () -> Unit = {},
+    quote: String? = null,
+    onOpenQuote: () -> Unit = {},
+    onQuote: () -> Unit = {},
+    highlighted: Boolean = false,
 ) {
     val palette = LocalGlassPalette.current
     val mine = message.role == "user"
+    val glow by animateColorAsState(if (highlighted) palette.accent.copy(alpha = 0.14f) else Color.Transparent, label = "found")
     val audio = remember(message.audio) { MessageAudios.decode(message.audio) }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
@@ -647,7 +719,10 @@ private fun MessageBubble(
     val pictures = remember(message.images) { MessageImages.decode(message.images) }
     val thought = remember(message.thought) { MessageThoughts.decode(message.thought) }
 
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+    Row(
+        Modifier.fillMaxWidth().background(glow, RoundedCornerShape(18.dp)),
+        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+    ) {
         // Without its face, the bubble still keeps the face's room: a run lines up.
         if (faces != null && !mine) {
             if (showFace) {
@@ -700,12 +775,20 @@ private fun MessageBubble(
                             )
                         }
                     }
+                    // The message this one answers, under it like in WeChat; a tap finds it.
+                    if (quote != null) QuoteBox(quote, onOpenQuote)
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     if (message.content.isNotEmpty()) {
                         DropdownMenuItem(text = { Text("复制") }, onClick = {
                             menu = false
                             scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
+                        })
+                    }
+                    if (message.error == null && MessageQuotes.of(message) != null) {
+                        DropdownMenuItem(text = { Text("引用") }, onClick = {
+                            menu = false
+                            onQuote()
                         })
                     }
                     if (audio != null && message.content.isBlank() && !transcribing) {
@@ -1035,6 +1118,29 @@ private fun ThoughtBlock(text: String, ms: Long?, key: Any) {
     }
 }
 
+/** The message a bubble answers: who said it and what, in a grey box under the bubble. */
+@Composable
+private fun QuoteBox(label: String, onOpen: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    GlassSurface(
+        modifier = Modifier
+            .widthIn(max = bubbleMaxWidth())
+            .clickable(interactionSource = null, indication = null, onClick = onOpen),
+        style = palette.notice,
+        shape = GlassShape.Rounded(10.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Text(
+            label.replace('\n', ' '),
+            color = palette.contentSecondary,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /** A thought on a line of its own: before the tools the TA used, or while it is still thinking. */
 @Composable
 private fun ThoughtLine(text: String, ms: Long?, key: Any) {
@@ -1205,10 +1311,11 @@ private fun TypingDots() {
 }
 
 /**
- * One piece of glass holds everything: the picture button, the text, and send (stop while
- * a reply is being written). Pictures waiting to go sit above the text, inside the same
- * glass. A round send button beside the field would be a second glass pane, rendered
- * offscreen on every frame, for one button.
+ * One piece of glass holds everything: the picture button, the text, and send. While a
+ * reply is being written, an empty box offers stop instead; with something typed it is
+ * still send, since the person can go on talking. The message being quoted and pictures
+ * waiting to go sit above the text, inside the same glass. A round send button beside the
+ * field would be a second glass pane, rendered offscreen on every frame, for one button.
  */
 @Composable
 private fun ChatInputBar(
@@ -1219,6 +1326,9 @@ private fun ChatInputBar(
     attaching: Boolean,
     onPick: () -> Unit,
     onRemove: (MessageImage) -> Unit,
+    quote: String?,
+    onDropQuote: () -> Unit,
+    focus: FocusRequester,
     busy: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -1238,6 +1348,34 @@ private fun ChatInputBar(
             .heightIn(min = BarHeight)
             .liquidGlass(backdrop, palette.input, GlassShape.Rounded(BarHeight / 2)),
     ) {
+        if (quote != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 8.dp)
+                    .background(palette.content.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+                    .padding(start = 10.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    quote,
+                    color = palette.contentSecondary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onDropQuote),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "不引用了", tint = palette.contentSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
         if (attachments.isNotEmpty() || attaching) {
             Row(
                 Modifier
@@ -1261,7 +1399,7 @@ private fun ChatInputBar(
                     Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .clickable(enabled = !busy && attachments.size < MAX_ATTACHMENTS, onClick = onPick),
+                        .clickable(enabled = attachments.size < MAX_ATTACHMENTS, onClick = onPick),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = "发图片", tint = palette.contentSecondary, modifier = Modifier.size(24.dp))
@@ -1285,13 +1423,16 @@ private fun ChatInputBar(
                     maxLines = 6,
                     // The placeholder above is drawn beside the field, so a screen reader
                     // would otherwise announce an unnamed text box.
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "输入消息" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focus)
+                        .semantics { contentDescription = "输入消息" },
                 )
             }
             Box(Modifier.size(BarHeight), contentAlignment = Alignment.Center) {
                 // Plain fills inside the glass, like the chips on a card: glass in glass reads as a hole.
                 val button = Modifier.size(38.dp).clip(CircleShape)
-                if (busy) {
+                if (busy && !canSend) {
                     Box(
                         button.background(palette.content.copy(alpha = 0.1f)).clickable(onClick = onStop),
                         contentAlignment = Alignment.Center,
