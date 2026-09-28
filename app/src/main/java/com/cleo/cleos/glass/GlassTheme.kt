@@ -113,7 +113,7 @@ object GlassPalettes {
         // The user's own bubbles take the bubble tuning, in the colour they picked or else the
         // accent (see [mine]).
         val mineBase = tuning[GlassPart.Bubble]?.applyTo(b.accentSurface, dark) ?: b.accentSurface
-        val (mineStyle, mineInk) = mineFor(mineBase, mine ?: b.accent, trough, peak)
+        val (mineStyle, mineInk) = mineFor(mineBase, mine ?: b.accent, trough, peak, least = mine?.let(::pickedTint) ?: 0f)
         val topBar = parts.getValue(GlassPart.TopBar)
         val title = topBar.copy(tint = topBar.tint.copy(alpha = maxOf(topBar.tint.alpha, floored.bar.tint.alpha)))
         return floored.copy(
@@ -128,23 +128,41 @@ object GlassPalettes {
 
     /** The user's bubbles in [color], and the text on them, as [p] would draw them: for trying a colour out. */
     fun mine(p: GlassPalette, color: Color): Pair<GlassStyle, Color> =
-        mineFor(p.mineBase ?: p.accentSurface, color, p.troughLum, p.peakLum)
+        mineFor(p.mineBase ?: p.accentSurface, color, p.troughLum, p.peakLum, pickedTint(color))
+
+    /**
+     * How much of the glass a colour the user picked covers at least. The bubble tuning is shared
+     * with the other side's bubbles and can be tuned almost clear. The contrast floor then raises a
+     * deep colour (white text needs it) but not a light one, since dark text reads on clear glass as
+     * it is: picking yellow looked the same as picking nothing.
+     */
+    const val PICKED_TINT = 0.8f
+
+    /**
+     * OKLab chroma from which a colour counts as one. Below it [PICKED_TINT] fades out: white, grey
+     * and black have no hue to lose and keep the glass as clear as it was tuned, and the chroma
+     * slider starting from grey has no step in it.
+     */
+    private const val GREY_CHROMA = 0.05f
+
+    private fun pickedTint(color: Color): Float =
+        PICKED_TINT * (Oklab.fromSrgb(color.red, color.green, color.blue).chroma / GREY_CHROMA).coerceIn(0f, 1f)
 
     /** Text on a bubble of that colour on light glass: whichever reads better of the two. */
     private val INK = Color(0xFF1C1A22)
 
     /**
-     * The same glass in [color], with white text on it or dark: whichever contrasts more. What
-     * threatens white text is the wallpaper's brightest patch, dark text its darkest; the tint
-     * is raised until the text clears 4.5:1 over it. With no wallpaper information, the worst
-     * case: white, or black.
+     * The same glass in [color], tinted at least [least], with white text on it or dark: whichever
+     * contrasts more. What threatens white text is the wallpaper's brightest patch, dark text its
+     * darkest; the tint is raised until the text clears 4.5:1 over it. With no wallpaper
+     * information, the worst case: white, or black.
      */
-    private fun mineFor(base: GlassStyle, color: Color, trough: Float?, peak: Float?): Pair<GlassStyle, Color> {
+    private fun mineFor(base: GlassStyle, color: Color, trough: Float?, peak: Float?, least: Float): Pair<GlassStyle, Color> {
         val l = Oklab.luminance(color.red, color.green, color.blue)
         val inkL = Oklab.luminance(INK.red, INK.green, INK.blue)
         val white = 1.05f / (l + 0.05f) >= (l + 0.05f) / (inkL + 0.05f)
         val ink = if (white) Color.White else INK
-        val tinted = base.copy(tint = color.copy(alpha = base.tint.alpha))
+        val tinted = base.copy(tint = color.copy(alpha = maxOf(base.tint.alpha, least)))
         return raiseFor(tinted, if (white) peak ?: 1f else trough ?: 0f, ink, 4.5f) to ink
     }
 

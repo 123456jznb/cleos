@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassMotion
 import com.cleo.cleos.glass.GlassPalette
+import com.cleo.cleos.glass.GlassPalettes
 import com.cleo.cleos.glass.GlassPart
 import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassStyle
@@ -194,7 +195,9 @@ fun GlassLabScreen(onBack: () -> Unit) {
                     shown.tint.alpha > editing.tint.alpha + 0.005f ->
                         "上面有字，在现在的壁纸上太透会看不清：着色会补到 %.2f。".format(shown.tint.alpha)
                     current == GlassPart.TopBar -> "标题那个胶囊不会比默认更透，按钮照你调的。"
-                    current == GlassPart.Bubble -> "你自己发的气泡用强调色，白字，着色同样会补到看得清为止。"
+                    current == GlassPart.Bubble ->
+                        "你自己发的气泡也是这块玻璃，染强调色或你在设置里挑的颜色。着色同样会补到字看得清；挑了颜色的至少补到 %.2f，免得颜色透没了。"
+                            .format(GlassPalettes.PICKED_TINT)
                     else -> null
                 }
                 if (note != null) Text(note, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)

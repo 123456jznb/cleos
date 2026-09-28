@@ -94,4 +94,21 @@ class GlassPaletteTest {
         // Trying a colour out gives what building with it would.
         assertEquals(light.bubbleMine to light.mineContent, GlassPalettes.mine(GlassPalettes.build(dark = false, trough = 0.02f, peak = 0.9f), Color(0xFFFFE08A)))
     }
+
+    @Test
+    fun aPickedColourShowsOnBubblesTunedAlmostClear() {
+        // Bubbles tuned almost clear, over a light wallpaper: dark text reads on a light or
+        // mid colour without any help from the contrast floor, so nothing else makes it show.
+        val clear = mapOf(GlassPart.Bubble to GlassTuning.of(GlassPalettes.build(dark = false).surface).copy(tintAlpha = 0.15f))
+        fun tint(dark: Boolean, trough: Float, peak: Float, mine: Long?) =
+            GlassPalettes.build(dark, trough = trough, peak = peak, tuning = clear, mine = mine?.let { Color(it) }).bubbleMine.tint.alpha
+        for (c in listOf(0xFFFFE08A, 0xFFFFB38A, 0xFFB8D8FF, 0xFF95EC69, 0xFF3E7BFA, 0xFF1F9E99, 0xFFD9467A)) {
+            val a = tint(dark = false, trough = 0.3f, peak = 0.9f, mine = c)
+            assertTrue("${c.toString(16)} tint $a", a >= GlassPalettes.PICKED_TINT - 0.01f)
+        }
+        // White has no hue to lose: the glass stays as clear as it was tuned.
+        assertEquals(0.15f, tint(dark = false, trough = 0.3f, peak = 0.9f, mine = 0xFFF4F4F6), 0.01f)
+        // Nothing picked: the accent keeps the tuned clarity wherever its white text reads anyway.
+        assertEquals(0.15f, tint(dark = true, trough = 0.01f, peak = 0.05f, mine = null), 0.01f)
+    }
 }
