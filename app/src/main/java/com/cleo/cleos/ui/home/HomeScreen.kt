@@ -241,35 +241,15 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
                 shape = GlassShape.Rounded(24.dp),
                 contentPadding = PaddingValues(16.dp),
             ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .toggleable(
-                            value = s.chatAvatars,
-                            interactionSource = null,
-                            indication = null,
-                            role = Role.Switch,
-                            onValueChange = { on -> c.appScope.launch { c.settings.update { it.copy(chatAvatars = on) } } },
-                        ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("聊天里显示头像", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                        Text("每条消息旁边放上各自的头像", color = palette.contentSecondary, fontSize = 12.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    AvatarSwitch("聊天里显示头像", "消息旁边放上各自的头像", s.chatAvatars) { on ->
+                        c.appScope.launch { c.settings.update { it.copy(chatAvatars = on) } }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(
-                        checked = s.chatAvatars,
-                        onCheckedChange = null,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = palette.accent,
-                            checkedBorderColor = palette.accent,
-                            uncheckedThumbColor = palette.contentSecondary,
-                            uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
-                            uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
-                        ),
-                    )
+                    if (s.chatAvatars) {
+                        AvatarSwitch("每条都显示", "像微信那样每条消息都带头像；关着时，连着的几条只在最后一条旁边放一个", s.avatarEachMessage) { on ->
+                            c.appScope.launch { c.settings.update { it.copy(avatarEachMessage = on) } }
+                        }
+                    }
                 }
             }
         }
@@ -336,6 +316,36 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
 }
 
 /** What this TA keeps in mind, in one line; the page behind it lists and edits it. */
+/** One of the avatar switches: a whole row to tap, title and a line under it. */
+@Composable
+private fun AvatarSwitch(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val palette = LocalGlassPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, interactionSource = null, indication = null, role = Role.Switch, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(hint, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = palette.accent,
+                checkedBorderColor = palette.accent,
+                uncheckedThumbColor = palette.contentSecondary,
+                uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
+                uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
+            ),
+        )
+    }
+}
+
 @Composable
 private fun MemoryCard(ai: String, count: Int, onOpen: () -> Unit) {
     val palette = LocalGlassPalette.current

@@ -46,6 +46,7 @@ data class ChatUiState(
     val aiAvatarEmoji: String? = null,
     val userAvatar: String? = null,
     val chatAvatars: Boolean = false,
+    val avatarEachMessage: Boolean = false,
     val model: String = "",
     /** What the TA keeps of the messages no longer sent verbatim. */
     val recap: String? = null,
@@ -115,6 +116,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 aiAvatarEmoji = ta.avatarEmoji,
                 userAvatar = s.userAvatar,
                 chatAvatars = s.chatAvatars,
+                avatarEachMessage = s.avatarEachMessage,
                 model = ta.apiModel,
                 recap = conversation?.recap,
                 recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },

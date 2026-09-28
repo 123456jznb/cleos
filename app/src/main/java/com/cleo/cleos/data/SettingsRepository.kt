@@ -60,6 +60,8 @@ data class AppSettings(
     val userAvatar: String? = null,
     /** Avatars beside the bubbles in the chat. */
     val chatAvatars: Boolean = true,
+    /** Beside every bubble, the way WeChat does; otherwise once for several in a row from one side. */
+    val avatarEachMessage: Boolean = false,
     /** When a letter's reply should come, as picked the last time one was sent. */
     val letterReply: ReplyWhen = ReplyWhen.Hours,
     /** The least time, in days, between two letters a TA writes of their own. */
@@ -136,6 +138,7 @@ class SettingsRepository(private val context: Context) {
         val weatherCity = stringPreferencesKey("weather_city")
         val userAvatar = stringPreferencesKey("user_avatar")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
+        val avatarEachMessage = booleanPreferencesKey("avatar_each_message")
         val letterReply = stringPreferencesKey("letter_reply")
         val letterEveryDays = intPreferencesKey("letter_every_days")
         val voiceBaseUrl = stringPreferencesKey("voice_base_url")
@@ -175,6 +178,7 @@ class SettingsRepository(private val context: Context) {
             weatherCity = this[Keys.weatherCity] ?: d.weatherCity,
             userAvatar = this[Keys.userAvatar],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
+            avatarEachMessage = this[Keys.avatarEachMessage] ?: d.avatarEachMessage,
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
             voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
@@ -210,6 +214,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.weatherCity] = next.weatherCity
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
             prefs[Keys.chatAvatars] = next.chatAvatars
+            prefs[Keys.avatarEachMessage] = next.avatarEachMessage
             prefs[Keys.letterReply] = next.letterReply.key
             prefs[Keys.letterEveryDays] = next.letterEveryDays
             prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl

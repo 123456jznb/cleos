@@ -222,10 +222,11 @@ private fun MessageEntity.foldedBy(until: Pair<Long, Long>) = createdAt < until.
 /**
  * Newest first, because the list is laid out bottom-up. Several messages in a row from one
  * side show the avatar once, beside the newest, the way chat apps stack them; a line or a
- * time between them starts a new run. With a recap, its mark goes between the last message
- * folded into it and the first one after.
+ * time between them starts a new run. With [eachFace], every message shows it, the way
+ * WeChat does. With a recap, its mark goes between the last message folded into it and the
+ * first one after.
  */
-private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long>? = null): List<ChatRow> {
+private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long>? = null, eachFace: Boolean = false): List<ChatRow> {
     val rows = ArrayList<ChatRow>(messages.size + 8)
     var newerSide: Boolean? = null
     var marked = false
@@ -238,7 +239,7 @@ private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long
         }
         if (m.silent()) continue
         val side = m.side()
-        rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = side == null || side != newerSide)
+        rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = eachFace || side == null || side != newerSide)
         newerSide = side
         val prev = messages.getOrNull(i - 1)
         if (prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS) {
@@ -376,7 +377,9 @@ fun ChatTab(
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
     val inputBottom = if (imeBottom > bottomInset) imeBottom + 8.dp else bottomInset
-    val rows = remember(state.messages, state.recapUntil) { buildRows(state.messages, state.recapUntil) }
+    val rows = remember(state.messages, state.recapUntil, state.avatarEachMessage) {
+        buildRows(state.messages, state.recapUntil, eachFace = state.avatarEachMessage)
+    }
     val faces = if (!state.chatAvatars) {
         null
     } else {
