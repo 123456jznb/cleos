@@ -789,7 +789,7 @@ private fun MessageBubble(
                         ) {
                             Text(
                                 message.content,
-                                color = if (mine) Color.White else palette.content,
+                                color = if (mine) palette.mineContent else palette.content,
                                 fontSize = 16.sp,
                                 lineHeight = 23.sp,
                             )
@@ -898,7 +898,7 @@ private fun VoiceBubble(
     onLongClick: () -> Unit,
 ) {
     val palette = LocalGlassPalette.current
-    val ink = if (mine) Color.White else palette.content
+    val ink = if (mine) palette.mineContent else palette.content
     val length = 92.dp + 150.dp * (audio.ms.toFloat() / Voice.MAX_MS).coerceIn(0f, 1f)
     GlassSurface(
         modifier = Modifier

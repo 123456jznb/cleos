@@ -53,6 +53,10 @@ data class GlassPalette(
     /** Each part's untuned default: where the glass lab starts and what "reset" returns to. */
     val partDefaults: Map<GlassPart, GlassStyle> = emptyMap(),
     val bubbleMineStyle: GlassStyle? = null,
+    /** Text on the user's own bubbles: white, or dark on a light colour they picked. */
+    val mineContent: Color = Color.White,
+    /** The user's bubbles before any colour and contrast floor: what a colour being picked is tried on. */
+    val mineBase: GlassStyle? = null,
     val topBarTitleStyle: GlassStyle? = null,
     /** Luminance of the wallpaper's darkest / brightest patch, when known. */
     val troughLum: Float? = null,
@@ -81,6 +85,7 @@ object GlassPalettes {
     /**
      * [trough]/[peak]: luminance of the wallpaper's darkest / brightest patch.
      * [tuning]: what the user saved in the glass lab, per part.
+     * [mine]: the colour the user picked for their own bubbles; null follows the wallpaper.
      */
     fun build(
         dark: Boolean,
@@ -89,6 +94,7 @@ object GlassPalettes {
         trough: Float? = null,
         peak: Float? = null,
         tuning: Map<GlassPart, GlassTuning> = emptyMap(),
+        mine: Color? = null,
     ): GlassPalette {
         val b = base(dark, hue, chromaScale).copy(troughLum = trough, peakLum = peak)
         val worst = b.worstLum
@@ -104,19 +110,42 @@ object GlassPalettes {
         val parts = defaults.mapValues { (part, style) ->
             floor(floored, part, tuning[part]?.applyTo(style, dark) ?: style)
         }
-        // The user's own bubbles take the bubble tuning in the accent colour. Their text
-        // is white, so what threatens it is the brightest patch, on light and dark glass
-        // alike; with no wallpaper information, assume white.
-        val mineTuned = tuning[GlassPart.Bubble]?.applyTo(b.accentSurface, dark) ?: b.accentSurface
-        val mine = raiseFor(mineTuned, peak ?: 1f, Color.White, 4.5f)
+        // The user's own bubbles take the bubble tuning, in the colour they picked or else the
+        // accent (see [mine]).
+        val mineBase = tuning[GlassPart.Bubble]?.applyTo(b.accentSurface, dark) ?: b.accentSurface
+        val (mineStyle, mineInk) = mineFor(mineBase, mine ?: b.accent, trough, peak)
         val topBar = parts.getValue(GlassPart.TopBar)
         val title = topBar.copy(tint = topBar.tint.copy(alpha = maxOf(topBar.tint.alpha, floored.bar.tint.alpha)))
         return floored.copy(
             parts = parts,
             partDefaults = defaults,
-            bubbleMineStyle = mine,
+            bubbleMineStyle = mineStyle,
+            mineContent = mineInk,
+            mineBase = mineBase,
             topBarTitleStyle = title,
         )
+    }
+
+    /** The user's bubbles in [color], and the text on them, as [p] would draw them: for trying a colour out. */
+    fun mine(p: GlassPalette, color: Color): Pair<GlassStyle, Color> =
+        mineFor(p.mineBase ?: p.accentSurface, color, p.troughLum, p.peakLum)
+
+    /** Text on a bubble of that colour on light glass: whichever reads better of the two. */
+    private val INK = Color(0xFF1C1A22)
+
+    /**
+     * The same glass in [color], with white text on it or dark: whichever contrasts more. What
+     * threatens white text is the wallpaper's brightest patch, dark text its darkest; the tint
+     * is raised until the text clears 4.5:1 over it. With no wallpaper information, the worst
+     * case: white, or black.
+     */
+    private fun mineFor(base: GlassStyle, color: Color, trough: Float?, peak: Float?): Pair<GlassStyle, Color> {
+        val l = Oklab.luminance(color.red, color.green, color.blue)
+        val inkL = Oklab.luminance(INK.red, INK.green, INK.blue)
+        val white = 1.05f / (l + 0.05f) >= (l + 0.05f) / (inkL + 0.05f)
+        val ink = if (white) Color.White else INK
+        val tinted = base.copy(tint = color.copy(alpha = base.tint.alpha))
+        return raiseFor(tinted, if (white) peak ?: 1f else trough ?: 0f, ink, 4.5f) to ink
     }
 
     private val GlassPalette.worstLum: Float? get() = if (dark) peakLum else troughLum

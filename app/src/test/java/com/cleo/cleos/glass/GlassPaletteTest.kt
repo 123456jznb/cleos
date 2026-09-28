@@ -74,4 +74,24 @@ class GlassPaletteTest {
             assertTrue("dark=$dark contrast $c", c >= 4.5f)
         }
     }
+
+    @Test
+    fun aBubbleColourPickedGetsTheTextThatReadsOnIt() {
+        // A light colour: dark text, readable over the darkest patch behind the glass.
+        val light = GlassPalettes.build(dark = false, trough = 0.02f, peak = 0.9f, mine = Color(0xFFFFE08A))
+        assertTrue(light.mineContent != Color.White)
+        assertTrue(contrast(light.mineContent, over(light.bubbleMine.tint, 0.02f)) >= 4.5f - 0.01f)
+        // A deep one: white text, readable over the brightest patch.
+        val deep = GlassPalettes.build(dark = true, trough = 0.02f, peak = 0.9f, mine = Color(0xFF2F7D5B))
+        assertEquals(Color.White, deep.mineContent)
+        assertTrue(contrast(Color.White, over(deep.bubbleMine.tint, 0.9f)) >= 4.5f - 0.01f)
+        // It is still the colour picked, and glass: only the tint changed.
+        assertEquals(Color(0xFF2F7D5B).copy(alpha = deep.bubbleMine.tint.alpha), deep.bubbleMine.tint)
+        assertEquals(deep.accentSurface.blur, deep.bubbleMine.blur)
+        // None picked: the accent, with white text, as before.
+        val auto = GlassPalettes.build(dark = false, peak = 0.9f)
+        assertEquals(Color.White, auto.mineContent)
+        // Trying a colour out gives what building with it would.
+        assertEquals(light.bubbleMine to light.mineContent, GlassPalettes.mine(GlassPalettes.build(dark = false, trough = 0.02f, peak = 0.9f), Color(0xFFFFE08A)))
+    }
 }

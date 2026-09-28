@@ -490,6 +490,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     Chip("浅色", selected = settings.glassMode == GlassMode.Light) { vm.setGlassMode(GlassMode.Light) }
                     Chip("深色", selected = settings.glassMode == GlassMode.Dark) { vm.setGlassMode(GlassMode.Dark) }
                 }
+                MyBubbleColor(settings.myBubble, vm::setMyBubble)
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -817,7 +818,7 @@ private fun Field(
  * see the wallpaper, so a glass chip here would look like a hole cut through the card.
  */
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+internal fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     val palette = LocalGlassPalette.current
     Box(
         Modifier

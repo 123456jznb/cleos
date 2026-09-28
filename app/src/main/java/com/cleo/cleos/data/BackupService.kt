@@ -56,6 +56,7 @@ data class BackupSettings(
     val aiAvatarEmoji: String? = null,
     val chatAvatars: Boolean = true,
     val avatarEachMessage: Boolean = false,
+    val myBubble: Int? = null,
     val knownSince: Long? = null,
     /** Absent from backups made before these could be set: the defaults then. */
     val letterReply: String? = null,
@@ -196,6 +197,7 @@ class BackupService(
                 aiAvatarEmoji = lead?.avatarEmoji,
                 chatAvatars = s.chatAvatars,
                 avatarEachMessage = s.avatarEachMessage,
+                myBubble = s.myBubble,
                 letterReply = s.letterReply.key,
                 letterEveryDays = s.letterEveryDays,
                 voiceBaseUrl = s.voiceBaseUrl,
@@ -339,6 +341,7 @@ class BackupService(
                     userAvatar = picture(bs.userAvatar),
                     chatAvatars = bs.chatAvatars,
                     avatarEachMessage = bs.avatarEachMessage,
+                    myBubble = bs.myBubble,
                     letterReply = ReplyWhen.of(bs.letterReply),
                     letterEveryDays = bs.letterEveryDays,
                     voiceBaseUrl = bs.voiceBaseUrl,

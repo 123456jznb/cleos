@@ -62,6 +62,8 @@ data class AppSettings(
     val chatAvatars: Boolean = true,
     /** Beside every bubble, the way WeChat does; otherwise once for several in a row from one side. */
     val avatarEachMessage: Boolean = false,
+    /** The colour of the person's own bubbles (ARGB), still glass; null follows the wallpaper. */
+    val myBubble: Int? = null,
     /** When a letter's reply should come, as picked the last time one was sent. */
     val letterReply: ReplyWhen = ReplyWhen.Hours,
     /** The least time, in days, between two letters a TA writes of their own. */
@@ -139,6 +141,7 @@ class SettingsRepository(private val context: Context) {
         val userAvatar = stringPreferencesKey("user_avatar")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val avatarEachMessage = booleanPreferencesKey("avatar_each_message")
+        val myBubble = intPreferencesKey("my_bubble")
         val letterReply = stringPreferencesKey("letter_reply")
         val letterEveryDays = intPreferencesKey("letter_every_days")
         val voiceBaseUrl = stringPreferencesKey("voice_base_url")
@@ -179,6 +182,7 @@ class SettingsRepository(private val context: Context) {
             userAvatar = this[Keys.userAvatar],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             avatarEachMessage = this[Keys.avatarEachMessage] ?: d.avatarEachMessage,
+            myBubble = this[Keys.myBubble],
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
             voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
@@ -215,6 +219,7 @@ class SettingsRepository(private val context: Context) {
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
             prefs[Keys.chatAvatars] = next.chatAvatars
             prefs[Keys.avatarEachMessage] = next.avatarEachMessage
+            if (next.myBubble != null) prefs[Keys.myBubble] = next.myBubble else prefs.remove(Keys.myBubble)
             prefs[Keys.letterReply] = next.letterReply.key
             prefs[Keys.letterEveryDays] = next.letterEveryDays
             prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl

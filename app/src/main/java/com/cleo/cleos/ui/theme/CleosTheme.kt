@@ -64,8 +64,9 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
     val defaultTone = remember(dark) { defaultWallpaperTone(dark) }
     val palette = remember(
         dark, custom, settings.wallpaperHue, settings.wallpaperChroma,
-        settings.wallpaperTrough, settings.wallpaperPeak, settings.glassTuning, defaultTone,
+        settings.wallpaperTrough, settings.wallpaperPeak, settings.glassTuning, defaultTone, settings.myBubble,
     ) {
+        val mine = settings.myBubble?.let { Color(it) }
         if (custom != null && settings.wallpaperHue != null) {
             GlassPalettes.build(
                 dark = dark,
@@ -74,6 +75,7 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
                 trough = settings.wallpaperTrough,
                 peak = settings.wallpaperPeak,
                 tuning = settings.glassTuning,
+                mine = mine,
             )
         } else {
             GlassPalettes.build(
@@ -81,6 +83,7 @@ fun CleosTheme(settings: AppSettings, images: ImageStore, content: @Composable (
                 trough = defaultTone.trough,
                 peak = defaultTone.peak,
                 tuning = settings.glassTuning,
+                mine = mine,
             )
         }
     }

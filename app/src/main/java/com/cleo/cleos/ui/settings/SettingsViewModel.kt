@@ -465,6 +465,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch { c.settings.update { it.copy(glassMode = mode) } }
     }
 
+    /** The colour of the person's own bubbles (ARGB); null follows the wallpaper. */
+    fun setMyBubble(argb: Int?) {
+        viewModelScope.launch { c.settings.update { it.copy(myBubble = argb) } }
+    }
+
     var backupBusy by mutableStateOf(false)
         private set
     var backupMessage by mutableStateOf<String?>(null)
