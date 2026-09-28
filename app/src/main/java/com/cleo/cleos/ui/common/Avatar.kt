@@ -21,7 +21,8 @@ import com.cleo.cleos.glass.LocalGlassPalette
 
 /**
  * A round picture, or before one is chosen, [letter] on the accent (see [avatarLetter]).
- * The thin light ring keeps a dark photo from dissolving into dark glass.
+ * On dark glass a thin light ring keeps a dark photo from dissolving into the glass. Light glass
+ * gets none: there a white ring only looked like a frame around pictures with a light background.
  */
 @Composable
 fun Avatar(file: String?, letter: String, size: Dp, modifier: Modifier = Modifier) {
@@ -32,7 +33,7 @@ fun Avatar(file: String?, letter: String, size: Dp, modifier: Modifier = Modifie
             .size(size)
             .clip(CircleShape)
             .background(palette.accent)
-            .border(size * 0.04f, Color.White.copy(alpha = if (palette.dark) 0.3f else 0.85f), CircleShape),
+            .then(if (palette.dark) Modifier.border(size * 0.04f, Color.White.copy(alpha = 0.3f), CircleShape) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         if (file != null) {
