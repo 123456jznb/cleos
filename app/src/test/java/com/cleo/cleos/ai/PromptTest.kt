@@ -89,6 +89,38 @@ class PromptTest {
     }
 
     @Test
+    fun whatCameDueRidesBesideTheTimeNotInTheSystemPrompt() {
+        val out = Prompt.messages(
+            AppSettings(),
+            ta(),
+            listOf(msg("user", "我回来了"), msg("assistant", "欢迎回来"), msg("user", "考完了")),
+            now,
+            setOf(ToolGroup.Later),
+            due = listOf("问问考得怎样"),
+        )
+        val last = out.last().content
+        assertTrue(last.startsWith("（现在是2026年9月22日 星期二 21:05）\n（你之前给自己记过、现在到时候了：「问问考得怎样」"))
+        assertTrue(last.endsWith("考完了"))
+        assertFalse(out.first().content.contains("问问考得怎样"))
+        // The rule for noting things comes with the tool only.
+        assertTrue(out.first().content.contains("note_for_later"))
+        assertFalse(Prompt.system(AppSettings(), ta(), setOf(ToolGroup.Todos)).contains("note_for_later"))
+    }
+
+    @Test
+    fun aWakeGoesLastOnThePersonsSideAndStartsATurnOfItsOwn() {
+        val base = listOf(ApiMessage("system", "s"), ApiMessage("user", "去做饭了"), ApiMessage("assistant", "去吧", reasoning = "r"))
+        val woke = Prompt.withWake(base, "（这条不是对方发的…）")
+        assertEquals(listOf("system", "user", "assistant", "user"), woke.map { it.role })
+        assertEquals("（这条不是对方发的…）", woke.last().content)
+        assertTrue("reasoning belongs to the turn it was in", woke.none { it.reasoning != null })
+        // After a turn of the person's (a reply that failed), joined to it: two user turns in a row get refused.
+        val afterTheirs = Prompt.withWake(base.dropLast(1), "WAKE")
+        assertEquals(listOf("system", "user"), afterTheirs.map { it.role })
+        assertEquals("去做饭了\n\nWAKE", afterTheirs.last().content)
+    }
+
+    @Test
     fun failedRepliesAreLeftOutAndTheUserTurnsAroundThemMerged() {
         val out = Prompt.messages(
             AppSettings(),

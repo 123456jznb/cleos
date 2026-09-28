@@ -31,7 +31,67 @@ data class CompanionEntity(
     /** Asks the model to think before it answers (the switch DeepSeek and GLM take). */
     @ColumnInfo(defaultValue = "0")
     val deepThinking: Boolean = false,
+    /** May note things down to come back to, and say them on its own when they come due (ai/Later.kt). */
+    @ColumnInfo(defaultValue = "1")
+    val proactive: Boolean = true,
 )
+
+/**
+ * Something a TA noted in a conversation to come back to later (ai/Later.kt): what, the
+ * situation it came up in, and when. Kept only until it is dealt with, and not backed up: a
+ * note restored days later would only be past its time.
+ */
+@Entity(
+    tableName = "later",
+    indices = [Index("companionId"), Index("conversationId")],
+    foreignKeys = [
+        ForeignKey(entity = CompanionEntity::class, parentColumns = ["id"], childColumns = ["companionId"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationEntity::class, parentColumns = ["id"], childColumns = ["conversationId"], onDelete = ForeignKey.SET_NULL),
+    ],
+)
+data class LaterEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val companionId: Long,
+    /** Where it came up; null once that conversation is gone, and the TA's latest is used. */
+    val conversationId: Long?,
+    val what: String,
+    /** The situation it came up in, for the TA to read when it comes due. */
+    val why: String = "",
+    val createdAt: Long,
+    val dueAt: Long,
+    /** Past this it is dropped unsaid: the moment for it has gone. */
+    val expiresAt: Long,
+    /** Noted again when it came due, putting it off: it can't be put off a second time. */
+    val putOff: Boolean = false,
+)
+
+/** What came of one note coming due, for the line in settings. The last few per TA are kept. */
+@Entity(
+    tableName = "wakes",
+    indices = [Index("companionId")],
+    foreignKeys = [
+        ForeignKey(entity = CompanionEntity::class, parentColumns = ["id"], childColumns = ["companionId"], onDelete = ForeignKey.CASCADE),
+    ],
+)
+data class WakeEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val companionId: Long,
+    val at: Long,
+    /** One of [SENT], [SKIPPED], [EXPIRED], [HELD], [FAILED]. */
+    val outcome: String,
+    /** What was said, why not, or what went wrong. */
+    val detail: String = "",
+) {
+    companion object {
+        const val SENT = "sent"
+        const val SKIPPED = "skipped"
+        const val EXPIRED = "expired"
+
+        /** Not pushed: what it said on its own before is still unanswered. */
+        const val HELD = "held"
+        const val FAILED = "failed"
+    }
+}
 
 /**
  * Something one TA keeps in mind, about the person or about themselves: a topic, not a
@@ -172,6 +232,9 @@ data class MessageEntity(
     val thought: String? = null,
     /** "user" or "assistant": the message this one answers (MessageQuote as JSON), shown under it. */
     val quote: String? = null,
+    /** "assistant": said on the TA's own when something it noted came due, not in answer to anything. */
+    @ColumnInfo(defaultValue = "0")
+    val proactive: Boolean = false,
 )
 
 @Serializable

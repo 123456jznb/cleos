@@ -1,0 +1,135 @@
+package com.cleo.cleos
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
+import androidx.core.graphics.drawable.IconCompat
+import com.cleo.cleos.data.ImageStore
+import com.cleo.cleos.data.db.CompanionEntity
+import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.data.db.MessageEntity
+
+/**
+ * What a TA sends on its own (ai/Later.kt), and letters arriving, as notifications. Tapping one
+ * opens that conversation, or that letter.
+ *
+ * Both channels are created at high importance from the start. Android lets an app lower a
+ * channel's importance but never raise it again (only the person can, in system settings): an
+ * earlier app of the same kind shipped its channel at the default level, which on some phones
+ * means no banner, and changing the code afterwards did nothing for anyone who had it already.
+ * Whether it rings or stays silent is then up to the phone's own settings, as with any chat.
+ */
+class Notifier(private val context: Context, private val images: ImageStore) {
+    fun channels() {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_MESSAGES, "TA 的消息", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "TA 自己想起来、主动发给你的消息"
+            },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_LETTERS, "信", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "TA 写给你的信寄到了"
+            },
+        )
+    }
+
+    /** False when notifications are off for the app, or (Android 13 on) not allowed yet. */
+    fun allowed(): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+    /** [sent]: what the TA just said in [conversationId], in order. */
+    fun messages(ta: CompanionEntity, conversationId: Long, sent: List<MessageEntity>) {
+        if (sent.isEmpty() || !allowed()) return
+        val name = ta.name.trim().ifEmpty { "TA" }
+        val them = Person.Builder()
+            .setName(name)
+            .setKey("ta-${ta.id}")
+            .apply { avatar(ta)?.let { setIcon(IconCompat.createWithBitmap(it)) } }
+            .build()
+        val style = NotificationCompat.MessagingStyle(Person.Builder().setName("我").build())
+        for (m in sent) style.addMessage(if (m.audio != null) "[语音] ${m.content}" else m.content, m.createdAt, them)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(name)
+            .setContentText(sent.last().content)
+            .setStyle(style)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(open(EXTRA_CONVERSATION, conversationId))
+            .build()
+        post(TAG_CONVERSATION, conversationId, notification)
+    }
+
+    fun letter(ta: CompanionEntity, letter: LetterEntity) {
+        if (!allowed()) return
+        val name = ta.name.trim().ifEmpty { "TA" }
+        val notification = NotificationCompat.Builder(context, CHANNEL_LETTERS)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(name)
+            .setContentText("给你写了一封信，在信箱里。")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .apply { avatar(ta)?.let { setLargeIcon(it) } }
+            .setContentIntent(open(EXTRA_LETTER, letter.id))
+            .build()
+        post(TAG_LETTER, letter.id, notification)
+    }
+
+    /** Once the conversation is on screen, its notification has said what it had to. */
+    fun clearConversation(conversationId: Long) {
+        NotificationManagerCompat.from(context).cancel(TAG_CONVERSATION, conversationId.toInt())
+    }
+
+    private fun post(tag: String, id: Long, notification: android.app.Notification) {
+        try {
+            NotificationManagerCompat.from(context).notify(tag, id.toInt(), notification)
+        } catch (_: SecurityException) {
+            // The permission was taken back between the check and now.
+        }
+    }
+
+    private fun open(extra: String, id: Long): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java)
+            .putExtra(extra, id)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(
+            context,
+            (extra.hashCode() * 31 + id).toInt(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    /** The TA's picture, small and square; none for an emoji or the initial. */
+    private fun avatar(ta: CompanionEntity): Bitmap? {
+        val file = ta.avatar?.let(images::file)?.takeIf { it.exists() } ?: return null
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.path, bounds)
+            var sample = 1
+            while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= AVATAR_PX) sample *= 2
+            val full = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+            val side = minOf(full.width, full.height)
+            val square = Bitmap.createBitmap(full, (full.width - side) / 2, (full.height - side) / 2, side, side)
+            Bitmap.createScaledBitmap(square, AVATAR_PX, AVATAR_PX, true)
+        }.getOrNull()
+    }
+
+    companion object {
+        const val CHANNEL_MESSAGES = "ta_messages"
+        const val CHANNEL_LETTERS = "letters"
+        const val EXTRA_CONVERSATION = "conversation"
+        const val EXTRA_LETTER = "letter"
+        private const val TAG_CONVERSATION = "conversation"
+        private const val TAG_LETTER = "letter"
+        private const val AVATAR_PX = 128
+    }
+}

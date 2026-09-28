@@ -34,8 +34,10 @@ import java.util.Locale
 /**
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
+ * [Later] is not among the switches in settings: a TA gets it while its own "reach out"
+ * switch is on (CompanionEntity.proactive), and it is never stored with the others.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -288,6 +290,26 @@ object ToolSpecs {
         parameters = schema(),
     )
 
+    /**
+     * Noting something to come back to (ai/Later.kt). It leaves no line in the chat, not even when
+     * it fails: what the TA means to bring up later is for later.
+     */
+    val noteForLater = ToolSpec(
+        name = "note_for_later",
+        groups = setOf(ToolGroup.Later),
+        action = "记一笔",
+        description = "给以后的自己记一笔：一件过一阵想跟对方说或问的事，和大概多久以后再想起来。到时候你会看到这一笔和这之间聊的，再决定说不说。",
+        parameters = schema(
+            required = listOf("what", "minutes"),
+            "what" to prop("string", "想说或想问的事，写具体，到时候的你要看得懂：比如「问问糖醋排骨做成没有」「对方今晚考完试，问问考得怎样」"),
+            "minutes" to prop("integer", "多少分钟以后再想起来。对方说去做饭了，大概 40；明早的事，就算到明早。最少 1，最多 10080（七天）"),
+            "why" to prop("string", "可不填。当时的情形，给到时候的自己看"),
+        ),
+    )
+
+    /** Tools that leave no trace in the chat, neither a line nor "在…" while they run. */
+    val quiet = setOf(noteForLater.name)
+
     val all = listOf(
         sendMessage,
         sendVoice,
@@ -303,6 +325,7 @@ object ToolSpecs {
         setMyAvatar,
         getWeather,
         getLocation,
+        noteForLater,
     )
     val byName = all.associateBy { it.name }
 
@@ -370,6 +393,8 @@ class ToolBox(
     memories: MemoryDao? = null,
     /** Where the phone is, for get_location. */
     private val location: LocationSource? = null,
+    /** Where note_for_later keeps its notes; asked for at the call, since it is made after this. */
+    private val later: () -> LaterBook? = { null },
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -377,7 +402,8 @@ class ToolBox(
 
     fun specs(groups: Set<ToolGroup>): List<ToolSpec> = ToolSpecs.offered(groups)
 
-    fun activity(name: String): String = ToolSpecs.byName[name]?.activity ?: "在用工具"
+    /** "在…" while [name] runs; null for a quiet one, which shows only the dots. */
+    fun activity(name: String): String? = if (name in ToolSpecs.quiet) null else ToolSpecs.byName[name]?.activity ?: "在用工具"
 
     fun action(name: String): String = ToolSpecs.byName[name]?.action ?: "用工具"
 
@@ -390,11 +416,10 @@ class ToolBox(
     ): ToolOutcome {
         val spec = ToolSpecs.byName[call.name]
             ?: return ToolOutcome("没有叫 ${call.name} 的工具。", "想用的工具不存在：${call.name}")
-        if (spec.groups.none { it in settings.tools }) {
-            return ToolOutcome("对方在设置里关掉了这项功能，现在用不了。", "${spec.action}没成：设置里关着")
-        }
-        val args = ToolArgs.parse(call.arguments)
-            ?: return ToolOutcome("参数不是合法的 JSON 对象，按参数说明重新调用。", "${spec.action}没成：参数写错了")
+        // A quiet tool's failures leave no line either: "记一笔没成" would say there was something to note.
+        fun failed(result: String, why: String) = ToolOutcome(result, if (spec.name in ToolSpecs.quiet) "" else "${spec.action}没成：$why")
+        if (spec.groups.none { it in settings.tools }) return failed("对方在设置里关掉了这项功能，现在用不了。", "设置里关着")
+        val args = ToolArgs.parse(call.arguments) ?: return failed("参数不是合法的 JSON 对象，按参数说明重新调用。", "参数写错了")
         // From the same clock as every "now" in here, not the wall clock beside it.
         val today = Instant.ofEpochMilli(clock()).atZone(zone()).toLocalDate()
         return try {
@@ -412,11 +437,21 @@ class ToolBox(
                 ToolSpecs.readLetters.name -> readLetters(args, today, companionId)
                 ToolSpecs.memory.name -> (book ?: throw ToolFailure("现在记不了。", "这里记不了")).act(args, companionId)
                 ToolSpecs.getLocation.name -> getLocation()
+                ToolSpecs.noteForLater.name -> noteForLater(args, conversationId, companionId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
-            ToolOutcome(f.result, "${spec.action}没成：${f.note}")
+            failed(f.result, f.note)
         }
+    }
+
+    private suspend fun noteForLater(a: JsonObject, conversationId: Long, companionId: Long): ToolOutcome {
+        val notes = later() ?: throw ToolFailure("现在记不了。", "这里记不了")
+        val what = ToolArgs.text(a, "what").orEmpty().trim().take(LATER_WHAT_MAX)
+        if (what.isEmpty()) throw ToolFailure("缺少 what：写上想说或想问的事。", "没有内容")
+        val minutes = ToolArgs.int(a["minutes"]) ?: throw ToolFailure("缺少 minutes：多少分钟以后，写个整数。", "没说多久")
+        val why = ToolArgs.text(a, "why").orEmpty().trim().take(LATER_WHY_MAX)
+        return ToolOutcome(notes.note(companionId, conversationId, what, why, minutes), "")
     }
 
     private suspend fun addTodo(a: JsonObject, today: LocalDate): ToolOutcome {
@@ -658,6 +693,8 @@ class ToolBox(
         const val REASON_MAX = 120
         const val EMOJI_MAX = 8
         const val LETTER_MAX = 2000
+        const val LATER_WHAT_MAX = 200
+        const val LATER_WHY_MAX = 200
     }
 }
 

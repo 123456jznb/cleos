@@ -4,13 +4,18 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.cleo.cleos.Opening
 import com.cleo.cleos.ui.chat.ConversationsScreen
+import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.chat.SearchScreen
 import com.cleo.cleos.ui.diary.DiaryEditorScreen
 import com.cleo.cleos.ui.diary.ImageViewerScreen
@@ -72,6 +77,21 @@ data class McpEditRoute(val id: String)
 @Composable
 fun CleosNavHost() {
     val nav = rememberNavController()
+    // A tapped notification: back to the main screen, whose chat tab shows the conversation
+    // (MainScreen takes it from there), or on to the letter.
+    val c = appContainer()
+    val opening by c.opening.collectAsStateWithLifecycle()
+    LaunchedEffect(opening) {
+        when (val o = opening) {
+            is Opening.Chat -> nav.popBackStack(MainRoute, inclusive = false)
+            is Opening.Letter -> {
+                nav.popBackStack(MainRoute, inclusive = false)
+                nav.navigate(LetterRoute(o.id))
+                c.opening.value = null
+            }
+            null -> Unit
+        }
+    }
     NavHost(
         navController = nav,
         startDestination = MainRoute,

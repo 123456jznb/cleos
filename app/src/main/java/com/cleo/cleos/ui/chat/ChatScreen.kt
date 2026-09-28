@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PersonAdd
@@ -196,6 +197,11 @@ private sealed interface ChatRow {
     data class Message(val message: MessageEntity, val isLast: Boolean, val showFace: Boolean = true) : ChatRow {
         override val key: Any get() = message.id
     }
+
+    /** Above what the TA said on its own when something it noted came due (ai/Later.kt): nobody asked. */
+    data class Woke(val at: Long) : ChatRow {
+        override val key: Any get() = "w$at"
+    }
 }
 
 /**
@@ -224,7 +230,7 @@ private fun MessageEntity.foldedBy(until: Pair<Long, Long>) = createdAt < until.
  * side show the avatar once, beside the newest, the way chat apps stack them; a line or a
  * time between them starts a new run. With [eachFace], every message shows it, the way
  * WeChat does. With a recap, its mark goes between the last message folded into it and the
- * first one after.
+ * first one after. What the TA said on its own gets a line above the first of it.
  */
 private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long>? = null, eachFace: Boolean = false): List<ChatRow> {
     val rows = ArrayList<ChatRow>(messages.size + 8)
@@ -242,7 +248,16 @@ private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long
         rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = eachFace || side == null || side != newerSide)
         newerSide = side
         val prev = messages.getOrNull(i - 1)
-        if (prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS) {
+        val gap = prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS
+        if (m.proactive) {
+            // The first of a run: what is drawn just before it is not the TA's own too (or is, but long before).
+            val older = (i - 1 downTo 0).firstOrNull { !messages[it].silent() }?.let { messages[it] }
+            if (gap || older == null || !older.proactive) {
+                rows += ChatRow.Woke(m.createdAt)
+                newerSide = null
+            }
+        }
+        if (gap) {
             rows += ChatRow.Stamp(m.createdAt)
             newerSide = null
         }
@@ -389,10 +404,18 @@ fun ChatTab(
         )
     }
 
-    // Follow new messages, unless the user has scrolled up to read something older.
+    // Follow new messages, unless the user has scrolled up to read something older. Judged by
+    // where the newest message from before this update is now, not by the bottom row's index:
+    // several rows can arrive at once (what a TA says on its own comes with a line and a time
+    // above it, often while the app was in the background), and the list keeps what was in view
+    // where it was, so the index alone would read "scrolled up".
+    var newestBefore by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty(), state.streaming?.activity) {
+        val live = if (state.streaming != null) 1 else 0
+        val was = rows.indexOfFirst { it is ChatRow.Message && it.message.id == newestBefore }.coerceAtLeast(0) + live
+        newestBefore = state.messages.lastOrNull()?.id
         // Not while a searched-for message is being brought into view.
-        if (c.chat.focus.value == null && listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+        if (c.chat.focus.value == null && listState.firstVisibleItemIndex <= was + 2) listState.animateScrollToItem(0)
     }
     // Their own message is always followed down to, like in any chat.
     LaunchedEffect(sentCount) {
@@ -554,6 +577,7 @@ fun ChatTab(
                     when (row) {
                         is ChatRow.Stamp -> TimeStamp(row.at)
                         ChatRow.RecapMark -> RecapMark(state.aiName) { readingRecap = true }
+                        is ChatRow.Woke -> ToolNote("${state.aiName.ifBlank { "TA" }}自己想起来的", Icons.Rounded.Lightbulb)
                         is ChatRow.Message -> {
                             val m = row.message
                             val note = m.note

@@ -195,6 +195,17 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
     suspend fun count(conversationId: Long): Int
 
+    /** What the TA said on its own here from [since] on, oldest first: what a wake just sent. */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND role = 'assistant' AND proactive = 1 " +
+            "AND error IS NULL AND content != '' AND createdAt >= :since ORDER BY createdAt, id",
+    )
+    suspend fun proactiveSince(conversationId: Long, since: Long): List<MessageEntity>
+
+    /** Everything a wake put here from [since] on (its calls, their results, its thinking): for when it came to nothing. */
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND proactive = 1 AND createdAt >= :since")
+    suspend fun deleteProactiveSince(conversationId: Long, since: Long)
+
     @Insert
     suspend fun insert(message: MessageEntity): Long
 
@@ -326,6 +337,60 @@ interface MemoryDao {
 }
 
 @Dao
+interface LaterDao {
+    @Insert
+    suspend fun insert(note: LaterEntity): Long
+
+    @Query("SELECT * FROM later WHERE id = :id")
+    suspend fun get(id: Long): LaterEntity?
+
+    @Query("DELETE FROM later WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM later WHERE id IN (:ids)")
+    suspend fun delete(ids: List<Long>)
+
+    @Query("SELECT * FROM later WHERE companionId = :companionId ORDER BY dueAt, id")
+    suspend fun allFor(companionId: Long): List<LaterEntity>
+
+    @Query("SELECT * FROM later WHERE companionId = :companionId ORDER BY dueAt, id")
+    fun observeFor(companionId: Long): Flow<List<LaterEntity>>
+
+    /** Come due and not past their time yet, soonest first. */
+    @Query("SELECT * FROM later WHERE companionId = :companionId AND dueAt <= :now AND expiresAt > :now ORDER BY dueAt, id")
+    suspend fun dueFor(companionId: Long, now: Long): List<LaterEntity>
+
+    @Query("SELECT * FROM later")
+    suspend fun all(): List<LaterEntity>
+
+    @Query("DELETE FROM later")
+    suspend fun clear()
+}
+
+@Dao
+interface WakeDao {
+    @Insert
+    suspend fun insert(wake: WakeEntity): Long
+
+    @Query("SELECT * FROM wakes WHERE companionId = :companionId ORDER BY at DESC, id DESC LIMIT 1")
+    fun observeLatest(companionId: Long): Flow<WakeEntity?>
+
+    /** Times a TA's wakes said something since [since]. */
+    @Query("SELECT COUNT(*) FROM wakes WHERE companionId = :companionId AND outcome = 'sent' AND at > :since")
+    suspend fun sentSince(companionId: Long, since: Long): Int
+
+    /** All but the newest [keep] of a TA's. */
+    @Query(
+        "DELETE FROM wakes WHERE companionId = :companionId AND id NOT IN " +
+            "(SELECT id FROM wakes WHERE companionId = :companionId ORDER BY at DESC, id DESC LIMIT :keep)",
+    )
+    suspend fun prune(companionId: Long, keep: Int)
+
+    @Query("DELETE FROM wakes")
+    suspend fun clear()
+}
+
+@Dao
 interface LetterDao {
     @Query("SELECT * FROM letters WHERE companionId = :companionId ORDER BY createdAt DESC, id DESC")
     fun observeFor(companionId: Long): Flow<List<LetterEntity>>
@@ -338,6 +403,10 @@ interface LetterDao {
 
     @Query("SELECT * FROM letters WHERE id = :id")
     suspend fun get(id: Long): LetterEntity?
+
+    /** A TA's letters still on their way at [now], unread: each gets a notification when it arrives. */
+    @Query("SELECT * FROM letters WHERE author = 'ai' AND readAt IS NULL AND deliverAt > :now")
+    suspend fun onTheirWay(now: Long): List<LetterEntity>
 
     /** The person's sent letters that no letter answers yet: replies still to write. */
     @Query(

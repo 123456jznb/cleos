@@ -26,8 +26,8 @@ android {
         applicationId = "com.cleo.cleos"
         minSdk = 29
         targetSdk = 36
-        versionCode = 30
-        versionName = "0.22.2"
+        versionCode = 31
+        versionName = "0.23.0"
     }
 
     signingConfigs {
@@ -90,6 +90,8 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    // What a TA noted, and letters, wait for their time here (ai/Later.kt).
+    implementation(libs.androidx.work.runtime.ktx)
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.kotlinx.serialization.json)

@@ -64,6 +64,8 @@ data class AppSettings(
     val avatarEachMessage: Boolean = false,
     /** The colour of the person's own bubbles (ARGB), still glass; null follows the wallpaper. */
     val myBubble: Int? = null,
+    /** The notification permission was asked for once already; after that it is theirs to change in settings. */
+    val notificationsAsked: Boolean = false,
     /** When a letter's reply should come, as picked the last time one was sent. */
     val letterReply: ReplyWhen = ReplyWhen.Hours,
     /** The least time, in days, between two letters a TA writes of their own. */
@@ -142,6 +144,7 @@ class SettingsRepository(private val context: Context) {
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val avatarEachMessage = booleanPreferencesKey("avatar_each_message")
         val myBubble = intPreferencesKey("my_bubble")
+        val notificationsAsked = booleanPreferencesKey("notifications_asked")
         val letterReply = stringPreferencesKey("letter_reply")
         val letterEveryDays = intPreferencesKey("letter_every_days")
         val voiceBaseUrl = stringPreferencesKey("voice_base_url")
@@ -183,6 +186,7 @@ class SettingsRepository(private val context: Context) {
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             avatarEachMessage = this[Keys.avatarEachMessage] ?: d.avatarEachMessage,
             myBubble = this[Keys.myBubble],
+            notificationsAsked = this[Keys.notificationsAsked] ?: d.notificationsAsked,
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
             voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
@@ -220,6 +224,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.chatAvatars] = next.chatAvatars
             prefs[Keys.avatarEachMessage] = next.avatarEachMessage
             if (next.myBubble != null) prefs[Keys.myBubble] = next.myBubble else prefs.remove(Keys.myBubble)
+            prefs[Keys.notificationsAsked] = next.notificationsAsked
             prefs[Keys.letterReply] = next.letterReply.key
             prefs[Keys.letterEveryDays] = next.letterEveryDays
             prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl

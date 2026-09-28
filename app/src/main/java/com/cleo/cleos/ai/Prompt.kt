@@ -35,6 +35,17 @@ object Prompt {
     private const val FORMAT_RULE = "这是手机上的聊天。像平常发消息那样回复，不用 Markdown 标题、列表和加粗。"
 
     /**
+     * When to note something down (ai/Later.kt). A tool's description only says how to use it;
+     * without a rule saying when, a model either never does or does it for everything. The
+     * things it must not note are the ones that would make reaching out a demand.
+     */
+    private const val LATER_RULE =
+        "你可以用 note_for_later 给自己记一笔：一件过一阵想跟对方说或问的事，和大概多久以后再想起来。" +
+            "对方说要去做什么（做饭、考试、看病、出门、睡觉），有件事要等结果，或者你自己有句话想晚点再说，就记下来；" +
+            "到时候你会再看到这一笔和这之间聊的，再决定说不说。只记具体的事；" +
+            "别记「问问在干嘛」「看看回没回我」这种，对方正和你聊着的事也不用记。"
+
+    /**
      * Pictures sent along with a request, the most recent first. Every picture goes out
      * again with every turn while it is included, so only the last few are; older ones
      * are named in the text but not attached.
@@ -99,6 +110,7 @@ object Prompt {
         if (ToolGroup.Location in tools) {
             add("你能用 get_location 查对方现在在哪。需要的时候再查：对方问附近、问路，或者问天气没说城市；别无缘无故去查，也别把坐标念给对方。")
         }
+        if (ToolGroup.Later in tools) add(LATER_RULE)
         if (outside.isNotEmpty()) {
             val names = outside.map { it.serverName }.distinct().joinToString("、")
             add(
@@ -113,7 +125,8 @@ object Prompt {
      * [history] oldest first, already trimmed to the window. With [tools] empty, tool
      * calls and their results are left out and only what was said remains, so a model
      * without tool support can read a conversation that used them. With [images] false
-     * no picture is attached (the text still says one was sent).
+     * no picture is attached (the text still says one was sent). [due]: what the TA noted that
+     * has come due, said beside the time (LaterRules.dueLine).
      */
     fun messages(
         settings: AppSettings,
@@ -125,6 +138,7 @@ object Prompt {
         memories: List<MemoryEntity> = emptyList(),
         recap: String? = null,
         outside: List<McpTool> = emptyList(),
+        due: List<String> = emptyList(),
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
@@ -155,9 +169,24 @@ object Prompt {
             if (merged[i].reasoning != null) merged[i] = merged[i].copy(reasoning = null)
         }
         if (lastUser >= 0) {
-            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n${it.content}") }
+            val noted = LaterRules.dueLine(due)?.let { "$it\n" }.orEmpty()
+            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$noted${it.content}") }
         }
         return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside))) + merged
+    }
+
+    /**
+     * [messages] with a wake's [text] as the last turn (ai/Later.kt): on the person's side, the
+     * only place endpoints take something new, and it says itself that the person never sees it.
+     * After a turn of theirs (a reply that failed) the two are joined, since some endpoints turn
+     * down two user turns in a row. Every earlier turn's reasoning goes: it is sent back only
+     * within the turn still under way, and the wake starts a new one.
+     */
+    fun withWake(messages: List<ApiMessage>, text: String): List<ApiMessage> {
+        val cleared = messages.map { if (it.reasoning != null) it.copy(reasoning = null) else it }
+        val last = cleared.last()
+        return if (last.role == "user") cleared.dropLast(1) + last.copy(content = last.content + "\n\n" + text)
+        else cleared + ApiMessage("user", text)
     }
 
     /**

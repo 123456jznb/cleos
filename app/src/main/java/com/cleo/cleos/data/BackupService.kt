@@ -309,6 +309,10 @@ class BackupService(
                 if (it.author == DiaryEntryEntity.AUTHOR_AI && it.companionId == null) it.copy(companionId = Companions.FIRST) else it
             }
             db.withTransaction {
+                // What TAs noted to come back to, and what came of it: not in backups, and about
+                // conversations that are about to go.
+                db.later().clear()
+                db.wakes().clear()
                 db.messages().clear()
                 db.conversations().clear()
                 db.diary().clear()

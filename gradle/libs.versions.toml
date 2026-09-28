@@ -9,6 +9,7 @@ activityCompose = "1.13.0"
 lifecycle = "2.11.0"
 navigation = "2.10.1"
 room = "2.8.5"
+work = "2.12.0"
 datastore = "1.2.1"
 coreKtx = "1.19.0"
 coil = "3.6.3"
@@ -36,6 +37,7 @@ androidx-compose-material-icons-extended = { module = "androidx.compose.material
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

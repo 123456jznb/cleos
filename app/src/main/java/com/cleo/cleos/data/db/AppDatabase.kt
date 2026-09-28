@@ -20,8 +20,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TodoEntity::class,
         LetterEntity::class,
         MemoryEntity::class,
+        LaterEntity::class,
+        WakeEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -48,6 +50,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 10, to = 11),
         // 11 -> 12: the message a message answers, for quoting (a nullable column).
         AutoMigration(from = 11, to = 12),
+        // 12 -> 13: what TAs note to come back to, and what came of it (two tables); whether each
+        // TA may reach out on its own (on to begin with); which messages it sent that way (none yet).
+        AutoMigration(from = 12, to = 13),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -58,6 +63,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun todos(): TodoDao
     abstract fun letters(): LetterDao
     abstract fun memories(): MemoryDao
+    abstract fun later(): LaterDao
+    abstract fun wakes(): WakeDao
 
     /**
      * Before version 5 there was one TA, so every entry a TA wrote was TA 1's. (Conversations

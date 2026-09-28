@@ -30,6 +30,8 @@ import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.data.ImportException
 import com.cleo.cleos.data.ImportPlan
 import com.cleo.cleos.data.db.CompanionEntity
+import com.cleo.cleos.data.db.LaterEntity
+import com.cleo.cleos.data.db.WakeEntity
 import com.cleo.cleos.ui.wallpaper.WallpaperAnalyzer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -66,6 +68,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var userName by mutableStateOf("")
     var persona by mutableStateOf("")
     var deepThinking by mutableStateOf(false)
+        private set
+    var proactive by mutableStateOf(true)
         private set
     var historySize by mutableIntStateOf(40)
     var weatherCity by mutableStateOf("")
@@ -116,6 +120,18 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .flatMapLatest { c.secrets.hasKey(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    /** What came of this TA's last note coming due (ai/Later.kt), for the line under its switch. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val lastWake: StateFlow<WakeEntity?> = snapshotFlow { companionId }
+        .flatMapLatest { c.db.wakes().observeLatest(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** What this TA has noted and is waiting on: how many, and when the first comes due. Not what. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val waiting: StateFlow<List<LaterEntity>> = snapshotFlow { companionId }
+        .flatMapLatest { c.db.later().observeFor(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** The address the voice engine's key is filed under: ElevenLabs' own, or the voice service's. */
     private fun speechKeyAddress() = if (speechEngine == SpeechEngine.ElevenLabs) Speech.ELEVENLABS_BASE else speechBaseUrl
@@ -179,6 +195,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         aiName = ta.name
         persona = ta.persona
         deepThinking = ta.deepThinking
+        proactive = ta.proactive
         keyInput = ""
         models = null
         checkResult = null
@@ -359,6 +376,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         deepThinking = on
         val id = companionId
         viewModelScope.launch { c.companions.update(id) { it.copy(deepThinking = on) } }
+    }
+
+    /** Off, what the TA noted goes unsaid: each note, when it comes due, finds the switch off and is dropped. */
+    fun setReachOut(on: Boolean) {
+        proactive = on
+        val id = companionId
+        viewModelScope.launch { c.companions.update(id) { it.copy(proactive = on) } }
+    }
+
+    /** Whether notifications can reach the person at all (the app's switch, and on Android 13 the permission). */
+    fun notificationsAllowed(): Boolean = c.notifier.allowed()
+
+    /** The permission is being asked for here: the app asks only once (see MainActivity). */
+    fun markNotificationsAsked() {
+        viewModelScope.launch { c.settings.update { it.copy(notificationsAsked = true) } }
     }
 
     fun setTool(group: ToolGroup, on: Boolean) {

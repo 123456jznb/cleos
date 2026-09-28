@@ -1,14 +1,24 @@
 package com.cleo.cleos
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.ui.CleosNavHost
 import com.cleo.cleos.ui.theme.CleosTheme
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val container get() = (application as CleosApp).container
@@ -22,8 +32,37 @@ class MainActivity : ComponentActivity() {
             val settings: AppSettings? by container.settings.settings.collectAsStateWithLifecycle(initialValue = null)
             settings?.let { s ->
                 CleosTheme(s, container.images) { CleosNavHost() }
+                AskForNotifications(container, s)
             }
         }
+        // Recreated (rotated, or brought back after the system let it go): the tap was already followed.
+        if (savedInstanceState == null) follow(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        follow(intent)
+    }
+
+    /** A notification tapped: to its conversation, or its letter. */
+    private fun follow(intent: Intent?) {
+        val conversation = intent?.getLongExtra(Notifier.EXTRA_CONVERSATION, -1L) ?: -1L
+        val letter = intent?.getLongExtra(Notifier.EXTRA_LETTER, -1L) ?: -1L
+        when {
+            conversation > 0 -> container.openConversation(conversation)
+            letter > 0 -> container.openLetter(letter)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        container.visible = true
+    }
+
+    override fun onStop() {
+        container.visible = false
+        super.onStop()
     }
 
     // Letters due get written when the app comes to the front: a background job would be
@@ -31,5 +70,27 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         container.letters.tick()
+        // Back in the conversation a notification was about: it has said what it had to.
+        lifecycleScope.launch {
+            container.settings.currentConversation.first()?.let(container.notifier::clearConversation)
+        }
+    }
+}
+
+/**
+ * The notification permission (Android 13 on), asked for the first time something would come as
+ * one, while the person is here to answer: once. After that it is theirs to change, and the
+ * settings say where.
+ */
+@Composable
+private fun AskForNotifications(container: AppContainer, settings: AppSettings) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val wanted by container.later.wantsNotifications.collectAsStateWithLifecycle()
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(wanted, settings.notificationsAsked) {
+        if (wanted && !settings.notificationsAsked && !container.notifier.allowed()) {
+            container.settings.update { it.copy(notificationsAsked = true) }
+            ask.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 }

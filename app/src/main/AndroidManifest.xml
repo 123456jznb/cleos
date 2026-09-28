@@ -7,6 +7,8 @@
     <!-- get_location, only while a reply asks; asked for when the switch is turned on. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- What a TA says on its own, and letters arriving: asked for the first time there is one coming. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".CleosApp"

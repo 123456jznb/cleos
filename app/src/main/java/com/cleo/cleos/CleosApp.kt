@@ -6,6 +6,7 @@ import androidx.room.Room
 import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.Later
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
 import com.cleo.cleos.ai.PhoneLocation
@@ -28,6 +29,8 @@ import com.cleo.cleos.data.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -39,7 +42,15 @@ class CleosApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        container.notifier.channels()
     }
+}
+
+/** Where a tapped notification leads: MainActivity reads it from the intent, the screens follow. */
+sealed interface Opening {
+    data class Chat(val conversationId: Long) : Opening
+
+    data class Letter(val id: Long) : Opening
 }
 
 /** Hand-made dependency wiring; the app is small enough not to need a DI framework. */
@@ -61,7 +72,8 @@ class AppContainer(context: Context) {
 
     val companions = Companions(db, settings, secrets, images)
     val chatClient = ChatClient(http)
-    val tools = ToolBox(
+    // Typed: its note_for_later reaches [later], which is made further down from what uses this.
+    val tools: ToolBox = ToolBox(
         db.todos(),
         db.diary(),
         OpenMeteo(http),
@@ -70,6 +82,7 @@ class AppContainer(context: Context) {
         letters = { id -> db.letters().allFor(id) },
         memories = db.memories(),
         location = PhoneLocation(context, http),
+        later = { later },
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(
@@ -78,10 +91,42 @@ class AppContainer(context: Context) {
     )
     val transcriber = Transcriber(http, secrets)
     val speaker = Speaker(images, http, secrets, mcp)
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope)
+    val chat: ChatRepository = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
-    val letters = Letters(db, settings, secrets, chatClient, appScope)
+    val notifier = Notifier(context, images)
+
+    /** Whether the app is on screen (MainActivity, between onStart and onStop). */
+    @Volatile
+    var visible = false
+
+    val later: Later = Later(
+        context,
+        db,
+        chat,
+        notifier,
+        appScope,
+        // The conversation on screen needs no notification for what arrives in it.
+        showing = { id -> visible && settings.currentConversation.first() == id },
+    )
+    val letters = Letters(db, settings, secrets, chatClient, appScope, written = { later.letterWritten(it) })
+
+    /** Where a tapped notification leads, until a screen has gone there. */
+    val opening = MutableStateFlow<Opening?>(null)
+
+    /** A notification about [conversationId] was tapped: its TA and the conversation become current, then the chat shows. */
+    fun openConversation(conversationId: Long) {
+        appScope.launch {
+            val conversation = db.conversations().get(conversationId) ?: return@launch
+            settings.setCurrentCompanion(conversation.companionId)
+            settings.setCurrentConversation(conversationId)
+            opening.value = Opening.Chat(conversationId)
+        }
+    }
+
+    fun openLetter(id: Long) {
+        opening.value = Opening.Letter(id)
+    }
 
     init {
         // The first TA is made from the old settings before anything asks who is being talked to.
@@ -90,5 +135,7 @@ class AppContainer(context: Context) {
             // What a TA brought from another app used to sit in their persona; it moves into their memory, once.
             PersonaMemory.migrate(db, System.currentTimeMillis())
         }
+        // Notes still waiting and letters on their way get their background work back, if it was lost.
+        later.reconcile()
     }
 }

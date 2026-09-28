@@ -245,9 +245,10 @@ object LetterPrompt {
 
 /**
  * Letters: drafts, sending, and the TA's side. A TA's letter is written ahead of time and
- * stored with the time it arrives; the mailbox shows it from then on. Nothing waits for a
+ * stored with the time it arrives; the mailbox shows it from then on. The writing waits for no
  * background job: phones kill those. Whatever is due gets written the next time the app
- * comes to the front ([tick]).
+ * comes to the front ([tick]). Only the notification that it has arrived is left to the
+ * background ([written]): if the phone delays or drops it, the letter is in the mailbox anyway.
  */
 class Letters(
     private val db: AppDatabase,
@@ -257,6 +258,8 @@ class Letters(
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
+    /** A TA's letter was written, to arrive at its deliverAt. */
+    private val written: (LetterEntity) -> Unit = {},
 ) {
     private val writing = Mutex()
 
@@ -324,9 +327,8 @@ class Letters(
             val text = write(ta, sent) ?: continue
             // Picked when it was sent. One sent before there was a choice gets the hours.
             val at = sent.replyDueAt ?: LetterTiming.replyAt(sent.deliverAt ?: sent.createdAt, seed = sent.id, zone = zone())
-            db.letters().insert(
-                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = clock(), deliverAt = at, replyTo = sent.id),
-            )
+            val reply = LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = clock(), deliverAt = at, replyTo = sent.id)
+            written(reply.copy(id = db.letters().insert(reply)))
         }
     }
 
@@ -344,9 +346,8 @@ class Letters(
             val text = write(ta, null) ?: continue
             db.companions().get(ta.id)?.let { db.companions().update(it.copy(lastLetterTry = now)) }
             if (LetterPrompt.isSkip(text)) continue
-            db.letters().insert(
-                LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone())),
-            )
+            val letter = LetterEntity(companionId = ta.id, author = LetterEntity.AUTHOR_AI, content = text, createdAt = now, deliverAt = LetterTiming.ownAt(now, seed = now, zone = zone()))
+            written(letter.copy(id = db.letters().insert(letter)))
         }
     }
 

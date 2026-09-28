@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's bubble with its three dots cut out, cropped for the status bar (only its shape shows there). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="56"
+    android:viewportHeight="56">
+    <group
+        android:translateX="-26"
+        android:translateY="-26">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M46,32H62A16,16 0,0 1,78 48V52A16,16 0,0 1,62 68H47C44,72 39,75 34,76C36,73 37.2,70 38,65.9A16,16 0,0 1,30 52V48A16,16 0,0 1,46 32Z M41.2,50a2.8,2.8 0,1 0,5.6 0a2.8,2.8 0,1 0,-5.6 0z M51.2,50a2.8,2.8 0,1 0,5.6 0a2.8,2.8 0,1 0,-5.6 0z M61.2,50a2.8,2.8 0,1 0,5.6 0a2.8,2.8 0,1 0,-5.6 0z" />
+    </group>
+</vector>

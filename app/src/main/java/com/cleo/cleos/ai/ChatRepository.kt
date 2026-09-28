@@ -14,6 +14,7 @@ import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
+import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.MessageEntity
 import kotlinx.coroutines.CancellationException
@@ -23,6 +24,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -190,19 +192,23 @@ class ChatRepository(
             sends.merge(conversationId, 1L) { a, b -> a + b }
             lastSent[conversationId] = System.currentTimeMillis()
             if (busy(conversationId)) return
-            launchFor(conversationId) {
-                while (true) {
-                    awaitQuiet(conversationId)
-                    val seen = sends[conversationId]
-                    if (db.conversations().get(conversationId) != null && unanswered(conversationId)) reply(conversationId)
-                    synchronized(lock) {
-                        // Nothing sent meanwhile: done. Off the map here, under the lock, so a message
-                        // sent from now on starts a reply of its own instead of counting on this one.
-                        if (sends[conversationId] == seen) {
-                            jobs.remove(conversationId, coroutineContext.job)
-                            return@launchFor
-                        }
-                    }
+            launchFor(conversationId) { answerUntilQuiet(conversationId) }
+        }
+    }
+
+    /** Replies, as the conversation's job, until the person has sent nothing that is not answered. */
+    private suspend fun answerUntilQuiet(conversationId: Long) {
+        val job = currentCoroutineContext().job
+        while (true) {
+            awaitQuiet(conversationId)
+            val seen = sends[conversationId]
+            if (db.conversations().get(conversationId) != null && unanswered(conversationId)) reply(conversationId)
+            synchronized(lock) {
+                // Nothing sent meanwhile: done. Off the map here, under the lock, so a message
+                // sent from now on starts a reply of its own instead of counting on this one.
+                if (sends[conversationId] == seen) {
+                    jobs.remove(conversationId, job)
+                    return
                 }
             }
         }
@@ -263,6 +269,16 @@ class ChatRepository(
     /** The TA a conversation is with (the first one if the conversation is gone). */
     private suspend fun taOf(conversationId: Long) =
         db.conversations().get(conversationId)?.companionId?.let { companions.get(it) } ?: companions.current()
+
+    /**
+     * The tools [ta] gets: the ones switched on, send_voice only once there is a voice to speak
+     * with, and note_for_later only while it may reach out on its own (a switch of its own, not
+     * one of the shared ones).
+     */
+    private fun groupsFor(s: AppSettings, ta: CompanionEntity): Set<ToolGroup> {
+        val on = if (Speech.ready(s)) s.tools else s.tools - ToolGroup.Speak
+        return if (ta.proactive) on + ToolGroup.Later else on
+    }
 
     /**
      * A voice message: stored at once, so it shows while it is being turned into text, then
@@ -424,6 +440,142 @@ class ChatRepository(
         }
     }
 
+    /** What a wake came to (see Later). */
+    sealed interface WakeResult {
+        /** What the TA sent, in order. */
+        class Sent(val messages: List<MessageEntity>) : WakeResult
+
+        /** It decided not to; [why] is what it said after SKIP. */
+        class Skipped(val why: String) : WakeResult
+
+        /** A reply was under way there: nothing was done. */
+        data object Busy : WakeResult
+
+        class Failed(val why: String) : WakeResult
+    }
+
+    /**
+     * The TA reading something it noted, now that it is due, and deciding whether to say it:
+     * [instruction] goes after the conversation as a turn the person never sees (Prompt.withWake).
+     * It runs as the conversation's job, like a reply, so the two never write at once, and what
+     * the person sends meanwhile is answered right after. Nothing shows while the TA decides:
+     * typing dots that came to nothing would be a message that never came.
+     */
+    suspend fun wake(conversationId: Long, instruction: String): WakeResult {
+        val outcome = CompletableDeferred<WakeResult>()
+        synchronized(lock) {
+            if (busy(conversationId)) return WakeResult.Busy
+            val seen = sends[conversationId]
+            launchFor(conversationId) {
+                outcome.complete(
+                    try {
+                        wakeTurn(conversationId, instruction)
+                    } catch (e: CancellationException) {
+                        outcome.complete(WakeResult.Failed(STOPPED))
+                        throw e
+                    } catch (e: Exception) {
+                        WakeResult.Failed(e.message ?: e.javaClass.simpleName)
+                    },
+                )
+                synchronized(lock) {
+                    // Nothing sent meanwhile: done, off the map under the lock (see answerUntilQuiet).
+                    if (sends[conversationId] == seen) {
+                        jobs.remove(conversationId, coroutineContext.job)
+                        return@launchFor
+                    }
+                }
+                answerUntilQuiet(conversationId)
+            }
+            // Stopped before it began (its TA deleted meanwhile): an answer all the same.
+            jobs[conversationId]?.invokeOnCompletion { outcome.complete(WakeResult.Failed(STOPPED)) }
+        }
+        return outcome.await()
+    }
+
+    private suspend fun wakeTurn(conversationId: Long, instruction: String): WakeResult {
+        val s = settings.current()
+        val ta = taOf(conversationId)
+        val key = secrets.key(ta.apiBaseUrl)
+        if (key.isNullOrBlank()) return WakeResult.Failed("还没填 API Key")
+        val conversation = db.conversations().get(conversationId) ?: return WakeResult.Failed("对话已经删了")
+        val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
+        val endpointKey = endpoint.chatUrl + "|" + endpoint.model
+        val history = Recap.sent(recaps.live(conversation), s.historySize)
+        val now = ZonedDateTime.now()
+        val since = System.currentTimeMillis()
+        // No outside services and no pictures: nobody is there to allow a call, and deciding
+        // whether to say something shouldn't cost what answering a picture does.
+        var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta)
+        var thinking = ta.deepThinking && endpointKey !in refusesThinking
+        val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
+        fun build() = Prompt.withWake(Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap), instruction)
+        var messages = build()
+        var rounds = 0
+        suspend fun sent() = db.messages().proactiveSince(conversationId, since)
+        suspend fun result(why: String): WakeResult {
+            val said = sent()
+            if (said.isEmpty()) return WakeResult.Skipped(why)
+            recaps.foldLater(conversationId)
+            return WakeResult.Sent(said)
+        }
+        try {
+            while (true) {
+                val mayRefuse = rounds == 0 && (groups.isNotEmpty() || thinking)
+                when (val step = step(conversationId, endpoint, messages, tools.specs(groups), mayRefuse, thinking, showThought = ta.deepThinking, wake = true)) {
+                    is Step.Said -> {
+                        val error = step.error
+                        if (error != null) return if (sent().isEmpty()) WakeResult.Failed(error) else result("")
+                        val text = step.text.trim()
+                        if (text.isEmpty() || LaterRules.isSkip(text)) return result(LaterRules.skipReason(text))
+                        // A model that doesn't send messages through the tool says it in plain words.
+                        withContext(NonCancellable) {
+                            val at = System.currentTimeMillis()
+                            db.messages().insert(
+                                MessageEntity(
+                                    conversationId = conversationId,
+                                    role = "assistant",
+                                    content = text,
+                                    createdAt = at,
+                                    thought = step.thought?.let(MessageThoughts::encode),
+                                    proactive = true,
+                                ),
+                            )
+                            db.conversations().touch(conversationId, at)
+                        }
+                        return result("")
+                    }
+                    Step.Refused -> {
+                        // As in a reply: the thinking switch goes first, then the tools. The chat is told
+                        // about it at the next reply, not by a line appearing out of nowhere.
+                        if (thinking) thinking = false else groups = emptySet()
+                        messages = build()
+                    }
+                    is Step.Called -> {
+                        if (rounds == MAX_TOOL_ROUNDS) return result("连着用了太多次工具")
+                        val results = runTools(conversationId, step, s.copy(tools = groups), ta.id, emptyList(), ta.name, wake = true)
+                        if (step.message.toolCalls.all { it.name in ToolSpecs.speaking }) return result("")
+                        messages = messages + step.message + results
+                        rounds++
+                    }
+                    is Step.Ended -> return result("")
+                }
+            }
+        } finally {
+            // Nothing said: none of it happened, as far as the chat goes. Its calls (putting the note
+            // off, say) and its thinking would otherwise sit there under "自己想起来的" with no message
+            // after them, and the person would see what was meant to stay unsaid. What it did is in
+            // the settings line; a note taken again is in its own table.
+            withContext(NonCancellable) {
+                if (sent().isEmpty()) {
+                    db.messages().deleteProactiveSince(conversationId, since)
+                    // Nor did it bring the conversation up the list.
+                    val newest = db.messages().newest(conversationId, 1).firstOrNull()?.createdAt ?: 0L
+                    db.conversations().touch(conversationId, maxOf(conversation.updatedAt, newest))
+                }
+            }
+        }
+    }
+
     private suspend fun reply(conversationId: Long) {
         val s = settings.current()
         val ta = taOf(conversationId)
@@ -455,29 +607,36 @@ class ChatRepository(
             history.lastOrNull { it.role == "user" }?.let { m -> answeredUpTo.merge(conversationId, m.createdAt) { a, b -> maxOf(a, b) } }
             val recap = conversation?.recap
             val now = ZonedDateTime.now()
-            // send_voice only once there is a voice to speak with.
-            var groups = if (endpointKey in refusesTools) emptySet() else s.tools.let { if (Speech.ready(s)) it else it - ToolGroup.Speak }
+            var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta)
             // The tools of the MCP services switched on come along whenever tools do.
             var outside = if (endpointKey in refusesTools) emptyList() else mcp.tools()
             var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
             var thinking = ta.deepThinking && endpointKey !in refusesThinking
             // What the TA remembers, read once for this reply.
             val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
-            var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
+            // What it noted that has come due while the two are talking: this reply takes it in,
+            // and once it has gone through, it is dealt with (Later wakes nobody for it).
+            val due = if (ta.proactive) db.later().dueFor(ta.id, System.currentTimeMillis()) else emptyList()
+            fun build() = Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what })
+            var messages = prepare(build())
             var rounds = 0
             // What the last refusal made this reply leave out, and when.
             var leftOut: LeftOut? = null
+            suspend fun done() {
+                remember(leftOut, conversationId, endpointKey)
+                recaps.foldLater(conversationId)
+                if (due.isNotEmpty()) db.later().delete(due.map { it.id })
+            }
             while (true) {
                 val mayRefuse = rounds == 0 && (groups.isNotEmpty() || outside.isNotEmpty() || withImages || thinking)
                 val specs = tools.specs(groups) + outside.map { it.spec }
                 when (val step = step(conversationId, endpoint, messages, specs, mayRefuse, thinking, showThought = ta.deepThinking)) {
                     is Step.Ended -> {
-                        if (step.ok) {
-                            remember(leftOut, conversationId, endpointKey)
-                            recaps.foldLater(conversationId)
-                        }
+                        if (step.ok) done()
                         return
                     }
+                    // Only in a wake.
+                    is Step.Said -> return
                     Step.Refused -> {
                         // The thinking switch goes first: it was asked for on top of the rest. Then
                         // pictures: many more models take tools than take pictures.
@@ -495,7 +654,7 @@ class ChatRepository(
                                 outside = emptyList()
                             }
                         }
-                        messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
+                        messages = prepare(build())
                     }
                     is Step.Called -> {
                         if (rounds == MAX_TOOL_ROUNDS) {
@@ -503,12 +662,11 @@ class ChatRepository(
                             hide(conversationId)
                             return
                         }
-                        val results = runTools(conversationId, step, s, ta.id, outside, ta.name)
+                        val results = runTools(conversationId, step, s.copy(tools = groups), ta.id, outside, ta.name)
                         // Only messages sent: that was the whole reply. Asking again would bring
                         // nothing new, or a "发好了".
                         if (step.message.toolCalls.all { it.name in ToolSpecs.speaking }) {
-                            remember(leftOut, conversationId, endpointKey)
-                            recaps.foldLater(conversationId)
+                            done()
                             hide(conversationId)
                             return
                         }
@@ -551,6 +709,9 @@ class ChatRepository(
     private sealed interface Step {
         class Ended(val ok: Boolean) : Step
 
+        /** A wake's answer without calls, not stored: it may be SKIP, and the caller decides. */
+        class Said(val text: String, val error: String?, val thought: MessageThought?) : Step
+
         /**
          * The first request failed the way requests fail on a model that can't take what
          * was in them: tools, or pictures.
@@ -568,6 +729,10 @@ class ChatRepository(
      * One request: streams it to the screen, stores what came back, says what's next. [showThought]:
      * the TA's thinking switch. Off, a model that thinks all the same (or a relay that didn't pass
      * on "don't") only shows the dots while it does, and nothing of it is kept.
+     *
+     * [wake]: the TA deciding on its own whether to say something (see [wake]). Nothing is shown
+     * while it decides, what it sends is marked as its own, and an answer without calls comes
+     * back as [Step.Said], unstored, since it may be SKIP.
      */
     private suspend fun step(
         conversationId: Long,
@@ -577,6 +742,7 @@ class ChatRepository(
         mayRefuse: Boolean,
         thinking: Boolean,
         showThought: Boolean,
+        wake: Boolean = false,
     ): Step {
         val startedAt = System.currentTimeMillis()
         val text = StringBuilder()
@@ -600,14 +766,17 @@ class ChatRepository(
             doneThinking()
             MessageThought(it, thinkingMs ?: 0)
         }
-        show(StreamingReply(conversationId, "", thinking = false))
+        fun live(reply: StreamingReply) {
+            if (!wake) show(reply)
+        }
+        live(StreamingReply(conversationId, "", thinking = false))
         try {
             client.stream(endpoint, messages, specs, thinking).collect { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
                         doneThinking()
                         text.append(event.text)
-                        show(StreamingReply(conversationId, text.toString(), thinking = false, thought = thoughtShown, thoughtMs = thinkingMs))
+                        live(StreamingReply(conversationId, text.toString(), thinking = false, thought = thoughtShown, thoughtMs = thinkingMs))
                     }
                     is ChatEvent.Reasoning -> {
                         if (event.sendBack) reasoning.append(event.text)
@@ -615,13 +784,14 @@ class ChatRepository(
                             if (thinkingText.isEmpty()) thinkingFrom = System.currentTimeMillis()
                             thinkingText.append(event.text)
                         }
-                        if (text.isEmpty()) show(StreamingReply(conversationId, "", thinking = true, thought = thinkingText.toString()))
+                        if (text.isEmpty()) live(StreamingReply(conversationId, "", thinking = true, thought = thinkingText.toString()))
                     }
                     is ChatEvent.ToolCalls -> calls = event.calls
                 }
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable) { finish(conversationId, startedAt, text.toString(), STOPPED, keepEmpty = false, thought()) }
+            // Half of what a wake was deciding to say is not a message.
+            if (!wake) withContext(NonCancellable) { finish(conversationId, startedAt, text.toString(), STOPPED, keepEmpty = false, thought()) }
             throw e
         } catch (e: ChatException) {
             error = e.message
@@ -653,6 +823,7 @@ class ChatRepository(
                             toolCalls = ToolCallCodec.encode(calls),
                             reasoning = sentBack,
                             thought = shown?.let(MessageThoughts::encode),
+                            proactive = wake,
                         ),
                     )
                     body.isBlank() -> null
@@ -663,12 +834,15 @@ class ChatRepository(
                             content = body,
                             createdAt = startedAt,
                             thought = shown?.let(MessageThoughts::encode),
+                            proactive = wake,
                         ),
                     )
                 }
                 db.conversations().touch(conversationId, System.currentTimeMillis())
                 // Nothing stored yet: the first message sent takes the thinking along.
                 Step.Called(ApiMessage("assistant", body, calls, reasoning = sentBack), savedId = id, thought = shown.takeIf { id == null })
+            } else if (wake) {
+                Step.Said(text.toString(), error, shown)
             } else {
                 finish(conversationId, startedAt, text.toString(), error, keepEmpty = true, shown)
                 Step.Ended(ok = error == null)
@@ -680,7 +854,7 @@ class ChatRepository(
      * Runs the calls, storing each result with its line for the chat. Sent messages come
      * first: each is the TA speaking and becomes a bubble, a moment after the one before, the
      * way messages arrive when someone types them one by one. Then the other calls, in order.
-     * The results go back in the order of the calls.
+     * The results go back in the order of the calls. [wake]: as in [step].
      */
     private suspend fun runTools(
         conversationId: Long,
@@ -689,6 +863,7 @@ class ChatRepository(
         companionId: Long,
         outside: List<McpTool>,
         ai: String,
+        wake: Boolean = false,
     ): List<ApiMessage> {
         val said = step.message.content
         val (sends, others) = step.message.toolCalls.partition { it.name in ToolSpecs.speaking }
@@ -716,7 +891,7 @@ class ChatRepository(
                 else -> {
                     previous?.let {
                         // Typing the next one: the dots, for a moment that grows a little with what was just said.
-                        show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
+                        if (!wake) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
                         delay((400L + it.length * 25L).coerceAtMost(1500L))
                     }
                     // A voice message is made first (a voice service can take a few seconds). One that
@@ -724,7 +899,7 @@ class ChatRepository(
                     var voice: MessageAudio? = null
                     var why: String? = null
                     if (call.name == ToolSpecs.sendVoice.name) {
-                        show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }, activity = "在录语音"))
+                        if (!wake) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }, activity = "在录语音"))
                         try {
                             voice = speaker.speak(s, words)
                         } catch (e: CancellationException) {
@@ -746,6 +921,7 @@ class ChatRepository(
                                 audio = voice?.let(MessageAudios::encode),
                                 thought = thought,
                                 quote = quote?.let(MessageQuotes::encode),
+                                proactive = wake,
                             ),
                         )
                         db.conversations().touch(conversationId, at)
@@ -772,6 +948,7 @@ class ChatRepository(
                         reasoning = step.message.reasoning,
                         // Only if no message went out to carry it.
                         thought = thought,
+                        proactive = wake,
                     ),
                 )
             }
@@ -787,7 +964,7 @@ class ChatRepository(
                 savedId = step.savedId.takeIf { said.isNotEmpty() },
                 activity = outer?.let { "在用${it.serverName}" } ?: tools.activity(call.name),
             )
-            show(live)
+            if (!wake) show(live)
             val outcome = try {
                 if (outer != null) runOutside(conversationId, outer, call, live, ai) else tools.run(call, s, conversationId, companionId)
             } catch (e: CancellationException) {
@@ -807,6 +984,7 @@ class ChatRepository(
                         createdAt = at,
                         toolCallId = call.id,
                         note = outcome.note,
+                        proactive = wake,
                     ),
                 )
                 outcome.request?.let {

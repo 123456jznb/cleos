@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.Opening
 import com.cleo.cleos.glass.GlassTab
 import com.cleo.cleos.glass.GlassTabBar
 import com.cleo.cleos.glass.LocalWallpaperBackdrop
@@ -41,6 +44,7 @@ import com.cleo.cleos.glass.WallpaperOverscan
 import com.cleo.cleos.glass.backdropSource
 import com.cleo.cleos.glass.rememberBackdrop
 import com.cleo.cleos.ui.chat.ChatTab
+import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.diary.DiaryTab
 import com.cleo.cleos.ui.home.HomeTab
 import com.cleo.cleos.ui.todo.TodoTab
@@ -61,6 +65,15 @@ fun MainScreen(
     onOpenMemory: () -> Unit,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // A notification about a conversation was tapped: the chat, which already shows it.
+    val c = appContainer()
+    val opening by c.opening.collectAsStateWithLifecycle()
+    LaunchedEffect(opening) {
+        if (opening is Opening.Chat) {
+            tab = 0
+            c.opening.value = null
+        }
+    }
     val holder = rememberSaveableStateHolder()
     val page = rememberBackdrop()
     val density = LocalDensity.current
