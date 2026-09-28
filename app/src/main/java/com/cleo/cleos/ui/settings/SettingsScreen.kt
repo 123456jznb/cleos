@@ -1,5 +1,9 @@
 package com.cleo.cleos.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -538,7 +542,29 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 val version = remember {
                     runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
                 }
+                var releasesHint by remember { mutableStateOf<String?>(null) }
                 Text("Cleos ${version.orEmpty()}", color = palette.content, fontSize = 14.sp)
+                Text(
+                    "新版本都放在蓝奏云上。更新时直接装新的 apk、覆盖安装，聊天记录都还在；别先卸载，卸载会把这台手机上的聊天、" +
+                        "日记一起清掉。真要重装，先在上面「数据」里导出一份备份。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Chip("去蓝奏云看新版", selected = false) {
+                    // The page asks for the code once; it is on the clipboard by then.
+                    context.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText("提取码", RELEASES_CODE))
+                    val opened = runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }.isSuccess
+                    releasesHint = if (opened) {
+                        "提取码 $RELEASES_CODE 已经复制好了，页面让输密码时粘贴就行。"
+                    } else {
+                        "没找到能打开网页的浏览器。地址是 $RELEASES_URL ，提取码 $RELEASES_CODE（已复制）。"
+                    }
+                }
+                releasesHint?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
                 Text(
                     "聊天、日记和待办都只存在这台手机上。API Key 用系统密钥库加密。",
                     color = palette.contentSecondary,
@@ -802,3 +828,7 @@ private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
         Text(text, color = if (selected) Color.White else palette.content, fontSize = 14.sp)
     }
 }
+
+/** Where every release goes: a 蓝奏云 folder, so the link stays the same from one version to the next. */
+private const val RELEASES_URL = "https://wwbnf.lanzouc.com/b01gicbubg"
+private const val RELEASES_CODE = "5y4u"
