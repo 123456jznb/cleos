@@ -63,6 +63,9 @@ data class AppSettings(
     val letterReply: ReplyWhen = ReplyWhen.Hours,
     /** The least time, in days, between two letters a TA writes of their own. */
     val letterEveryDays: Int = 5,
+    /** Where voice messages are turned into text (an OpenAI-shaped /audio/transcriptions), and with which model. */
+    val voiceBaseUrl: String = "",
+    val voiceModel: String = "",
 )
 
 /**
@@ -122,6 +125,8 @@ class SettingsRepository(private val context: Context) {
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val letterReply = stringPreferencesKey("letter_reply")
         val letterEveryDays = intPreferencesKey("letter_every_days")
+        val voiceBaseUrl = stringPreferencesKey("voice_base_url")
+        val voiceModel = stringPreferencesKey("voice_model")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
     }
@@ -149,6 +154,8 @@ class SettingsRepository(private val context: Context) {
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
+            voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
+            voiceModel = this[Keys.voiceModel] ?: d.voiceModel,
         )
     }
 
@@ -172,6 +179,8 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.chatAvatars] = next.chatAvatars
             prefs[Keys.letterReply] = next.letterReply.key
             prefs[Keys.letterEveryDays] = next.letterEveryDays
+            prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl
+            prefs[Keys.voiceModel] = next.voiceModel
         }
     }
 

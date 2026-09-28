@@ -3,6 +3,8 @@ package com.cleo.cleos.ai
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.ImageStore
+import com.cleo.cleos.data.MessageAudio
+import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.SecretStore
@@ -67,11 +69,16 @@ class ChatRepository(
     private val companions: Companions,
     private val recaps: Recaps,
     private val mcp: McpHub,
+    private val transcriber: Transcriber,
     private val scope: CoroutineScope,
 ) {
     /** The replies being written, by conversation. */
     private val _streaming = MutableStateFlow<Map<Long, StreamingReply>>(emptyMap())
     val streaming: StateFlow<Map<Long, StreamingReply>> = _streaming.asStateFlow()
+
+    /** Voice messages being turned into text, by message id. */
+    private val _transcribing = MutableStateFlow<Set<Long>>(emptySet())
+    val transcribing: StateFlow<Set<Long>> = _transcribing.asStateFlow()
     private val jobs = ConcurrentHashMap<Long, Job>()
 
     /**
@@ -130,6 +137,44 @@ class ChatRepository(
     private suspend fun taOf(conversationId: Long) =
         db.conversations().get(conversationId)?.companionId?.let { companions.get(it) } ?: companions.current()
 
+    /**
+     * A voice message: stored at once, so it shows while it is being turned into text, then
+     * answered like a typed one. False when a reply is under way here: nothing was stored.
+     */
+    fun sendVoice(conversationId: Long, clip: MessageAudio): Boolean = start(conversationId) {
+        val now = System.currentTimeMillis()
+        val id = db.messages().insert(
+            MessageEntity(conversationId = conversationId, role = "user", content = "", createdAt = now, audio = MessageAudios.encode(clip)),
+        )
+        db.conversations().touch(conversationId, now)
+        if (transcribe(id, clip)) reply(conversationId)
+    }
+
+    /** A voice message that couldn't be turned into text, tried again; answered if it can be now. */
+    fun retryVoice(conversationId: Long, messageId: Long): Boolean = start(conversationId) {
+        val clip = db.messages().get(messageId)?.let { MessageAudios.decode(it.audio) } ?: return@start
+        db.messages().setError(messageId, null)
+        if (transcribe(messageId, clip)) reply(conversationId)
+    }
+
+    /** Message [id]'s recording into its text; false, with the reason on the message, when it can't be. */
+    private suspend fun transcribe(id: Long, clip: MessageAudio): Boolean {
+        _transcribing.update { it + id }
+        try {
+            val s = settings.current()
+            if (s.voiceBaseUrl.isBlank() || s.voiceModel.isBlank()) throw ChatException("还没接语音转文字的服务，去设置「发语音」里选一个。")
+            val text = transcriber.transcribe(s.voiceBaseUrl, s.voiceModel, images.file(clip.file)).trim()
+            if (text.isEmpty()) throw ChatException("没听清，再说一次？")
+            db.messages().setContent(id, text)
+            return true
+        } catch (e: ChatException) {
+            withContext(NonCancellable) { db.messages().setError(id, "没转成文字：${e.message}") }
+            return false
+        } finally {
+            _transcribing.update { it - id }
+        }
+    }
+
     /** False when nothing was sent (a reply is still under way here): the text stays in the box. */
     fun send(conversationId: Long, text: String, pictures: List<MessageImage> = emptyList()): Boolean {
         val content = text.trim()
@@ -184,17 +229,18 @@ class ChatRepository(
     /** The row and the pictures sent with it: nothing else points at those files. */
     fun deleteMessage(id: Long) {
         scope.launch {
-            val pictures = db.messages().get(id)?.images
+            val m = db.messages().get(id)
             db.messages().delete(id)
-            images.delete(MessageImages.decode(pictures).map { it.file })
+            images.delete(MessageImages.decode(m?.images).map { it.file } + listOfNotNull(MessageAudios.decode(m?.audio)?.file))
         }
     }
 
-    /** A conversation and its pictures: the rows go by cascade, the files would stay behind. */
+    /** A conversation, its pictures and recordings: the rows go by cascade, the files would stay behind. */
     fun deleteConversation(id: Long) {
         scope.launch {
             stopReplies(listOf(id))
-            val pictures = db.messages().imagesIn(id).flatMap { MessageImages.decode(it) }.map { it.file }
+            val pictures = db.messages().imagesIn(id).flatMap { MessageImages.decode(it) }.map { it.file } +
+                db.messages().audioIn(id).mapNotNull { MessageAudios.decode(it)?.file }
             db.conversations().delete(id)
             images.delete(pictures)
         }

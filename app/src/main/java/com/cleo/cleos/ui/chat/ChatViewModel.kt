@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Recap
+import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
@@ -48,6 +49,10 @@ data class ChatUiState(
     val recap: String? = null,
     /** The last message folded into [recap]: its time and id. */
     val recapUntil: Pair<Long, Long>? = null,
+    /** Voice messages being turned into text. */
+    val transcribing: Set<Long> = emptySet(),
+    /** A transcription service is set up, so the microphone can be used. */
+    val voiceReady: Boolean = false,
     val loaded: Boolean = false,
 )
 
@@ -76,11 +81,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }.filterNotNull()
         combine(
             c.db.messages().observe(id),
-            c.chat.streaming,
+            combine(c.chat.streaming, c.chat.transcribing) { streaming, transcribing -> streaming to transcribing },
             here,
             here.map { it.second.apiBaseUrl }.distinctUntilChanged().flatMapLatest { c.secrets.hasKey(it) },
             c.settings.settings,
-        ) { messages, streaming, (conversation, ta), hasKey, s ->
+        ) { messages, (streaming, transcribing), (conversation, ta), hasKey, s ->
             val live = streaming[id]
             // Once the stored copy of the live text is in the list, the live one steps
             // aside: all of it when the reply is over, only the text while tools still run.
@@ -106,6 +111,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 model = ta.apiModel,
                 recap = conversation?.recap,
                 recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },
+                transcribing = transcribing,
+                voiceReady = s.voiceBaseUrl.isNotBlank() && s.voiceModel.isNotBlank(),
                 loaded = true,
             )
         }
@@ -156,6 +163,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun delete(messageId: Long) = c.chat.deleteMessage(messageId)
+
+    /** Sends a recording. One that can't go now (a reply is under way) is thrown away, and false. */
+    fun sendVoice(clip: MessageAudio): Boolean {
+        val id = state.value.conversationId
+        if (id == null || !c.chat.sendVoice(id, clip)) {
+            c.images.delete(listOf(clip.file))
+            return false
+        }
+        return true
+    }
+
+    fun retryVoice(messageId: Long) {
+        val id = state.value.conversationId ?: return
+        c.chat.retryVoice(id, messageId)
+    }
 
     /** The person's answer to a card asking whether the TA may use an outside service's tool. */
     fun answerAsk(answer: ChatRepository.Answer) {

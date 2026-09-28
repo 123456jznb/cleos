@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.Mcp
+import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
 import com.cleo.cleos.data.AppSettings
@@ -81,6 +82,7 @@ import kotlin.math.roundToInt
 fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String) -> Unit) {
     val vm = appViewModel { SettingsViewModel(it) }
     val mcpServers by vm.mcpServers.collectAsStateWithLifecycle()
+    val hasVoiceKey by vm.hasVoiceKey.collectAsStateWithLifecycle()
     val hasKey by vm.hasKey.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val palette = LocalGlassPalette.current
@@ -263,6 +265,47 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            }
+
+            Section("发语音") {
+                Text(
+                    "在聊天里按住输入框右边的话筒说话，松开就发，往上滑再松开是取消。语音先转成文字再给 TA 看，" +
+                        "所以要接一个转文字的服务，和聊天的模型分开选。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Voice.presets.forEach { p ->
+                        Chip(p.name, selected = vm.voiceBaseUrl.trimEnd('/') == p.baseUrl) { vm.applyVoicePreset(p) }
+                    }
+                }
+                Field("接口地址", vm.voiceBaseUrl, { vm.voiceBaseUrl = it }, keyboardType = KeyboardType.Uri)
+                Field("模型", vm.voiceModel, { vm.voiceModel = it })
+                OutlinedTextField(
+                    value = vm.voiceKeyInput,
+                    onValueChange = { vm.voiceKeyInput = it },
+                    label = { Text("API Key") },
+                    placeholder = { if (hasVoiceKey) Text("已保存（不再显示）；要换就重新填") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (vm.voiceKeyInput.isNotBlank()) Chip("保存 Key", selected = true) { vm.saveVoiceKey() }
+                    if (vm.voiceBaseUrl.isNotBlank()) Chip(if (vm.voiceTesting) "正在试…" else "试一下", selected = false) { vm.testVoice() }
+                }
+                Text(
+                    if (hasVoiceKey) "这个地址的 Key 已经有了。" else "Key 跟着地址存：和哪个 TA 聊天用的是同一个地址，就不用再填。模型名以服务商的说明为准。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                vm.voiceResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
             }
 
             Section("外部服务（MCP）") {

@@ -163,6 +163,8 @@ data class MessageEntity(
     val note: String? = null,
     /** "user": the pictures sent with it, a JSON array of MessageImage, in order. */
     val images: String? = null,
+    /** "user": a voice message's recording (MessageAudio as JSON); [content] is what it said, once transcribed. */
+    val audio: String? = null,
 )
 
 @Serializable

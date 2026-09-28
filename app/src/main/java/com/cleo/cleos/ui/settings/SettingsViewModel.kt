@@ -14,6 +14,8 @@ import com.cleo.cleos.ai.ApiEndpoint
 import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
+import com.cleo.cleos.ai.Voice
+import com.cleo.cleos.ai.VoicePreset
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.McpServer
 import com.cleo.cleos.data.Companions
@@ -60,6 +62,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var historySize by mutableIntStateOf(40)
     var weatherCity by mutableStateOf("")
+    var voiceBaseUrl by mutableStateOf("")
+    var voiceModel by mutableStateOf("")
+    var voiceKeyInput by mutableStateOf("")
+    var voiceTesting by mutableStateOf(false)
+        private set
+    var voiceResult by mutableStateOf<String?>(null)
+        private set
     var keyInput by mutableStateOf("")
     var loaded by mutableStateOf(false)
         private set
@@ -80,6 +89,12 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .flatMapLatest { c.secrets.hasKey(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    /** Whether the transcription service's address has a key yet: filed by address, like the chat keys. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val hasVoiceKey: StateFlow<Boolean> = snapshotFlow { voiceBaseUrl }
+        .flatMapLatest { c.secrets.hasKey(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val mcpServers: StateFlow<List<McpServer>> = c.mcp.servers.all.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
@@ -90,6 +105,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             userName = s.userName
             historySize = s.historySize
             weatherCity = s.weatherCity
+            voiceBaseUrl = s.voiceBaseUrl
+            voiceModel = s.voiceModel
             loaded = true
             watch()
         }
@@ -97,7 +114,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     @OptIn(FlowPreview::class)
     private suspend fun watch() {
-        snapshotFlow { listOf(baseUrl, model, aiName, userName, persona, historySize, weatherCity) }
+        snapshotFlow { listOf(baseUrl, model, aiName, userName, persona, historySize, weatherCity, voiceBaseUrl, voiceModel) }
             .drop(1)
             .debounce(500)
             .collect { persist() }
@@ -128,8 +145,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val user = userName.trim()
         val history = historySize
         val city = weatherCity.trim()
+        val voiceUrl = voiceBaseUrl.trim()
+        val voiceM = voiceModel.trim()
         c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name, persona = p) }
-        c.settings.update { it.copy(userName = user, historySize = history, weatherCity = city) }
+        c.settings.update { it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM) }
     }
 
     /** Removes this TA with their conversations and diary; [then] leaves the screen. */
@@ -140,6 +159,42 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.chat.stopRepliesOf(id)
             c.companions.delete(id)
             then()
+        }
+    }
+
+    fun applyVoicePreset(p: VoicePreset) {
+        voiceBaseUrl = p.baseUrl
+        voiceModel = p.model
+        voiceResult = null
+    }
+
+    fun saveVoiceKey() {
+        val url = voiceBaseUrl.trim()
+        val key = voiceKeyInput.trim()
+        if (url.isEmpty() || key.isEmpty()) return
+        viewModelScope.launch {
+            c.secrets.setKey(url, key)
+            voiceKeyInput = ""
+        }
+    }
+
+    /** Sends a second of silence: a service that answers at all is set up right. */
+    fun testVoice() {
+        if (voiceTesting || voiceBaseUrl.isBlank()) return
+        voiceTesting = true
+        voiceResult = null
+        viewModelScope.launch {
+            val probe = c.images.file("voice_probe.wav")
+            voiceResult = try {
+                withContext(Dispatchers.IO) { probe.writeBytes(Voice.silence()) }
+                c.transcriber.transcribe(voiceBaseUrl, voiceModel, probe)
+                "能用。（试的是一秒静音，所以没转出字来。）"
+            } catch (e: ChatException) {
+                "没成：${e.message}"
+            } finally {
+                withContext(Dispatchers.IO) { probe.delete() }
+            }
+            voiceTesting = false
         }
     }
 

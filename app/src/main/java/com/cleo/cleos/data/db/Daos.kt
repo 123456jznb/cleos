@@ -97,6 +97,13 @@ interface MessageDao {
     @Query("SELECT images FROM messages WHERE conversationId = :conversationId AND images IS NOT NULL")
     suspend fun imagesIn(conversationId: Long): List<String>
 
+    /** The recordings of one conversation's voice messages, likewise. */
+    @Query("SELECT audio FROM messages WHERE conversationId = :conversationId AND audio IS NOT NULL")
+    suspend fun audioIn(conversationId: Long): List<String>
+
+    @Query("UPDATE messages SET error = :error WHERE id = :id")
+    suspend fun setError(id: Long, error: String?)
+
     /** The person's latest message with pictures in a conversation: what "this photo" means. */
     @Query(
         "SELECT * FROM messages WHERE conversationId = :conversationId AND role = 'user' AND images IS NOT NULL " +

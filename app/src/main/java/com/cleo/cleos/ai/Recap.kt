@@ -123,7 +123,8 @@ object Recap {
             m.role == "user" && m.note != null -> "（${m.note}）"
             m.role == "user" -> {
                 val pictures = MessageImages.decode(m.images).size
-                listOfNotNull(said(m.content).ifEmpty { null }, if (pictures > 0) "[发了${pictures}张图]" else null)
+                val words = said(m.content).ifEmpty { null }?.let { if (m.audio != null) "（语音）$it" else it }
+                listOfNotNull(words, if (pictures > 0) "[发了${pictures}张图]" else null)
                     .joinToString(" ")
                     .ifEmpty { null }
                     ?.let { "对方：$it" }

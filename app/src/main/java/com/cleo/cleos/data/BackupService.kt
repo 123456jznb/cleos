@@ -59,6 +59,8 @@ data class BackupSettings(
     /** Absent from backups made before these could be set: the defaults then. */
     val letterReply: String? = null,
     val letterEveryDays: Int = 5,
+    val voiceBaseUrl: String = "",
+    val voiceModel: String = "",
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -94,9 +96,15 @@ data class BackupSummary(
     val letters: Int,
     val todos: Int,
     val images: Int,
+    val voices: Int = 0,
 ) {
-    override fun toString() = "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$letters 封信、$todos 条待办、$images 张图"
+    override fun toString() =
+        "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$letters 封信、$todos 条待办、$images 张图" +
+            if (voices > 0) "、$voices 段语音" else ""
 }
+
+/** Recordings are named voice_…, among the pictures (VoiceRecorder). */
+private const val VOICE_PREFIX = "voice_"
 
 class BackupException(message: String) : Exception(message)
 
@@ -178,6 +186,8 @@ class BackupService(
                 chatAvatars = s.chatAvatars,
                 letterReply = s.letterReply.key,
                 letterEveryDays = s.letterEveryDays,
+                voiceBaseUrl = s.voiceBaseUrl,
+                voiceModel = s.voiceModel,
                 knownSince = lead?.knownSince,
             ),
             conversations = db.conversations().all(),
@@ -190,10 +200,13 @@ class BackupService(
         )
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
             data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
+            // Recordings live with the pictures and travel the same way.
+            data.messages.mapNotNull { m -> MessageAudios.decode(m.audio)?.file } +
             companions.mapNotNull { it.avatar } +
             listOfNotNull(s.wallpaper, s.userAvatar)).toSet()
 
         var written = 0
+        var voices = 0
         ZipOutputStream(BufferedOutputStream(raw)).use { zip ->
             zip.putNextEntry(ZipEntry(JSON_NAME))
             zip.write(json.encodeToString(data).toByteArray(Charsets.UTF_8))
@@ -204,10 +217,10 @@ class BackupService(
                 zip.putNextEntry(ZipEntry("images/$name"))
                 f.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
-                written++
+                if (name.startsWith(VOICE_PREFIX)) voices++ else written++
             }
         }
-        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.letters.size, data.todos.size, written)
+        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.letters.size, data.todos.size, written, voices)
     }
 
     private suspend fun restoreFrom(input: InputStream, takeSnapshot: Boolean): BackupSummary {
@@ -305,6 +318,8 @@ class BackupService(
                     chatAvatars = bs.chatAvatars,
                     letterReply = ReplyWhen.of(bs.letterReply),
                     letterEveryDays = bs.letterEveryDays,
+                    voiceBaseUrl = bs.voiceBaseUrl,
+                    voiceModel = bs.voiceModel,
                 )
             }
             settings.setCurrentCompanion(companions.first().id)

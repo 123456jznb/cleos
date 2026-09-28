@@ -1,6 +1,9 @@
 package com.cleo.cleos.ui.chat
 
+import android.Manifest
 import android.content.ClipData
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,6 +16,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,7 +57,9 @@ import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
@@ -65,12 +72,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,10 +92,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -94,6 +107,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
@@ -103,6 +117,9 @@ import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.SecretRequest
 import com.cleo.cleos.ai.SecretRequests
 import com.cleo.cleos.ai.StreamingReply
+import com.cleo.cleos.ai.Voice
+import com.cleo.cleos.data.MessageAudio
+import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.db.MessageEntity
@@ -122,6 +139,7 @@ import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
@@ -227,6 +245,103 @@ fun ChatTab(
     val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
     var switching by remember { mutableStateOf(false) }
     var readingRecap by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    // Voice messages: the recording under way, what the indicator shows, and the one playing.
+    val recorder = remember { VoiceRecorder(c.images.dir) }
+    var recording by remember { mutableStateOf(false) }
+    var cancelling by remember { mutableStateOf(false) }
+    var recordedMs by remember { mutableLongStateOf(0L) }
+    var loudness by remember { mutableFloatStateOf(0f) }
+    var voiceHint by remember { mutableStateOf<String?>(null) }
+    var askVoiceSetup by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf<String?>(null) }
+    val player = remember { arrayOfNulls<MediaPlayer>(1) }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        voiceHint = if (granted) "可以了，再按住说话" else "要给 Cleos 用话筒的权限，才能发语音"
+    }
+
+    fun stopPlaying() {
+        player[0]?.let {
+            runCatching { it.stop() }
+            it.release()
+        }
+        player[0] = null
+        playing = null
+    }
+
+    fun play(file: String) {
+        val again = playing == file
+        stopPlaying()
+        if (again) return
+        val p = MediaPlayer()
+        runCatching {
+            p.setDataSource(c.images.file(file).path)
+            p.setOnCompletionListener { stopPlaying() }
+            p.prepare()
+            p.start()
+        }.onSuccess {
+            player[0] = p
+            playing = file
+        }.onFailure {
+            p.release()
+            voiceHint = "这段语音放不了"
+        }
+    }
+
+    fun startVoice(): Boolean {
+        when {
+            !state.voiceReady -> askVoiceSetup = true
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
+                askMic.launch(Manifest.permission.RECORD_AUDIO)
+            !recorder.start() -> voiceHint = "话筒打不开，可能正被别的应用用着"
+            else -> {
+                stopPlaying()
+                recordedMs = 0
+                cancelling = false
+                recording = true
+                return true
+            }
+        }
+        return false
+    }
+
+    fun endVoice(cancel: Boolean) {
+        if (!recording) return
+        recording = false
+        cancelling = false
+        if (cancel) {
+            recorder.cancel()
+            return
+        }
+        val clip = recorder.stop()
+        when {
+            clip == null -> voiceHint = "说话时间太短了"
+            !vm.sendVoice(clip) -> voiceHint = "${state.aiName.ifBlank { "TA" }}还在回，等一下再说"
+        }
+    }
+
+    LaunchedEffect(recording) {
+        val t0 = System.currentTimeMillis()
+        while (recording) {
+            recordedMs = System.currentTimeMillis() - t0
+            loudness = recorder.level
+            // A minute is as long as one goes; it is sent as it is.
+            if (recordedMs >= Voice.MAX_MS) endVoice(cancel = false)
+            delay(100)
+        }
+    }
+    LaunchedEffect(voiceHint) {
+        if (voiceHint != null) {
+            delay(2200)
+            voiceHint = null
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            stopPlaying()
+            recorder.cancel()
+        }
+    }
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -303,11 +418,28 @@ fun ChatTab(
                 busy = state.replying,
                 onSend = { if (vm.send(input)) input = "" },
                 onStop = vm::stop,
+                recording = recording,
+                onVoiceStart = { startVoice() },
+                onVoiceMove = { cancelling = it },
+                onVoiceEnd = { endVoice(it) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = inputBottom)
                     .onSizeChanged { inputHeight = it.height },
             )
+            if (recording || voiceHint != null) {
+                RecordingPill(
+                    backdrop = page,
+                    recording = recording,
+                    ms = recordedMs,
+                    level = loudness,
+                    cancelling = cancelling,
+                    hint = voiceHint,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = inputBottom + with(density) { inputHeight.toDp() } + 10.dp),
+                )
+            }
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
@@ -354,6 +486,10 @@ fun ChatTab(
                                     onRetry = { vm.retry(m.id) },
                                     onDelete = { vm.delete(m.id) },
                                     onOpenImage = onOpenImage,
+                                    transcribing = m.id in state.transcribing,
+                                    playingFile = playing,
+                                    onPlay = { play(it) },
+                                    onRetryVoice = { vm.retryVoice(m.id) },
                                 )
                             }
                         }
@@ -378,6 +514,21 @@ fun ChatTab(
                 )
             }
         }
+    }
+
+    if (askVoiceSetup) {
+        AlertDialog(
+            onDismissRequest = { askVoiceSetup = false },
+            title = { Text("先接一个转文字的服务") },
+            text = { Text("语音要先转成文字再给${state.aiName.ifBlank { "TA" }}看。在设置「发语音」里选一个服务、填上 Key 就能用。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    askVoiceSetup = false
+                    onOpenSettings()
+                }) { Text("去设置") }
+            },
+            dismissButton = { TextButton(onClick = { askVoiceSetup = false }) { Text("算了") } },
+        )
     }
 
     if (readingRecap) {
@@ -467,9 +618,14 @@ private fun MessageBubble(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     onOpenImage: (String) -> Unit,
+    transcribing: Boolean = false,
+    playingFile: String? = null,
+    onPlay: (String) -> Unit = {},
+    onRetryVoice: () -> Unit = {},
 ) {
     val palette = LocalGlassPalette.current
     val mine = message.role == "user"
+    val audio = remember(message.audio) { MessageAudios.decode(message.audio) }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -496,7 +652,17 @@ private fun MessageBubble(
                     if (pictures.isNotEmpty()) {
                         PictureGroup(pictures, onOpen = onOpenImage, onLongPress = { menu = true })
                     }
-                    if (message.content.isNotEmpty()) {
+                    if (audio != null) {
+                        VoiceBubble(
+                            audio = audio,
+                            mine = mine,
+                            playing = playingFile == audio.file,
+                            transcript = message.content,
+                            transcribing = transcribing,
+                            onClick = { onPlay(audio.file) },
+                            onLongClick = { menu = true },
+                        )
+                    } else if (message.content.isNotEmpty()) {
                         GlassSurface(
                             modifier = Modifier
                                 .widthIn(max = bubbleMaxWidth())
@@ -524,6 +690,12 @@ private fun MessageBubble(
                         DropdownMenuItem(text = { Text("复制") }, onClick = {
                             menu = false
                             scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
+                        })
+                    }
+                    if (audio != null && message.content.isBlank() && !transcribing) {
+                        DropdownMenuItem(text = { Text("重新转文字") }, onClick = {
+                            menu = false
+                            onRetryVoice()
                         })
                     }
                     if (!mine && canRetry) {
@@ -556,14 +728,15 @@ private fun MessageBubble(
                             lineHeight = 18.sp,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        if (canRetry && !mine) {
+                        // A reply that failed is asked again; a voice message that wasn't transcribed, transcribed again.
+                        if (canRetry && (!mine || audio != null)) {
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 "重试",
                                 color = palette.accentContent,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.combinedClickable(onClick = onRetry),
+                                modifier = Modifier.combinedClickable(onClick = if (mine) onRetryVoice else onRetry),
                             )
                         }
                         if (message.content.isEmpty()) {
@@ -587,6 +760,125 @@ private fun MessageBubble(
                 Spacer(Modifier.width(AvatarSlot))
             }
         }
+    }
+}
+
+/**
+ * A voice message: its length, which it plays on a tap, and underneath, what it said once it
+ * has been turned into text. A longer recording draws a longer bubble, the way chat apps do.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VoiceBubble(
+    audio: MessageAudio,
+    mine: Boolean,
+    playing: Boolean,
+    transcript: String,
+    transcribing: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val palette = LocalGlassPalette.current
+    val ink = if (mine) Color.White else palette.content
+    val length = 92.dp + 150.dp * (audio.ms.toFloat() / Voice.MAX_MS).coerceIn(0f, 1f)
+    GlassSurface(
+        modifier = Modifier
+            .widthIn(min = length, max = bubbleMaxWidth())
+            .combinedClickable(interactionSource = null, indication = null, onClick = onClick, onLongClick = onLongClick),
+        style = if (mine) palette.bubbleMine else palette.bubble,
+        shape = GlassShape.Rounded(20.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (playing) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                    contentDescription = if (playing) "停下" else "播放语音",
+                    tint = ink,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(Voice.duration(audio.ms), color = ink, fontSize = 15.sp)
+            }
+            when {
+                transcript.isNotBlank() -> Text(transcript, color = ink.copy(alpha = 0.85f), fontSize = 14.sp, lineHeight = 20.sp)
+                transcribing -> Text("转文字中…", color = ink.copy(alpha = 0.7f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+/** Above the input while recording: how long, how loud, and what letting go does; or a short hint. */
+@Composable
+private fun RecordingPill(
+    backdrop: Backdrop,
+    recording: Boolean,
+    ms: Long,
+    level: Float,
+    cancelling: Boolean,
+    hint: String?,
+    modifier: Modifier = Modifier,
+) {
+    val palette = LocalGlassPalette.current
+    Row(
+        modifier
+            .liquidGlass(backdrop, palette.input, GlassShape.Capsule)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (!recording) {
+            Text(hint.orEmpty(), color = palette.content, fontSize = 14.sp)
+            return@Row
+        }
+        val tint = if (cancelling) palette.error else palette.accent
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(10.dp + 12.dp * level).background(tint, CircleShape))
+        }
+        Spacer(Modifier.width(8.dp))
+        val s = ms / 1000
+        Text("${s / 60}:%02d".format(s % 60), color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(12.dp))
+        Text(if (cancelling) "松开取消" else "松开发送，上滑取消", color = if (cancelling) palette.error else palette.contentSecondary, fontSize = 14.sp)
+    }
+}
+
+/**
+ * Hold to talk: pressing starts a recording, letting go sends it, and sliding up first then
+ * letting go throws it away. The pointer stays this button's until it is lifted, wherever it goes.
+ */
+@Composable
+private fun MicButton(button: Modifier, recording: Boolean, onStart: () -> Boolean, onMove: (Boolean) -> Unit, onEnd: (Boolean) -> Unit) {
+    val palette = LocalGlassPalette.current
+    val start by rememberUpdatedState(onStart)
+    val move by rememberUpdatedState(onMove)
+    val end by rememberUpdatedState(onEnd)
+    Box(
+        button
+            .background(if (recording) palette.accent else palette.content.copy(alpha = 0.1f))
+            .semantics { contentDescription = "按住说话" }
+            .pointerInput(Unit) {
+                val away = 72.dp.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    if (!start()) return@awaitEachGesture
+                    var cancel = false
+                    while (true) {
+                        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val up = down.position.y - change.position.y > away
+                        if (up != cancel) {
+                            cancel = up
+                            move(cancel)
+                        }
+                        change.consume()
+                    }
+                    end(cancel)
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Rounded.Mic, contentDescription = null, tint = if (recording) Color.White else palette.content, modifier = Modifier.size(22.dp))
     }
 }
 
@@ -841,6 +1133,10 @@ private fun ChatInputBar(
     busy: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    recording: Boolean = false,
+    onVoiceStart: () -> Boolean = { false },
+    onVoiceMove: (Boolean) -> Unit = {},
+    onVoiceEnd: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalGlassPalette.current
@@ -913,11 +1209,14 @@ private fun ChatInputBar(
                     ) {
                         Icon(Icons.Rounded.Stop, contentDescription = "停止", tint = palette.content, modifier = Modifier.size(20.dp))
                     }
+                } else if (!canSend) {
+                    // Nothing typed: the button is for talking instead.
+                    MicButton(button, recording, onVoiceStart, onVoiceMove, onVoiceEnd)
                 } else {
                     Box(
                         button
-                            .background(if (canSend) palette.accent else palette.accent.copy(alpha = 0.35f))
-                            .clickable(enabled = canSend, onClick = onSend),
+                            .background(palette.accent)
+                            .clickable(onClick = onSend),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.Rounded.ArrowUpward, contentDescription = "发送", tint = Color.White, modifier = Modifier.size(22.dp))

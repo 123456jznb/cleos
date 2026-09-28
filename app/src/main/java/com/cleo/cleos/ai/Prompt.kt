@@ -196,15 +196,17 @@ object Prompt {
      * 45, first picture), so the model can point at one, e.g. to use it as its avatar.
      */
     private fun MessageEntity.userText(canSee: Boolean, attached: Boolean): String {
+        // A voice message goes as what it said; one not turned into text says nothing yet.
+        val said = if (audio != null && content.isNotBlank()) "（语音）$content" else content
         val count = MessageImages.decode(images).size
-        if (count == 0) return content
+        if (count == 0) return said
         val ids = (1..count).joinToString(" ") { "#$id-$it" }
         val line = when {
             attached -> "（附图 $ids）"
             !canSee -> "（发了 $count 张图 $ids，你这边看不到图片）"
             else -> "（早先发的 $count 张图 $ids，这里没再附上）"
         }
-        return if (content.isBlank()) line else "$line\n$content"
+        return if (said.isBlank()) line else "$line\n$said"
     }
 
     private fun MessageEntity.toApi(withTools: Boolean, canSee: Boolean, attached: Set<Long>): ApiMessage? = when (role) {
