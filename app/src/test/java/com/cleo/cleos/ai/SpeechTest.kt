@@ -48,11 +48,18 @@ class SpeechTest {
 
     @Test
     fun theRequestsAreTheServicesShapes() {
-        val api = obj(Speech.apiBody("FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna", "晚安"))
+        val api = obj(Speech.apiBody("https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna", "晚安"))
         assertEquals("晚安", api["input"]!!.jsonPrimitive.content)
         assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", api["voice"]!!.jsonPrimitive.content)
         assertEquals("mp3", api["response_format"]!!.jsonPrimitive.content)
-        assertFalse("voice" in obj(Speech.apiBody("m", "", "x")))
+        assertFalse("voice" in obj(Speech.apiBody("https://api.example.com/v1", "m", "", "x")))
+        // Mossland wants the voice as voice_id, and nothing under voice.
+        val moss = obj(Speech.apiBody("https://api.mosi.cn/v1/", "moss-tts-1.5-flash", "806c9695-6160-404e-8722-4f788d935af3", "晚安"))
+        assertEquals("806c9695-6160-404e-8722-4f788d935af3", moss["voice_id"]!!.jsonPrimitive.content)
+        assertFalse("voice" in moss)
+        assertTrue(Speech.isMoss(" https://API.mosi.cn/v1"))
+        assertFalse(Speech.isMoss("https://mosi.cn.example.com/v1"))
+        assertFalse(Speech.isMoss("https://notmosi.cn/v1"))
         assertEquals(Speech.ELEVENLABS_MODEL, obj(Speech.elevenLabsBody("", "晚安"))["model_id"]!!.jsonPrimitive.content)
         assertEquals("https://api.example.com/v1/audio/speech", Speech.url("https://api.example.com/v1/"))
         assertEquals("https://api.example.com/v1/audio/speech", Speech.url("https://api.example.com/v1/chat/completions"))

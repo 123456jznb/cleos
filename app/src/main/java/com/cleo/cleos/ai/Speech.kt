@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 
 /** What makes the TA's voice messages. */
 enum class SpeechEngine(val key: String, val label: String) {
-    /** An OpenAI-shaped /audio/speech: SiliconFlow's CosyVoice, OpenAI's own. */
+    /** An OpenAI-shaped /audio/speech: SiliconFlow's CosyVoice, OpenAI's own, Mossland's. */
     Api("api", "语音接口"),
     ElevenLabs("elevenlabs", "ElevenLabs"),
 
@@ -48,6 +48,8 @@ object Speech {
     val presets = listOf(
         SpeechPreset("硅基流动", "https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna"),
         SpeechPreset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini-tts", "alloy"),
+        // Mossland's voices are ids from its voice library; this one is its 轻快灵动女声.
+        SpeechPreset("Mossland", "https://api.mosi.cn/v1", "moss-tts-1.5-flash", "806c9695-6160-404e-8722-4f788d935af3"),
     )
 
     /** ElevenLabs' key is filed under this address, like any other. */
@@ -74,10 +76,16 @@ object Speech {
     fun url(baseUrl: String): String =
         baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions").let { if (it.endsWith("/audio/speech")) it else "$it/audio/speech" }
 
-    fun apiBody(model: String, voice: String, text: String): String = buildJsonObject {
+    /** Mossland's API (Moss, api.mosi.cn): the same /audio/speech, but the voice goes in voice_id. */
+    fun isMoss(baseUrl: String): Boolean {
+        val host = baseUrl.trim().substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+        return host == "mosi.cn" || host.endsWith(".mosi.cn")
+    }
+
+    fun apiBody(baseUrl: String, model: String, voice: String, text: String): String = buildJsonObject {
         put("model", model.trim())
         put("input", text)
-        if (voice.isNotBlank()) put("voice", voice.trim())
+        if (voice.isNotBlank()) put(if (isMoss(baseUrl)) "voice_id" else "voice", voice.trim())
         put("response_format", "mp3")
     }.toString()
 
@@ -194,7 +202,7 @@ class Speaker(
         val request = Request.Builder()
             .url(Speech.url(s.speechBaseUrl))
             .header("Authorization", "Bearer $key")
-            .post(Speech.apiBody(s.speechModel, s.speechVoice, text).toRequestBody(JSON))
+            .post(Speech.apiBody(s.speechBaseUrl, s.speechModel, s.speechVoice, text).toRequestBody(JSON))
             .build()
         return fetch(request)
     }

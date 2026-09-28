@@ -349,7 +349,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
             Section("TA 的声音") {
                 Text(
                     "TA 发语音条时用的声音。合成交给你选的服务：MCP 工具（比如 MiniMax 的）、OpenAI 格式的语音接口" +
-                        "（硅基流动 CosyVoice、OpenAI），或者 ElevenLabs。",
+                        "（硅基流动 CosyVoice、OpenAI、Mossland），或者 ElevenLabs。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
@@ -366,7 +366,17 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                         }
                         Field("接口地址", vm.speechBaseUrl, { vm.speechBaseUrl = it }, keyboardType = KeyboardType.Uri)
                         Field("模型", vm.speechModel, { vm.speechModel = it })
-                        Field("声音", vm.speechVoice, { vm.speechVoice = it })
+                        val moss = Speech.isMoss(vm.speechBaseUrl)
+                        Field(if (moss) "音色 ID" else "声音", vm.speechVoice, { vm.speechVoice = it })
+                        if (moss) {
+                            Text(
+                                "换声音：在 Mossland 音色库里挑一个，点卡片上的复制图标，把音色 ID 粘到这里。" +
+                                    "Key 在 Moss 开放平台（platform.mosi.cn）的 API Keys 里建。",
+                                color = palette.contentSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                            )
+                        }
                     }
                     SpeechEngine.ElevenLabs -> {
                         Field("Voice ID", vm.elevenVoice, { vm.elevenVoice = it })

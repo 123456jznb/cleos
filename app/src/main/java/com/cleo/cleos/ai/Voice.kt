@@ -29,6 +29,7 @@ object Voice {
         VoicePreset("硅基流动", "https://api.siliconflow.cn/v1", "FunAudioLLM/SenseVoiceSmall"),
         VoicePreset("智谱", "https://open.bigmodel.cn/api/paas/v4", "glm-asr-2512"),
         VoicePreset("OpenAI", "https://api.openai.com/v1", "whisper-1"),
+        VoicePreset("Mossland", "https://api.mosi.cn/v1", "moss-transcribe-1.0"),
     )
 
     /** 16 kHz mono 16-bit: what speech models are trained on, and small enough to send. */
