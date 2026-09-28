@@ -27,6 +27,7 @@ internal class StreamParser {
     private class Pending(var id: String = "", var name: String = "", val arguments: StringBuilder = StringBuilder())
 
     private val calls = sortedMapOf<Int, Pending>()
+    private val think = ThinkSplitter()
 
     fun feed(data: String): List<ChatEvent> {
         val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return emptyList()
@@ -34,13 +35,22 @@ internal class StreamParser {
         val delta = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("delta") as? JsonObject
             ?: return emptyList()
         val events = ArrayList<ChatEvent>(2)
-        (delta["reasoning_content"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-            ?.let { events += ChatEvent.Reasoning(it) }
-        (delta["content"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-            ?.let { events += ChatEvent.Delta(it) }
+        fun text(key: String) = (delta[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
+        // DeepSeek and most others say reasoning_content; OpenRouter says reasoning. Some
+        // servers send both with the same words, so reasoning only counts on its own.
+        val reasoning = text("reasoning_content")
+        if (reasoning != null) {
+            events += ChatEvent.Reasoning(reasoning)
+        } else {
+            text("reasoning")?.let { events += ChatEvent.Reasoning(it, sendBack = false) }
+        }
+        text("content")?.let { events += think.split(it) }
         (delta["tool_calls"] as? JsonArray)?.forEach { piece -> (piece as? JsonObject)?.let(::addPiece) }
         return events
     }
+
+    /** What was still held back when the stream ended. */
+    fun finish(): List<ChatEvent> = think.finish()
 
     /** The calls, in order, once the stream is over. Pieces that never got a name are dropped. */
     fun toolCalls(): List<ToolCall> = calls.values
@@ -65,6 +75,90 @@ internal class StreamParser {
             is JsonPrimitive -> args.contentOrNull?.let { pending.arguments.append(it) }
             else -> Unit
         }
+    }
+}
+
+/**
+ * Some models, and relays in front of them, put the thinking into the reply itself: a
+ * <think>…</think> (or <thinking>) block before the answer. Split off, it is thinking like any
+ * other, shown folded instead of as the start of the bubble. Only a block the reply opens
+ * with counts, and either tag can arrive cut across two pieces, so a little is held back
+ * until it is clear what it is.
+ */
+internal class ThinkSplitter {
+    private enum class Mode { Start, Inside, After, Plain }
+
+    private var mode = Mode.Start
+    private val held = StringBuilder()
+    private var closer = ""
+
+    fun split(text: String): List<ChatEvent> = when (mode) {
+        Mode.Start -> start(text)
+        Mode.Inside -> inside(text)
+        Mode.After -> after(text)
+        Mode.Plain -> listOf(ChatEvent.Delta(text))
+    }
+
+    /** At the end of the stream: a block never closed was all thinking; anything else held back is text. */
+    fun finish(): List<ChatEvent> {
+        val rest = held.toString()
+        held.clear()
+        val out = when {
+            rest.isEmpty() -> emptyList()
+            mode == Mode.Inside -> listOf(ChatEvent.Reasoning(rest, sendBack = false))
+            mode == Mode.Start -> listOf(ChatEvent.Delta(rest))
+            else -> emptyList()
+        }
+        mode = Mode.Plain
+        return out
+    }
+
+    private fun start(text: String): List<ChatEvent> {
+        held.append(text)
+        val all = held.toString()
+        val lead = all.trimStart()
+        val tag = OPENERS.firstOrNull { lead.startsWith(it) }
+        if (tag != null) {
+            held.clear()
+            mode = Mode.Inside
+            closer = "</" + tag.substring(1)
+            return inside(lead.substring(tag.length))
+        }
+        // Could still become a tag ("<thi"): wait for the next piece.
+        if (OPENERS.any { it.startsWith(lead) }) return emptyList()
+        held.clear()
+        mode = Mode.Plain
+        return listOf(ChatEvent.Delta(all))
+    }
+
+    private fun inside(text: String): List<ChatEvent> {
+        held.append(text)
+        val all = held.toString()
+        held.clear()
+        val end = all.indexOf(closer)
+        if (end >= 0) {
+            mode = Mode.After
+            val thought = all.substring(0, end)
+            return listOfNotNull(thought.takeIf { it.isNotEmpty() }?.let { ChatEvent.Reasoning(it, sendBack = false) }) +
+                after(all.substring(end + closer.length))
+        }
+        // The end may be the closing tag's first letters: keep those for the next piece.
+        val keep = (minOf(closer.length - 1, all.length) downTo 1).firstOrNull { all.endsWith(closer.substring(0, it)) } ?: 0
+        held.append(all, all.length - keep, all.length)
+        val thought = all.substring(0, all.length - keep)
+        return listOfNotNull(thought.takeIf { it.isNotEmpty() }?.let { ChatEvent.Reasoning(it, sendBack = false) })
+    }
+
+    /** Right after the block: the blank lines before the answer go. */
+    private fun after(text: String): List<ChatEvent> {
+        val t = text.trimStart()
+        if (t.isEmpty()) return emptyList()
+        mode = Mode.Plain
+        return listOf(ChatEvent.Delta(t))
+    }
+
+    private companion object {
+        val OPENERS = listOf("<think>", "<thinking>")
     }
 }
 

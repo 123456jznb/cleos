@@ -55,8 +55,12 @@ data class ApiEndpoint(val baseUrl: String, val apiKey: String, val model: Strin
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
 
-    /** Reasoning models stream their thinking separately. Shown only as "在想". */
-    data class Reasoning(val text: String) : ChatEvent
+    /**
+     * The model thinking before it answers, shown to the person folded above the reply.
+     * [sendBack]: it came as reasoning_content, which the provider wants back while the same
+     * turn is still calling tools; thinking found anywhere else is only shown.
+     */
+    data class Reasoning(val text: String, val sendBack: Boolean = true) : ChatEvent
 
     /** The tool calls the reply ended with. Sent once, after everything else. */
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent
@@ -108,6 +112,7 @@ class ChatClient(private val http: OkHttpClient) {
                         if (data == "[DONE]") break
                         for (event in parser.feed(data)) send(event)
                     }
+                    for (event in parser.finish()) send(event)
                     parser.toolCalls().takeIf { it.isNotEmpty() }?.let { send(ChatEvent.ToolCalls(it)) }
                 }
                 close()

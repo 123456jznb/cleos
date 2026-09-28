@@ -14,9 +14,13 @@ import org.junit.Test
 class StreamParserTest {
     private fun run(vararg payloads: String): Pair<List<ChatEvent>, List<ToolCall>> {
         val p = StreamParser()
-        val events = payloads.flatMap { p.feed(it) }
+        val events = payloads.flatMap { p.feed(it) } + p.finish()
         return events to p.toolCalls()
     }
+
+    /** The events for a reply whose content comes in these pieces. */
+    private fun content(vararg pieces: String): List<ChatEvent> =
+        run(*pieces.map { """{"choices":[{"delta":{"content":${Json.encodeToString(it)}}}]}""" }.toTypedArray()).first
 
     @Test
     fun openAiStyleFragmentsAreJoinedByIndex() {
@@ -88,6 +92,48 @@ class StreamParserTest {
             events,
         )
         assertEquals(1, calls.size)
+    }
+
+    @Test
+    fun openRoutersReasoningIsShownButNotSentBack() {
+        val (events, _) = run(
+            """{"choices":[{"delta":{"reasoning":"先想想"}}]}""",
+            // Both at once, with the same words: counted once.
+            """{"choices":[{"delta":{"reasoning_content":"再想想","reasoning":"再想想"}}]}""",
+            """{"choices":[{"delta":{"content":"好"}}]}""",
+        )
+        assertEquals(
+            listOf(ChatEvent.Reasoning("先想想", sendBack = false), ChatEvent.Reasoning("再想想"), ChatEvent.Delta("好")),
+            events,
+        )
+    }
+
+    @Test
+    fun aThinkBlockTheReplyOpensWithIsThinking() {
+        // Both tags cut across pieces, and the blank lines before the answer dropped.
+        assertEquals(
+            listOf(ChatEvent.Reasoning("我想想", sendBack = false), ChatEvent.Reasoning("，好的", sendBack = false), ChatEvent.Delta("你好")),
+            content("<th", "ink>我想想", "，好的</th", "ink>\n\n", "你好"),
+        )
+        assertEquals(
+            listOf(ChatEvent.Reasoning("嗯", sendBack = false), ChatEvent.Delta("好")),
+            content("\n<thinking>嗯</thinking>好"),
+        )
+        // Never closed: all of it was thinking, down to a last "<" held back for the closing tag.
+        assertEquals(
+            listOf(ChatEvent.Reasoning("想到一半", sendBack = false), ChatEvent.Reasoning("<", sendBack = false)),
+            content("<think>想到一半<"),
+        )
+    }
+
+    @Test
+    fun textThatOnlyLooksLikeATagStaysText() {
+        assertEquals(listOf(ChatEvent.Delta("<3 爱你")), content("<", "3 爱你"))
+        assertEquals(listOf(ChatEvent.Delta("\n你好")), content("\n", "你好"))
+        // Only a block at the very start counts.
+        assertEquals(listOf(ChatEvent.Delta("你好<think>x</think>")), content("你好<think>x</think>"))
+        // Held back to the end, whitespace is still what was said.
+        assertEquals(listOf(ChatEvent.Delta("  ")), content("  "))
     }
 
     @Test

@@ -7,6 +7,8 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageThought
+import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
@@ -44,6 +46,10 @@ data class StreamingReply(
     val finished: Boolean = false,
     /** A call to an outside service waiting for the person to allow it. */
     val asking: McpAsk? = null,
+    /** What the model has thought so far, before [text]. */
+    val thought: String = "",
+    /** How long it thought, once it is done thinking; null while it still is. */
+    val thoughtMs: Long? = null,
 )
 
 /**
@@ -297,27 +303,31 @@ class ChatRepository(
             )
             return
         }
-        val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
-        val endpointKey = endpoint.chatUrl + "|" + endpoint.model
-        // What isn't folded into the recap yet, as much of it as the window takes. The recap
-        // stands in for everything before.
-        val conversation = db.conversations().get(conversationId)
-        val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
-        val recap = conversation?.recap
-        val now = ZonedDateTime.now()
-        // send_voice only once there is a voice to speak with.
-        var groups = if (endpointKey in refusesTools) emptySet() else s.tools.let { if (Speech.ready(s)) it else it - ToolGroup.Speak }
-        // The tools of the MCP services switched on come along whenever tools do.
-        var outside = if (endpointKey in refusesTools) emptyList() else mcp.tools()
-        var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
-        var thinking = ta.deepThinking && endpointKey !in refusesThinking
-        // What the TA remembers, read once for this reply.
-        val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
-        var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
-        var rounds = 0
-        // What the last refusal made this reply leave out, and when.
-        var leftOut: LeftOut? = null
+        // The dots at once. Getting ready can take a while (an outside service slow to list its
+        // tools, one that is down until it times out), and the chat should show meanwhile that
+        // a reply is coming, with stop.
+        show(StreamingReply(conversationId, "", thinking = false))
         try {
+            val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
+            val endpointKey = endpoint.chatUrl + "|" + endpoint.model
+            // What isn't folded into the recap yet, as much of it as the window takes. The recap
+            // stands in for everything before.
+            val conversation = db.conversations().get(conversationId)
+            val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
+            val recap = conversation?.recap
+            val now = ZonedDateTime.now()
+            // send_voice only once there is a voice to speak with.
+            var groups = if (endpointKey in refusesTools) emptySet() else s.tools.let { if (Speech.ready(s)) it else it - ToolGroup.Speak }
+            // The tools of the MCP services switched on come along whenever tools do.
+            var outside = if (endpointKey in refusesTools) emptyList() else mcp.tools()
+            var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
+            var thinking = ta.deepThinking && endpointKey !in refusesThinking
+            // What the TA remembers, read once for this reply.
+            val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
+            var messages = prepare(Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside))
+            var rounds = 0
+            // What the last refusal made this reply leave out, and when.
+            var leftOut: LeftOut? = null
             while (true) {
                 val mayRefuse = rounds == 0 && (groups.isNotEmpty() || outside.isNotEmpty() || withImages || thinking)
                 val specs = tools.specs(groups) + outside.map { it.spec }
@@ -368,8 +378,9 @@ class ChatRepository(
                     }
                 }
             }
-        } catch (e: CancellationException) {
-            // Stopped while a tool ran: no stream is open to clear the live row on its way out.
+        } catch (e: Throwable) {
+            // Stopped (or failed) while getting ready or while a tool ran: no stream is open to
+            // clear the live row on its way out.
             if (_streaming.value[conversationId]?.finished != true) hide(conversationId)
             throw e
         }
@@ -407,8 +418,11 @@ class ChatRepository(
          */
         data object Refused : Step
 
-        /** [savedId]: the row the text said before the calls went into, if there was any to store. */
-        class Called(val message: ApiMessage, val savedId: Long?) : Step
+        /**
+         * [savedId]: the row the text said before the calls went into, if there was any to store.
+         * [thought]: the thinking, when it has no row yet (the first message sent will take it).
+         */
+        class Called(val message: ApiMessage, val savedId: Long?, val thought: MessageThought? = null) : Step
     }
 
     /** One request: streams it to the screen, stores what came back, says what's next. */
@@ -422,27 +436,46 @@ class ChatRepository(
     ): Step {
         val startedAt = System.currentTimeMillis()
         val text = StringBuilder()
+        // What goes back to the model within this turn, and what the person gets to read.
         val reasoning = StringBuilder()
+        val thinkingText = StringBuilder()
+        var thinkingFrom = 0L
+        var thinkingMs: Long? = null
+        // The thinking as the live reply shows it once the words have begun.
+        var thoughtShown = ""
         var calls = emptyList<ToolCall>()
         var error: String? = null
         var status: Int? = null
+        fun doneThinking() {
+            if (thinkingText.isNotEmpty() && thinkingMs == null) {
+                thinkingMs = System.currentTimeMillis() - thinkingFrom
+                thoughtShown = thinkingText.toString()
+            }
+        }
+        fun thought() = thinkingText.toString().trim().takeIf { it.isNotEmpty() }?.let {
+            doneThinking()
+            MessageThought(it, thinkingMs ?: 0)
+        }
         show(StreamingReply(conversationId, "", thinking = false))
         try {
             client.stream(endpoint, messages, specs, thinking).collect { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
+                        doneThinking()
                         text.append(event.text)
-                        show(StreamingReply(conversationId, text.toString(), thinking = false))
+                        show(StreamingReply(conversationId, text.toString(), thinking = false, thought = thoughtShown, thoughtMs = thinkingMs))
                     }
                     is ChatEvent.Reasoning -> {
-                        reasoning.append(event.text)
-                        if (text.isEmpty()) show(StreamingReply(conversationId, "", thinking = true))
+                        if (event.sendBack) reasoning.append(event.text)
+                        if (thinkingText.isEmpty()) thinkingFrom = System.currentTimeMillis()
+                        thinkingText.append(event.text)
+                        if (text.isEmpty()) show(StreamingReply(conversationId, "", thinking = true, thought = thinkingText.toString()))
                     }
                     is ChatEvent.ToolCalls -> calls = event.calls
                 }
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable) { finish(conversationId, startedAt, text.toString(), STOPPED, keepEmpty = false) }
+            withContext(NonCancellable) { finish(conversationId, startedAt, text.toString(), STOPPED, keepEmpty = false, thought()) }
             throw e
         } catch (e: ChatException) {
             error = e.message
@@ -455,9 +488,10 @@ class ChatRepository(
         if (error != null && mayRefuse && text.isEmpty() && status in REFUSED_STATUSES) return Step.Refused
 
         return withContext(NonCancellable) {
+            val shown = thought()
             if (error == null && calls.isNotEmpty()) {
                 val body = text.toString()
-                val thought = reasoning.toString().ifEmpty { null }
+                val sentBack = reasoning.toString().ifEmpty { null }
                 // Sent messages are stored as bubbles of their own, not as calls (Prompt turns
                 // bubbles in a row back into calls). With some sent, the words said first go in
                 // now as a bubble too, and the other calls only after the messages (runTools):
@@ -471,18 +505,26 @@ class ChatRepository(
                             content = body,
                             createdAt = startedAt,
                             toolCalls = ToolCallCodec.encode(calls),
-                            reasoning = thought,
+                            reasoning = sentBack,
+                            thought = shown?.let(MessageThoughts::encode),
                         ),
                     )
                     body.isBlank() -> null
                     else -> db.messages().insert(
-                        MessageEntity(conversationId = conversationId, role = "assistant", content = body, createdAt = startedAt),
+                        MessageEntity(
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = body,
+                            createdAt = startedAt,
+                            thought = shown?.let(MessageThoughts::encode),
+                        ),
                     )
                 }
                 db.conversations().touch(conversationId, System.currentTimeMillis())
-                Step.Called(ApiMessage("assistant", body, calls, reasoning = thought), savedId = id)
+                // Nothing stored yet: the first message sent takes the thinking along.
+                Step.Called(ApiMessage("assistant", body, calls, reasoning = sentBack), savedId = id, thought = shown.takeIf { id == null })
             } else {
-                finish(conversationId, startedAt, text.toString(), error, keepEmpty = true)
+                finish(conversationId, startedAt, text.toString(), error, keepEmpty = true, shown)
                 Step.Ended(ok = error == null)
             }
         }
@@ -507,6 +549,8 @@ class ChatRepository(
         val results = HashMap<String, ApiMessage>()
         var previous = said.takeIf { it.isNotBlank() }
         var sent = 0
+        // The step's thinking, while nothing it put in the chat has it yet.
+        var thought = step.thought?.let(MessageThoughts::encode)
         for (call in sends) {
             val words = ToolArgs.parse(call.arguments)?.let { ToolArgs.text(it, "text") }?.trim().orEmpty()
             val result = when {
@@ -541,10 +585,12 @@ class ChatRepository(
                                 content = words,
                                 createdAt = at,
                                 audio = voice?.let(MessageAudios::encode),
+                                thought = thought,
                             ),
                         )
                         db.conversations().touch(conversationId, at)
                     }
+                    thought = null
                     why?.let { note(conversationId, "语音没做出来（$it），这句改成了文字") }
                     previous = words
                     sent++
@@ -564,6 +610,8 @@ class ChatRepository(
                         createdAt = System.currentTimeMillis(),
                         toolCalls = ToolCallCodec.encode(others),
                         reasoning = step.message.reasoning,
+                        // Only if no message went out to carry it.
+                        thought = thought,
                     ),
                 )
             }
@@ -658,7 +706,14 @@ class ChatRepository(
         asks[conversationId]?.complete(answer)
     }
 
-    private suspend fun finish(conversationId: Long, startedAt: Long, body: String, error: String?, keepEmpty: Boolean) {
+    private suspend fun finish(
+        conversationId: Long,
+        startedAt: Long,
+        body: String,
+        error: String?,
+        keepEmpty: Boolean,
+        thought: MessageThought? = null,
+    ) {
         if (body.isNotEmpty() || (keepEmpty && error != null)) {
             val id = db.messages().insert(
                 MessageEntity(
@@ -667,13 +722,22 @@ class ChatRepository(
                     content = body,
                     createdAt = startedAt,
                     error = error,
+                    thought = thought?.let(MessageThoughts::encode),
                 ),
             )
             db.conversations().touch(conversationId, System.currentTimeMillis())
             // Hand over from the live bubble to the stored one without a gap:
             // the screen hides the live bubble once it sees savedId in its list.
             // The cleanup runs on its own so this job (and `busy`) ends now.
-            val handover = StreamingReply(conversationId, body, thinking = false, savedId = id, finished = true)
+            val handover = StreamingReply(
+                conversationId,
+                body,
+                thinking = false,
+                savedId = id,
+                finished = true,
+                thought = thought?.text.orEmpty(),
+                thoughtMs = thought?.ms,
+            )
             show(handover)
             scope.launch {
                 delay(1500)

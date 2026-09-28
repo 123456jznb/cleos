@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
@@ -52,6 +53,8 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
@@ -60,6 +63,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
@@ -88,6 +92,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -122,6 +127,7 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
+import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassButton
@@ -186,16 +192,20 @@ private sealed interface ChatRow {
 }
 
 /**
- * Rows with nothing to draw: an assistant turn that only called tools (the results have
- * their own lines), and a tool result without a line (a request shows its card instead).
+ * Rows with nothing to draw: an assistant turn that only called tools, without a thought to
+ * show (the results have their own lines), and a tool result without a line (a request
+ * shows its card instead).
  */
 private fun MessageEntity.silent() =
-    (role == "assistant" && content.isEmpty() && error == null) || (role == "tool" && note.isNullOrBlank())
+    (thoughtOnly() && thought == null) || (role == "tool" && note.isNullOrBlank())
+
+/** An assistant turn that only called tools: at most its thinking is drawn, on a line of its own. */
+private fun MessageEntity.thoughtOnly() = role == "assistant" && content.isEmpty() && error == null
 
 /** Which side a bubble is on: true for the person's, false for the TA's, null for lines that aren't bubbles. */
 private fun MessageEntity.side(): Boolean? = when {
     role == "user" && note == null -> true
-    role == "assistant" -> false
+    role == "assistant" && !thoughtOnly() -> false
     else -> null
 }
 
@@ -479,6 +489,10 @@ fun ChatTab(
                                 }
                                 // The person's answer to a request: their turn, drawn as a line on their side.
                                 m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
+                                m.thoughtOnly() -> {
+                                    val thought = remember(m.thought) { MessageThoughts.decode(m.thought) }
+                                    if (thought != null) ThoughtLine(thought.text, thought.ms, key = m.id)
+                                }
                                 else -> MessageBubble(
                                     message = m,
                                     showFace = row.showFace,
@@ -631,6 +645,7 @@ private fun MessageBubble(
     val scope = rememberCoroutineScope()
     val faces = LocalFaces.current
     val pictures = remember(message.images) { MessageImages.decode(message.images) }
+    val thought = remember(message.thought) { MessageThoughts.decode(message.thought) }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         // Without its face, the bubble still keeps the face's room: a run lines up.
@@ -649,6 +664,7 @@ private fun MessageBubble(
                     horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    if (thought != null && !mine) ThoughtBlock(thought.text, thought.ms, key = message.id)
                     if (pictures.isNotEmpty()) {
                         PictureGroup(pictures, onOpen = onOpenImage, onLongPress = { menu = true })
                     }
@@ -931,12 +947,15 @@ private fun PictureGroup(pictures: List<MessageImage>, onOpen: (String) -> Unit,
 private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepository.Answer) -> Unit) {
     val palette = LocalGlassPalette.current
     val faces = LocalFaces.current
+    // Thinking with words to show: those stand in for the typing dots.
+    val thinkingAloud = live.text.isEmpty() && live.thought.isNotBlank()
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (live.text.isNotEmpty() || (live.activity == null && live.asking == null)) {
+        if (live.thought.isNotBlank()) ThoughtLine(live.thought, live.thoughtMs, key = "live")
+        if (live.text.isNotEmpty() || (!thinkingAloud && live.activity == null && live.asking == null)) {
             Row {
                 if (faces != null) {
                     Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
@@ -966,6 +985,76 @@ private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepo
         live.activity?.let { ToolNote(it + "…", Icons.Rounded.AutoAwesome, running = true) }
     }
 }
+
+/**
+ * What the TA thought before replying, in the notes' glass: folded into one line (想了 12 秒)
+ * that opens on a tap. While it is still thinking ([ms] null), the newest lines show as they
+ * come in.
+ */
+@Composable
+private fun ThoughtBlock(text: String, ms: Long?, key: Any) {
+    val palette = LocalGlassPalette.current
+    var open by rememberSaveable(key) { mutableStateOf(false) }
+    val thinking = ms == null
+    GlassSurface(
+        modifier = Modifier
+            .widthIn(max = bubbleMaxWidth())
+            .clickable(interactionSource = null, indication = null) { open = !open },
+        style = palette.notice,
+        shape = GlassShape.Rounded(14.dp),
+        contentPadding = PaddingValues(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Psychology, contentDescription = null, tint = palette.accentContent, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (ms == null) "在想…" else thoughtFor(ms), color = palette.contentSecondary, fontSize = 13.sp)
+                Spacer(Modifier.width(2.dp))
+                Icon(
+                    if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = if (open) "收起" else "展开",
+                    tint = palette.contentSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            if (open) {
+                Text(text.trim(), color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 19.sp)
+            } else if (thinking) {
+                // The newest lines: a window three lines high onto the bottom of the text.
+                Box(Modifier.heightIn(max = 57.dp).clipToBounds()) {
+                    Text(
+                        text.takeLast(THOUGHT_TAIL).trimStart(),
+                        color = palette.contentSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.wrapContentHeight(Alignment.Bottom, unbounded = true),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A thought on a line of its own: before the tools the TA used, or while it is still thinking. */
+@Composable
+private fun ThoughtLine(text: String, ms: Long?, key: Any) {
+    val slot = if (LocalFaces.current != null) AvatarSlot else 0.dp
+    Box(Modifier.fillMaxWidth().padding(start = slot)) { ThoughtBlock(text, ms, key) }
+}
+
+/** 想了 12 秒, 想了 1 分 5 秒; under a second, it only thought for a moment. */
+private fun thoughtFor(ms: Long): String {
+    val s = ms / 1000
+    return when {
+        s < 1 -> "想了一下"
+        s < 60 -> "想了 $s 秒"
+        s % 60 == 0L -> "想了 ${s / 60} 分钟"
+        else -> "想了 ${s / 60} 分 ${s % 60} 秒"
+    }
+}
+
+/** How much of a thought still coming in is laid out: more than the three lines shown. */
+private const val THOUGHT_TAIL = 400
 
 /** A TA's call to an outside service, waiting for the person to allow it. */
 @Composable

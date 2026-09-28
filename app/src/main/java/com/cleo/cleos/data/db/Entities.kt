@@ -165,6 +165,11 @@ data class MessageEntity(
     val images: String? = null,
     /** "user": a voice message's recording (MessageAudio as JSON); [content] is what it said, once transcribed. */
     val audio: String? = null,
+    /**
+     * "assistant": what the TA thought before this (MessageThought as JSON), shown folded above
+     * it. Unlike [reasoning] it is never sent back: it is kept to be read.
+     */
+    val thought: String? = null,
 )
 
 @Serializable
