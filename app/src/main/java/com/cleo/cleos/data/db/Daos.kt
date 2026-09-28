@@ -156,6 +156,35 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun newest(conversationId: Long, limit: Int): List<MessageEntity>
 
+    // Finding things said with one TA, across their conversations. What the chat draws as
+    // a line (notes, tool results, cards) and replies that failed are not things said.
+
+    /** Those with [pattern] in them (a LIKE pattern, \ escaping), newest first; [role] null for both sides. */
+    @Query(
+        "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role IN ('user', 'assistant') AND m.note IS NULL " +
+            "AND m.error IS NULL AND m.content LIKE :pattern ESCAPE '\\' AND (:role IS NULL OR m.role = :role) " +
+            "ORDER BY m.createdAt DESC, m.id DESC LIMIT :limit",
+    )
+    suspend fun search(companionId: Long, pattern: String, role: String?, limit: Int): List<MessageEntity>
+
+    /** When each of them was said: the days a calendar marks. */
+    @Query(
+        "SELECT m.createdAt FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role IN ('user', 'assistant') AND m.note IS NULL " +
+            "AND m.error IS NULL AND (m.content != '' OR m.images IS NOT NULL OR m.audio IS NOT NULL)",
+    )
+    suspend fun saidTimes(companionId: Long): List<Long>
+
+    /** The first of them in [from, to): where a day of the calendar opens. */
+    @Query(
+        "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversationId " +
+            "WHERE c.companionId = :companionId AND m.role IN ('user', 'assistant') AND m.note IS NULL " +
+            "AND m.error IS NULL AND (m.content != '' OR m.images IS NOT NULL OR m.audio IS NOT NULL) " +
+            "AND m.createdAt >= :from AND m.createdAt < :to ORDER BY m.createdAt, m.id LIMIT 1",
+    )
+    suspend fun firstSaidBetween(companionId: Long, from: Long, to: Long): MessageEntity?
+
     /** The messages after a point in the conversation (a time, then an id: the order they are read in), oldest first. */
     @Query(
         "SELECT * FROM messages WHERE conversationId = :conversationId " +

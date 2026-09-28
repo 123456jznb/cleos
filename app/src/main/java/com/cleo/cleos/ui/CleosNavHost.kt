@@ -11,6 +11,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.cleo.cleos.ui.chat.ConversationsScreen
+import com.cleo.cleos.ui.chat.SearchScreen
 import com.cleo.cleos.ui.diary.DiaryEditorScreen
 import com.cleo.cleos.ui.diary.ImageViewerScreen
 import com.cleo.cleos.ui.lab.GlassLabScreen
@@ -33,6 +34,10 @@ object LabRoute
 
 @Serializable
 object ConversationsRoute
+
+/** Finding what was said with the current TA. */
+@Serializable
+object SearchRoute
 
 /** id 0 means a new entry; [secret] says whether a new one starts locked. */
 @Serializable
@@ -94,7 +99,9 @@ fun CleosNavHost() {
         }
         composable<LabRoute> { GlassLabScreen(onBack = nav::back) }
         composable<McpEditRoute> { entry -> McpEditScreen(entry.toRoute<McpEditRoute>().id, onBack = nav::back) }
-        composable<ConversationsRoute> { ConversationsScreen(onBack = nav::back) }
+        composable<ConversationsRoute> { ConversationsScreen(onBack = nav::back, onSearch = { nav.go(SearchRoute) }) }
+        // A result opens in the chat: back past the conversation list too.
+        composable<SearchRoute> { SearchScreen(onBack = nav::back, onFound = { nav.popBackStack(MainRoute, inclusive = false) }) }
         composable<DiaryRoute> { entry ->
             val route = entry.toRoute<DiaryRoute>()
             DiaryEditorScreen(

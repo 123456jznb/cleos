@@ -88,6 +88,23 @@ class ChatRepository(
     private val _streaming = MutableStateFlow<Map<Long, StreamingReply>>(emptyMap())
     val streaming: StateFlow<Map<Long, StreamingReply>> = _streaming.asStateFlow()
 
+    /** A message found somewhere else (a search) that the chat should bring into view. */
+    data class Focus(val conversationId: Long, val messageId: Long)
+
+    private val _focus = MutableStateFlow<Focus?>(null)
+    val focus: StateFlow<Focus?> = _focus.asStateFlow()
+
+    /** Opens [message]'s conversation and asks the chat to show it. */
+    suspend fun show(message: MessageEntity) {
+        settings.setCurrentConversation(message.conversationId)
+        _focus.value = Focus(message.conversationId, message.id)
+    }
+
+    /** The chat has shown it (or given up): nothing to bring into view any more. */
+    fun shown() {
+        _focus.value = null
+    }
+
     /** Voice messages being turned into text, by message id. */
     private val _transcribing = MutableStateFlow<Set<Long>>(emptySet())
     val transcribing: StateFlow<Set<Long>> = _transcribing.asStateFlow()

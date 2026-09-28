@@ -391,7 +391,8 @@ fun ChatTab(
 
     // Follow new messages, unless the user has scrolled up to read something older.
     LaunchedEffect(state.messages.lastOrNull()?.id, state.streaming?.text?.isEmpty(), state.streaming?.activity) {
-        if (listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
+        // Not while a searched-for message is being brought into view.
+        if (c.chat.focus.value == null && listState.firstVisibleItemIndex <= 2) listState.animateScrollToItem(0)
     }
     // Their own message is always followed down to, like in any chat.
     LaunchedEffect(sentCount) {
@@ -428,6 +429,22 @@ fun ChatTab(
         val at = index + if (state.streaming != null) 1 else 0
         scope.launch { listState.animateScrollToItem(at) }
         flashed = id
+    }
+
+    // A message found by a search: once its conversation is the one on screen, straight to it,
+    // lit up. One that is gone by then is said to be.
+    val focus by remember { c.chat.focus }.collectAsStateWithLifecycle()
+    LaunchedEffect(focus, rows, state.conversationId) {
+        val f = focus ?: return@LaunchedEffect
+        if (state.conversationId != f.conversationId) return@LaunchedEffect
+        val index = rows.indexOfFirst { it is ChatRow.Message && it.message.id == f.messageId }
+        if (index < 0) {
+            voiceHint = "那条消息已经不在了"
+        } else {
+            listState.scrollToItem(index + if (state.streaming != null) 1 else 0)
+            flashed = f.messageId
+        }
+        c.chat.shown()
     }
 
     GlassPage(

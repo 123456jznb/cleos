@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddComment
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,7 +56,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ConversationsScreen(onBack: () -> Unit) {
+fun ConversationsScreen(onBack: () -> Unit, onSearch: () -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
     // Only the current TA's: each TA's conversations are theirs alone.
@@ -77,6 +78,8 @@ fun ConversationsScreen(onBack: () -> Unit) {
                 backdrop = page,
                 leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回", onBack, page) },
                 trailing = {
+                    GlassIconButton(Icons.Rounded.Search, "查找聊天记录", onSearch, page)
+                    Spacer(Modifier.width(10.dp))
                     GlassIconButton(Icons.Rounded.AddComment, "新对话", {
                         ta?.let { t ->
                             c.appScope.launch { c.settings.setCurrentConversation(c.chat.newConversation(t.id)) }
