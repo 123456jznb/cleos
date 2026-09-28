@@ -25,6 +25,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 
 data class ApiMessage(
     val role: String,
@@ -83,24 +84,45 @@ class ChatException(message: String, val status: Int? = null) : Exception(messag
 class ChatClient(private val http: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** [thinking]: ask the model to think first (see [requestBody]). */
+    /**
+     * Endpoints (address and model) that turned down being told not to think, in this run of the
+     * app. From then on they aren't told: thinking or not is up to them.
+     */
+    private val refusesOff = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * [thinking]: ask the model to think first (see [requestBody]). Without it, a model that thinks
+     * unless told otherwise ([Thinking.canSwitchOff]) is told not to: the wait and the tokens are
+     * for nothing then. One that turns that down is asked again plainly, at once.
+     */
     fun stream(
         endpoint: ApiEndpoint,
         messages: List<ApiMessage>,
         tools: List<ToolSpec> = emptyList(),
         thinking: Boolean = false,
     ): Flow<ChatEvent> = callbackFlow {
-        val request = Request.Builder()
-            .url(endpoint.chatUrl)
-            .header("Authorization", "Bearer ${endpoint.apiKey}")
-            .header("Accept", "text/event-stream")
-            .post(requestBody(endpoint.model, messages, tools, thinking).toString().toRequestBody(JSON_TYPE))
-            .build()
-        val call = http.newCall(request)
+        val key = endpoint.chatUrl + "|" + endpoint.model
+        fun request(off: Boolean) = http.newCall(
+            Request.Builder()
+                .url(endpoint.chatUrl)
+                .header("Authorization", "Bearer ${endpoint.apiKey}")
+                .header("Accept", "text/event-stream")
+                .post(requestBody(endpoint.model, messages, tools, if (thinking) true else if (off) false else null).toString().toRequestBody(JSON_TYPE))
+                .build(),
+        )
+        val off = !thinking && Thinking.canSwitchOff(endpoint.model) && key !in refusesOff
+        var call = request(off)
 
         launch(Dispatchers.IO) {
             try {
-                call.execute().use { response ->
+                var answer = call.execute()
+                if (off && answer.code in REFUSED) {
+                    answer.close()
+                    refusesOff += key
+                    call = request(off = false)
+                    answer = call.execute()
+                }
+                answer.use { response ->
                     if (!response.isSuccessful) {
                         throw ChatException(describeHttpError(response.code, response.body.string()), response.code)
                     }
@@ -176,6 +198,24 @@ class ChatClient(private val http: OkHttpClient) {
 
     private companion object {
         val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /** How endpoints turn down a field they don't take: 400, 404 (OpenRouter), 422. */
+        val REFUSED = setOf(400, 404, 422)
+    }
+}
+
+/**
+ * Models that think unless told not to, and take being told: DeepSeek V4 (DeepSeek's own
+ * OpenClaw plugin sends the same switch) and GLM from 4.5 on. Asked plainly they would think
+ * anyway, so a TA with thinking off would still keep the person waiting and cost the tokens.
+ */
+object Thinking {
+    private val SWITCHABLE = listOf("deepseek-v4", "glm-4.5", "glm-4.6", "glm-4.7", "glm-5")
+
+    /** By the model's own name, also behind a relay's prefix (deepseek/deepseek-v4-flash). */
+    fun canSwitchOff(model: String): Boolean {
+        val name = model.trim().substringAfterLast('/').lowercase()
+        return SWITCHABLE.any { name.startsWith(it) }
     }
 }
 
@@ -185,14 +225,15 @@ class ChatClient(private val http: OkHttpClient) {
  * canonical shape, what the OpenAI SDK itself sends); each result follows as a "tool"
  * message naming its call.
  *
- * With [thinking], the switch DeepSeek and GLM take for thinking before answering. DeepSeek
- * then wants every earlier reply to carry its reasoning too: the turn under way sends its
- * own back, earlier turns an empty one.
+ * [thinking] is the switch DeepSeek and GLM take for thinking before answering: true turns it
+ * on, false off, null leaves it out. On, DeepSeek wants every earlier reply to carry its
+ * reasoning too: the turn under way sends its own back, earlier turns an empty one. Off, no
+ * reasoning goes back at all (as DeepSeek's own plugin does it).
  */
-internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>, thinking: Boolean = false): JsonObject = buildJsonObject {
+internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>, thinking: Boolean? = null): JsonObject = buildJsonObject {
     put("model", model)
     put("stream", true)
-    if (thinking) putJsonObject("thinking") { put("type", "enabled") }
+    if (thinking != null) putJsonObject("thinking") { put("type", if (thinking) "enabled" else "disabled") }
     putJsonArray("messages") {
         for (m in messages) {
             addJsonObject {
@@ -217,7 +258,7 @@ internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<
                     put("content", m.content)
                 } else {
                     if (m.content.isEmpty()) put("content", JsonNull) else put("content", m.content)
-                    if (!thinking) m.reasoning?.let { put("reasoning_content", it) }
+                    if (thinking == null) m.reasoning?.let { put("reasoning_content", it) }
                     putJsonArray("tool_calls") {
                         for (c in m.toolCalls) {
                             addJsonObject {
@@ -231,7 +272,7 @@ internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<
                         }
                     }
                 }
-                if (thinking && m.role == "assistant") put("reasoning_content", m.reasoning ?: "")
+                if (thinking == true && m.role == "assistant") put("reasoning_content", m.reasoning ?: "")
                 m.toolCallId?.let { put("tool_call_id", it) }
             }
         }

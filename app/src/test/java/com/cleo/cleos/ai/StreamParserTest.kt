@@ -226,5 +226,21 @@ class RequestBodyTest {
         val plain = off["messages"]!!.jsonArray.map { it.jsonObject }
         assertFalse("reasoning_content" in plain[2])
         assertEquals("想了想", plain[4]["reasoning_content"]!!.jsonPrimitive.content)
+        // Told not to think: the switch off, and no reasoning anywhere.
+        val disabled = Json.parseToJsonElement(requestBody("deepseek-v4-flash", messages, emptyList(), thinking = false).toString()).jsonObject
+        assertEquals("disabled", disabled["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertTrue(disabled["messages"]!!.jsonArray.none { "reasoning_content" in it.jsonObject })
+    }
+
+    @Test
+    fun modelsThatThinkUnlessToldNotTo() {
+        assertTrue(Thinking.canSwitchOff("deepseek-v4-flash"))
+        assertTrue(Thinking.canSwitchOff(" DeepSeek-V4-Pro "))
+        assertTrue(Thinking.canSwitchOff("deepseek/deepseek-v4-flash"))
+        assertTrue(Thinking.canSwitchOff("glm-4.6"))
+        assertFalse(Thinking.canSwitchOff("deepseek-chat"))
+        assertFalse(Thinking.canSwitchOff("gpt-4o-mini"))
+        assertFalse(Thinking.canSwitchOff("glm-4-flash"))
+        assertFalse(Thinking.canSwitchOff("mock"))
     }
 }

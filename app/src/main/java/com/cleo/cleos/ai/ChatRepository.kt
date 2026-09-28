@@ -470,7 +470,7 @@ class ChatRepository(
             while (true) {
                 val mayRefuse = rounds == 0 && (groups.isNotEmpty() || outside.isNotEmpty() || withImages || thinking)
                 val specs = tools.specs(groups) + outside.map { it.spec }
-                when (val step = step(conversationId, endpoint, messages, specs, mayRefuse, thinking)) {
+                when (val step = step(conversationId, endpoint, messages, specs, mayRefuse, thinking, showThought = ta.deepThinking)) {
                     is Step.Ended -> {
                         if (step.ok) {
                             remember(leftOut, conversationId, endpointKey)
@@ -564,7 +564,11 @@ class ChatRepository(
         class Called(val message: ApiMessage, val savedId: Long?, val thought: MessageThought? = null) : Step
     }
 
-    /** One request: streams it to the screen, stores what came back, says what's next. */
+    /**
+     * One request: streams it to the screen, stores what came back, says what's next. [showThought]:
+     * the TA's thinking switch. Off, a model that thinks all the same (or a relay that didn't pass
+     * on "don't") only shows the dots while it does, and nothing of it is kept.
+     */
     private suspend fun step(
         conversationId: Long,
         endpoint: ApiEndpoint,
@@ -572,6 +576,7 @@ class ChatRepository(
         specs: List<ToolSpec>,
         mayRefuse: Boolean,
         thinking: Boolean,
+        showThought: Boolean,
     ): Step {
         val startedAt = System.currentTimeMillis()
         val text = StringBuilder()
@@ -606,8 +611,10 @@ class ChatRepository(
                     }
                     is ChatEvent.Reasoning -> {
                         if (event.sendBack) reasoning.append(event.text)
-                        if (thinkingText.isEmpty()) thinkingFrom = System.currentTimeMillis()
-                        thinkingText.append(event.text)
+                        if (showThought) {
+                            if (thinkingText.isEmpty()) thinkingFrom = System.currentTimeMillis()
+                            thinkingText.append(event.text)
+                        }
                         if (text.isEmpty()) show(StreamingReply(conversationId, "", thinking = true, thought = thinkingText.toString()))
                     }
                     is ChatEvent.ToolCalls -> calls = event.calls
