@@ -8,6 +8,7 @@ import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
+import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.McpClient
 import com.cleo.cleos.ai.McpHub
 import com.cleo.cleos.ai.Recaps
@@ -67,6 +68,7 @@ class AppContainer(context: Context) {
         avatar = AiSelfAvatar(db, images, companions),
         letters = { id -> db.letters().allFor(id) },
         memories = db.memories(),
+        location = PhoneLocation(context, http),
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(

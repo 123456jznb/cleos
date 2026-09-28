@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Voice messages: asked for the first time the person holds the microphone button. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- get_location, only while a reply asks; asked for when the switch is turned on. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <application
         android:name=".CleosApp"

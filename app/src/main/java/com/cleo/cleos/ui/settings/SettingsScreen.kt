@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.Mcp
+import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
@@ -101,6 +102,17 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
     }
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.readImport(uri)
+    }
+    val appContext = LocalContext.current
+    var locationHint by remember { mutableStateOf<String?>(null) }
+    // The switch goes on once the person has let the app use the location, not before.
+    val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) {
+            locationHint = null
+            vm.setTool(ToolGroup.Location, true)
+        } else {
+            locationHint = "没给定位权限，TA 查不了位置。"
+        }
     }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -252,6 +264,21 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 ToolSwitch("换自己的头像", "TA 可以把你发来的图、或者一个表情，换成自己的头像。", ToolGroup.Avatar in settings.tools) {
                     vm.setTool(ToolGroup.Avatar, it)
                 }
+                ToolSwitch(
+                    "查位置",
+                    "TA 需要知道你在哪时（问附近、问路、问天气），用手机定位查一下，地名要联网查。只在聊天中查，不在后台跟踪；每查一次，聊天里都会写一行。",
+                    ToolGroup.Location in settings.tools,
+                ) { on ->
+                    when {
+                        !on -> vm.setTool(ToolGroup.Location, false)
+                        PhoneLocation.allowed(appContext) -> vm.setTool(ToolGroup.Location, true)
+                        else -> askLocation.launch(PhoneLocation.PERMISSIONS)
+                    }
+                }
+                if (ToolGroup.Location in settings.tools && !PhoneLocation.allowed(appContext)) {
+                    Text("还没给定位权限，TA 查不了：把开关关掉再打开，会重新问你。", color = palette.error, fontSize = 12.sp)
+                }
+                locationHint?.let { Text(it, color = palette.contentSecondary, fontSize = 12.sp) }
                 ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
                     vm.setTool(ToolGroup.Weather, it)
                 }

@@ -35,7 +35,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -262,6 +262,14 @@ object ToolSpecs {
         ),
     )
 
+    val getLocation = ToolSpec(
+        name = "get_location",
+        groups = setOf(ToolGroup.Location),
+        action = "查位置",
+        description = "查对方手机现在在哪：省、市、区（查得到的话再细些），和坐标。对方问附近有什么、怎么走、天气，或者你需要知道对方在哪时用。",
+        parameters = schema(),
+    )
+
     val all = listOf(
         sendMessage,
         addTodo,
@@ -275,6 +283,7 @@ object ToolSpecs {
         memory,
         setMyAvatar,
         getWeather,
+        getLocation,
     )
     val byName = all.associateBy { it.name }
 
@@ -340,6 +349,8 @@ class ToolBox(
     /** The letters between one TA and the person, any order. */
     private val letters: suspend (companionId: Long) -> List<LetterEntity> = { emptyList() },
     memories: MemoryDao? = null,
+    /** Where the phone is, for get_location. */
+    private val location: LocationSource? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -381,6 +392,7 @@ class ToolBox(
                 ToolSpecs.sendMessage.name -> ToolOutcome(ToolSpecs.SENT, "")
                 ToolSpecs.readLetters.name -> readLetters(args, today, companionId)
                 ToolSpecs.memory.name -> (book ?: throw ToolFailure("现在记不了。", "这里记不了")).act(args, companionId)
+                ToolSpecs.getLocation.name -> getLocation()
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
@@ -597,6 +609,12 @@ class ToolBox(
             "【${Describe.date(day, today)} · ${if (mine) "你写的" else "对方写的"}】$unread\n$body"
         }
         return ToolOutcome(text, "翻了翻你们的信（${shown.size} 封）")
+    }
+
+    /** The chat line names the area, so the person sees each time the TA looked. */
+    private suspend fun getLocation(): ToolOutcome {
+        val place = (location ?: throw ToolFailure("这里查不了位置。", "这里查不了")).here()
+        return ToolOutcome(Locations.describe(place), "查了你的位置" + (place.area?.let { "：$it" } ?: ""))
     }
 
     private suspend fun getWeather(a: JsonObject, settings: AppSettings): ToolOutcome {

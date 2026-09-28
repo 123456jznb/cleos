@@ -87,6 +87,9 @@ object Prompt {
         }
         if (ToolGroup.Avatar in tools) add("你可以用 set_my_avatar 换自己的头像：用对方发来的一张图，或者一个表情。")
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
+        if (ToolGroup.Location in tools) {
+            add("你能用 get_location 查对方现在在哪。需要的时候再查：对方问附近、问路，或者问天气没说城市；别无缘无故去查，也别把坐标念给对方。")
+        }
         if (outside.isNotEmpty()) {
             val names = outside.map { it.serverName }.distinct().joinToString("、")
             add(
