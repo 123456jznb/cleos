@@ -92,14 +92,15 @@ object Locations {
 }
 
 /**
- * The phone's location. There are no Google services on the phone, so the system's own
- * providers are asked: a fix from the last couple of minutes is used as it is; otherwise one
- * is asked for (fused where the phone has it, else the network one, else GPS); and if none
- * comes, the last one known, saying how old it is. Only while a reply asks: nothing runs in
- * the background.
+ * The phone's location, from the system's LocationManager, which works with or without
+ * Google Play services behind it: a fix from the last couple of minutes is used as it is;
+ * otherwise one is asked for (fused where the phone has it, else the network one, else GPS);
+ * and if none comes, the last one known, saying how old it is. Only while a reply asks:
+ * nothing runs in the background.
  *
- * Named by the phone's own geocoder when it has one, else by BigDataCloud's free lookup for
- * apps (it answers from China, where OpenStreetMap's didn't), else not named at all.
+ * Named by the phone's own geocoder when it answers (on a phone in China it is usually
+ * Google's, which can't reach its servers, hence the short wait), else by BigDataCloud's
+ * free lookup for apps (it answers from China, where OpenStreetMap's didn't), else not named.
  */
 class PhoneLocation(private val context: Context, http: OkHttpClient) : LocationSource {
     private val http = http.newBuilder().callTimeout(12, TimeUnit.SECONDS).build()
