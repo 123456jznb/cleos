@@ -245,6 +245,9 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 ) {
                     vm.setTool(ToolGroup.Speak, it)
                 }
+                if (ToolGroup.Speak in settings.tools && !Speech.ready(settings)) {
+                    Text("还没配好声音，TA 暂时发不了：在下面「TA 的声音」里选一个。", color = palette.error, fontSize = 12.sp)
+                }
                 ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
                     vm.setTool(ToolGroup.Todos, it)
                 }
@@ -441,6 +444,16 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 }
                 Chip(if (vm.speechBusy) "正在合成…" else "试听", selected = false) { vm.previewSpeech() }
                 vm.speechResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+                // Setting up a voice doesn't let the TA use it: that is the switch up in 「TA 能做的事」.
+                if (ToolGroup.Speak !in settings.tools && Speech.ready(settings)) {
+                    Text(
+                        "声音配好了，不过上面「TA 能做的事」里的「发语音条」还关着，TA 现在还不会发。",
+                        color = palette.content,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Chip("打开发语音条", selected = true) { vm.setTool(ToolGroup.Speak, true) }
+                }
             }
 
             Section("外部服务（MCP）") {
