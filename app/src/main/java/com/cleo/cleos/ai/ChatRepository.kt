@@ -70,6 +70,7 @@ class ChatRepository(
     private val recaps: Recaps,
     private val mcp: McpHub,
     private val transcriber: Transcriber,
+    private val speaker: Speaker,
     private val scope: CoroutineScope,
 ) {
     /** The replies being written, by conversation. */
@@ -304,7 +305,8 @@ class ChatRepository(
         val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
         val recap = conversation?.recap
         val now = ZonedDateTime.now()
-        var groups = if (endpointKey in refusesTools) emptySet() else s.tools
+        // send_voice only once there is a voice to speak with.
+        var groups = if (endpointKey in refusesTools) emptySet() else s.tools.let { if (Speech.ready(s)) it else it - ToolGroup.Speak }
         // The tools of the MCP services switched on come along whenever tools do.
         var outside = if (endpointKey in refusesTools) emptyList() else mcp.tools()
         var withImages = endpointKey !in refusesImages && history.any { it.role == "user" && it.images != null }
@@ -355,7 +357,7 @@ class ChatRepository(
                         val results = runTools(conversationId, step, s, ta.id, outside, ta.name)
                         // Only messages sent: that was the whole reply. Asking again would bring
                         // nothing new, or a "发好了".
-                        if (step.message.toolCalls.all { it.name == ToolSpecs.sendMessage.name }) {
+                        if (step.message.toolCalls.all { it.name in ToolSpecs.speaking }) {
                             remember(leftOut, conversationId, endpointKey)
                             recaps.foldLater(conversationId)
                             hide(conversationId)
@@ -460,7 +462,7 @@ class ChatRepository(
                 // bubbles in a row back into calls). With some sent, the words said first go in
                 // now as a bubble too, and the other calls only after the messages (runTools):
                 // a call has to stay right before its results.
-                val speaks = calls.any { it.name == ToolSpecs.sendMessage.name }
+                val speaks = calls.any { it.name in ToolSpecs.speaking }
                 val id = when {
                     !speaks -> db.messages().insert(
                         MessageEntity(
@@ -501,7 +503,7 @@ class ChatRepository(
         ai: String,
     ): List<ApiMessage> {
         val said = step.message.content
-        val (sends, others) = step.message.toolCalls.partition { it.name == ToolSpecs.sendMessage.name }
+        val (sends, others) = step.message.toolCalls.partition { it.name in ToolSpecs.speaking }
         val results = HashMap<String, ApiMessage>()
         var previous = said.takeIf { it.isNotBlank() }
         var sent = 0
@@ -516,14 +518,37 @@ class ChatRepository(
                         show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
                         delay((400L + it.length * 25L).coerceAtMost(1500L))
                     }
+                    // A voice message is made first (a voice service can take a few seconds). One that
+                    // can't be made goes as text instead: what the TA said isn't lost.
+                    var voice: MessageAudio? = null
+                    var why: String? = null
+                    if (call.name == ToolSpecs.sendVoice.name) {
+                        show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }, activity = "在录语音"))
+                        try {
+                            voice = speaker.speak(s, words)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            why = e.message ?: e.javaClass.simpleName
+                        }
+                    }
                     withContext(NonCancellable) {
                         val at = System.currentTimeMillis()
-                        db.messages().insert(MessageEntity(conversationId = conversationId, role = "assistant", content = words, createdAt = at))
+                        db.messages().insert(
+                            MessageEntity(
+                                conversationId = conversationId,
+                                role = "assistant",
+                                content = words,
+                                createdAt = at,
+                                audio = voice?.let(MessageAudios::encode),
+                            ),
+                        )
                         db.conversations().touch(conversationId, at)
                     }
+                    why?.let { note(conversationId, "语音没做出来（$it），这句改成了文字") }
                     previous = words
                     sent++
-                    ToolSpecs.SENT
+                    if (why != null) "语音没做出来（$why），这句已经改成文字发出去了。" else ToolSpecs.SENT
                 }
             }
             results[call.id] = ApiMessage("tool", result, toolCallId = call.id)

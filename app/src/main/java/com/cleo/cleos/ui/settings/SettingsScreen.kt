@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -62,6 +63,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.Mcp
 import com.cleo.cleos.ai.PhoneLocation
+import com.cleo.cleos.ai.Speech
+import com.cleo.cleos.ai.SpeechEngine
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
@@ -84,6 +87,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
     val vm = appViewModel { SettingsViewModel(it) }
     val mcpServers by vm.mcpServers.collectAsStateWithLifecycle()
     val hasVoiceKey by vm.hasVoiceKey.collectAsStateWithLifecycle()
+    val hasSpeechKey by vm.hasSpeechKey.collectAsStateWithLifecycle()
     val hasKey by vm.hasKey.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val palette = LocalGlassPalette.current
@@ -234,6 +238,13 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 ) {
                     vm.setTool(ToolGroup.Messages, it)
                 }
+                ToolSwitch(
+                    "发语音条",
+                    "TA 想用声音说的时候（道晚安、撒娇），发一条语音条，你能听，也看得到字。用什么声音，在下面「TA 的声音」里选。",
+                    ToolGroup.Speak in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Speak, it)
+                }
                 ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
                     vm.setTool(ToolGroup.Todos, it)
                 }
@@ -333,6 +344,93 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     lineHeight = 18.sp,
                 )
                 vm.voiceResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+            }
+
+            Section("TA 的声音") {
+                Text(
+                    "TA 发语音条时用的声音。合成交给你选的服务：MCP 工具（比如 MiniMax 的）、OpenAI 格式的语音接口" +
+                        "（硅基流动 CosyVoice、OpenAI），或者 ElevenLabs。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SpeechEngine.entries.forEach { e -> Chip(e.label, selected = vm.speechEngine == e) { vm.speechEngine = e } }
+                }
+                when (vm.speechEngine) {
+                    SpeechEngine.Api -> {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Speech.presets.forEach { p ->
+                                Chip(p.name, selected = vm.speechBaseUrl.trimEnd('/') == p.baseUrl) { vm.applySpeechPreset(p) }
+                            }
+                        }
+                        Field("接口地址", vm.speechBaseUrl, { vm.speechBaseUrl = it }, keyboardType = KeyboardType.Uri)
+                        Field("模型", vm.speechModel, { vm.speechModel = it })
+                        Field("声音", vm.speechVoice, { vm.speechVoice = it })
+                    }
+                    SpeechEngine.ElevenLabs -> {
+                        Field("Voice ID", vm.elevenVoice, { vm.elevenVoice = it })
+                        Field("模型（不填就是 ${Speech.ELEVENLABS_MODEL}）", vm.elevenModel, { vm.elevenModel = it })
+                    }
+                    SpeechEngine.Mcp -> {
+                        val picked = vm.speechTools?.firstOrNull { it.serverId == vm.speechMcpServer && it.name == vm.speechMcpTool }
+                        Text(
+                            when {
+                                vm.speechMcpTool.isBlank() -> "还没选工具。"
+                                picked != null -> "用的是：${picked.serverName} · ${picked.title}"
+                                else -> "用的是：${vm.speechMcpTool}"
+                            },
+                            color = palette.content,
+                            fontSize = 14.sp,
+                        )
+                        Chip(if (vm.speechTools == null) "列出 MCP 工具" else "重新列出", selected = false) { vm.loadSpeechTools() }
+                        vm.speechTools?.let { list ->
+                            if (list.isEmpty()) {
+                                Text("还没有开着的 MCP 服务，或者它们没有工具。先在下面「外部服务（MCP）」里加一个。", color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 18.sp)
+                            } else {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    list.forEach { t ->
+                                        Chip("${t.serverName} · ${t.title}", selected = t.serverId == vm.speechMcpServer && t.name == vm.speechMcpTool) { vm.pickSpeechTool(t) }
+                                    }
+                                }
+                            }
+                        }
+                        Field("文字放在哪个参数", vm.speechMcpTextParam, { vm.speechMcpTextParam = it })
+                        OutlinedTextField(
+                            value = vm.speechMcpArgs,
+                            onValueChange = { vm.speechMcpArgs = it },
+                            label = { Text("其他参数（JSON，可不填）") },
+                            placeholder = { Text("比如 {\"voice_id\": \"female-shaonv\"}") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "工具回音频，或者回一个音频链接，都能变成语音条。用的是你自己配的工具，所以这里不再每次问你。",
+                            color = palette.contentSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                }
+                if (vm.speechEngine != SpeechEngine.Mcp) {
+                    OutlinedTextField(
+                        value = vm.speechKeyInput,
+                        onValueChange = { vm.speechKeyInput = it },
+                        label = { Text("API Key") },
+                        placeholder = { if (hasSpeechKey) Text("已保存（不再显示）；要换就重新填") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (vm.speechKeyInput.isNotBlank()) Chip("保存 Key", selected = true) { vm.saveSpeechKey() }
+                    Text(
+                        if (hasSpeechKey) "这个地址的 Key 已经有了。" else "Key 跟着地址存：和聊天、转文字用同一个地址的话，不用再填。",
+                        color = palette.contentSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+                Chip(if (vm.speechBusy) "正在合成…" else "试听", selected = false) { vm.previewSpeech() }
+                vm.speechResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
             }
 
             Section("外部服务（MCP）") {

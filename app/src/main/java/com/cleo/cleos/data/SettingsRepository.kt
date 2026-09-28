@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.cleo.cleos.ai.ReplyWhen
+import com.cleo.cleos.ai.SpeechEngine
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.glass.GlassPart
 import com.cleo.cleos.glass.GlassTuning
@@ -66,6 +67,18 @@ data class AppSettings(
     /** Where voice messages are turned into text (an OpenAI-shaped /audio/transcriptions), and with which model. */
     val voiceBaseUrl: String = "",
     val voiceModel: String = "",
+    /** The TA's voice messages: what makes them (a SpeechEngine key), and each engine's settings. */
+    val speechEngine: String = SpeechEngine.Api.key,
+    val speechBaseUrl: String = "",
+    val speechModel: String = "",
+    val speechVoice: String = "",
+    val elevenVoice: String = "",
+    val elevenModel: String = "",
+    /** An MCP service's id and one of its tools; the words go under [speechMcpTextParam], with [speechMcpArgs] (JSON) beside them. */
+    val speechMcpServer: String = "",
+    val speechMcpTool: String = "",
+    val speechMcpTextParam: String = "text",
+    val speechMcpArgs: String = "",
 )
 
 /**
@@ -127,6 +140,16 @@ class SettingsRepository(private val context: Context) {
         val letterEveryDays = intPreferencesKey("letter_every_days")
         val voiceBaseUrl = stringPreferencesKey("voice_base_url")
         val voiceModel = stringPreferencesKey("voice_model")
+        val speechEngine = stringPreferencesKey("speech_engine")
+        val speechBaseUrl = stringPreferencesKey("speech_base_url")
+        val speechModel = stringPreferencesKey("speech_model")
+        val speechVoice = stringPreferencesKey("speech_voice")
+        val elevenVoice = stringPreferencesKey("eleven_voice")
+        val elevenModel = stringPreferencesKey("eleven_model")
+        val speechMcpServer = stringPreferencesKey("speech_mcp_server")
+        val speechMcpTool = stringPreferencesKey("speech_mcp_tool")
+        val speechMcpTextParam = stringPreferencesKey("speech_mcp_text_param")
+        val speechMcpArgs = stringPreferencesKey("speech_mcp_args")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
     }
@@ -156,6 +179,16 @@ class SettingsRepository(private val context: Context) {
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
             voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
             voiceModel = this[Keys.voiceModel] ?: d.voiceModel,
+            speechEngine = this[Keys.speechEngine] ?: d.speechEngine,
+            speechBaseUrl = this[Keys.speechBaseUrl] ?: d.speechBaseUrl,
+            speechModel = this[Keys.speechModel] ?: d.speechModel,
+            speechVoice = this[Keys.speechVoice] ?: d.speechVoice,
+            elevenVoice = this[Keys.elevenVoice] ?: d.elevenVoice,
+            elevenModel = this[Keys.elevenModel] ?: d.elevenModel,
+            speechMcpServer = this[Keys.speechMcpServer] ?: d.speechMcpServer,
+            speechMcpTool = this[Keys.speechMcpTool] ?: d.speechMcpTool,
+            speechMcpTextParam = this[Keys.speechMcpTextParam] ?: d.speechMcpTextParam,
+            speechMcpArgs = this[Keys.speechMcpArgs] ?: d.speechMcpArgs,
         )
     }
 
@@ -181,6 +214,16 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.letterEveryDays] = next.letterEveryDays
             prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl
             prefs[Keys.voiceModel] = next.voiceModel
+            prefs[Keys.speechEngine] = next.speechEngine
+            prefs[Keys.speechBaseUrl] = next.speechBaseUrl
+            prefs[Keys.speechModel] = next.speechModel
+            prefs[Keys.speechVoice] = next.speechVoice
+            prefs[Keys.elevenVoice] = next.elevenVoice
+            prefs[Keys.elevenModel] = next.elevenModel
+            prefs[Keys.speechMcpServer] = next.speechMcpServer
+            prefs[Keys.speechMcpTool] = next.speechMcpTool
+            prefs[Keys.speechMcpTextParam] = next.speechMcpTextParam
+            prefs[Keys.speechMcpArgs] = next.speechMcpArgs
         }
     }
 

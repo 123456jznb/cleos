@@ -14,6 +14,7 @@ import com.cleo.cleos.ai.McpHub
 import com.cleo.cleos.ai.Recaps
 import com.cleo.cleos.ai.OpenMeteo
 import com.cleo.cleos.ai.SecretRequests
+import com.cleo.cleos.ai.Speaker
 import com.cleo.cleos.ai.ToolBox
 import com.cleo.cleos.ai.Transcriber
 import com.cleo.cleos.data.BackupService
@@ -76,7 +77,8 @@ class AppContainer(context: Context) {
         McpClient(http, runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"),
     )
     val transcriber = Transcriber(http, secrets)
-    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, appScope)
+    val speaker = Speaker(images, http, secrets, mcp)
+    val chat = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
     val letters = Letters(db, settings, secrets, chatClient, appScope)

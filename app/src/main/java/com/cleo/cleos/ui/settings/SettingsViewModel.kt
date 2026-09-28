@@ -14,7 +14,14 @@ import com.cleo.cleos.ai.ApiEndpoint
 import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
+import android.media.MediaPlayer
+import com.cleo.cleos.ai.McpTool
+import com.cleo.cleos.ai.Speech
+import com.cleo.cleos.ai.SpeechEngine
+import com.cleo.cleos.ai.SpeechPreset
 import com.cleo.cleos.ai.Voice
+import kotlinx.coroutines.CancellationException
+import java.io.File
 import com.cleo.cleos.ai.VoicePreset
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.McpServer
@@ -69,6 +76,26 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var voiceResult by mutableStateOf<String?>(null)
         private set
+    var speechEngine by mutableStateOf(SpeechEngine.Api)
+    var speechBaseUrl by mutableStateOf("")
+    var speechModel by mutableStateOf("")
+    var speechVoice by mutableStateOf("")
+    var elevenVoice by mutableStateOf("")
+    var elevenModel by mutableStateOf("")
+    var speechMcpServer by mutableStateOf("")
+        private set
+    var speechMcpTool by mutableStateOf("")
+        private set
+    var speechMcpTextParam by mutableStateOf("text")
+    var speechMcpArgs by mutableStateOf("")
+    var speechKeyInput by mutableStateOf("")
+    var speechTools by mutableStateOf<List<McpTool>?>(null)
+        private set
+    var speechBusy by mutableStateOf(false)
+        private set
+    var speechResult by mutableStateOf<String?>(null)
+        private set
+    private var speechPlayer: MediaPlayer? = null
     var keyInput by mutableStateOf("")
     var loaded by mutableStateOf(false)
         private set
@@ -90,6 +117,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
+    /** The address the voice engine's key is filed under: ElevenLabs' own, or the voice service's. */
+    private fun speechKeyAddress() = if (speechEngine == SpeechEngine.ElevenLabs) Speech.ELEVENLABS_BASE else speechBaseUrl
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val hasSpeechKey: StateFlow<Boolean> = snapshotFlow { speechKeyAddress() }
+        .flatMapLatest { c.secrets.hasKey(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     /** Whether the transcription service's address has a key yet: filed by address, like the chat keys. */
     @OptIn(ExperimentalCoroutinesApi::class)
     val hasVoiceKey: StateFlow<Boolean> = snapshotFlow { voiceBaseUrl }
@@ -107,6 +142,16 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             weatherCity = s.weatherCity
             voiceBaseUrl = s.voiceBaseUrl
             voiceModel = s.voiceModel
+            speechEngine = SpeechEngine.of(s.speechEngine)
+            speechBaseUrl = s.speechBaseUrl
+            speechModel = s.speechModel
+            speechVoice = s.speechVoice
+            elevenVoice = s.elevenVoice
+            elevenModel = s.elevenModel
+            speechMcpServer = s.speechMcpServer
+            speechMcpTool = s.speechMcpTool
+            speechMcpTextParam = s.speechMcpTextParam
+            speechMcpArgs = s.speechMcpArgs
             loaded = true
             watch()
         }
@@ -114,7 +159,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     @OptIn(FlowPreview::class)
     private suspend fun watch() {
-        snapshotFlow { listOf(baseUrl, model, aiName, userName, persona, historySize, weatherCity, voiceBaseUrl, voiceModel) }
+        snapshotFlow {
+            listOf(
+                baseUrl, model, aiName, userName, persona, historySize, weatherCity, voiceBaseUrl, voiceModel,
+                speechEngine, speechBaseUrl, speechModel, speechVoice, elevenVoice, elevenModel,
+                speechMcpServer, speechMcpTool, speechMcpTextParam, speechMcpArgs,
+            )
+        }
             .drop(1)
             .debounce(500)
             .collect { persist() }
@@ -148,7 +199,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val voiceUrl = voiceBaseUrl.trim()
         val voiceM = voiceModel.trim()
         c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name, persona = p) }
-        c.settings.update { it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM) }
+        val speech = speechSettings()
+        c.settings.update {
+            speech(it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM))
+        }
     }
 
     /** Removes this TA with their conversations and diary; [then] leaves the screen. */
@@ -159,6 +213,104 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.chat.stopRepliesOf(id)
             c.companions.delete(id)
             then()
+        }
+    }
+
+    /** The voice fields as they are now, to lay over settings (read before anything suspends). */
+    private fun speechSettings(): (AppSettings) -> AppSettings {
+        val engine = speechEngine.key
+        val url = speechBaseUrl.trim()
+        val m = speechModel.trim()
+        val voice = speechVoice.trim()
+        val eVoice = elevenVoice.trim()
+        val eModel = elevenModel.trim()
+        val server = speechMcpServer
+        val tool = speechMcpTool
+        val param = speechMcpTextParam.trim().ifEmpty { "text" }
+        val args = speechMcpArgs.trim()
+        return {
+            it.copy(
+                speechEngine = engine,
+                speechBaseUrl = url,
+                speechModel = m,
+                speechVoice = voice,
+                elevenVoice = eVoice,
+                elevenModel = eModel,
+                speechMcpServer = server,
+                speechMcpTool = tool,
+                speechMcpTextParam = param,
+                speechMcpArgs = args,
+            )
+        }
+    }
+
+    fun applySpeechPreset(p: SpeechPreset) {
+        speechBaseUrl = p.baseUrl
+        speechModel = p.model
+        speechVoice = p.voice
+        speechResult = null
+    }
+
+    fun saveSpeechKey() {
+        val url = speechKeyAddress().trim()
+        val key = speechKeyInput.trim()
+        if (url.isEmpty() || key.isEmpty()) return
+        viewModelScope.launch {
+            c.secrets.setKey(url, key)
+            speechKeyInput = ""
+        }
+    }
+
+    /** The tools of the MCP services switched on, to pick the voice from. */
+    fun loadSpeechTools() {
+        viewModelScope.launch { speechTools = c.mcp.tools() }
+    }
+
+    fun pickSpeechTool(t: McpTool) {
+        speechMcpServer = t.serverId
+        speechMcpTool = t.name
+        speechMcpTextParam = Speech.textParam(t.inputSchema)
+        speechResult = null
+    }
+
+    /** Says a sentence with the voice as set up on screen, saved or not, and plays it. */
+    fun previewSpeech() {
+        if (speechBusy) return
+        speechBusy = true
+        speechResult = null
+        val s = speechSettings()(settings.value)
+        viewModelScope.launch {
+            speechResult = try {
+                val clip = c.speaker.speak(s, Speech.SAMPLE)
+                play(c.images.file(clip.file))
+                "能用，正在放（${Voice.duration(clip.ms)}）。"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "没成：${e.message ?: e.javaClass.simpleName}"
+            }
+            speechBusy = false
+        }
+    }
+
+    /** Plays a try-out, then throws it away. */
+    private fun play(file: File) {
+        speechPlayer?.release()
+        val p = MediaPlayer()
+        runCatching {
+            p.setDataSource(file.path)
+            p.setOnCompletionListener {
+                it.release()
+                if (speechPlayer === it) speechPlayer = null
+                file.delete()
+            }
+            p.prepare()
+            p.start()
+            speechPlayer = p
+        }.onFailure {
+            p.release()
+            file.delete()
+            throw it
         }
     }
 
@@ -410,6 +562,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     override fun onCleared() {
+        speechPlayer?.release()
+        speechPlayer = null
         val pendingKey = keyInput.trim()
         val address = baseUrl
         c.appScope.launch {

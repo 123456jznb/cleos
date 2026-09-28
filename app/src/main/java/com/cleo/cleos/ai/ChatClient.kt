@@ -40,6 +40,8 @@ data class ApiMessage(
      * data: URLs just before sending.
      */
     val images: List<String> = emptyList(),
+    /** An assistant message that went as a voice message: Prompt gives it back as the send_voice it was. Not sent. */
+    val spoken: Boolean = false,
 )
 
 /** Where to send a conversation. [baseUrl] may or may not already end in /chat/completions. */

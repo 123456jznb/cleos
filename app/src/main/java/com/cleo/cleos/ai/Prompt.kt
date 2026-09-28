@@ -87,6 +87,9 @@ object Prompt {
         }
         if (ToolGroup.Avatar in tools) add("你可以用 set_my_avatar 换自己的头像：用对方发来的一张图，或者一个表情。")
         if (ToolGroup.Weather in tools) add("问到天气时用工具查，不要凭印象说。")
+        if (ToolGroup.Speak in tools) {
+            add("你能用 send_voice 发语音条，对方听到的是你的声音。想用声音说的时候再用（道晚安、撒娇、情绪浓的时候），一条一两句话，写成说出口的样子；平常还是打字。发了语音条就别再把同样的话打一遍。")
+        }
         if (ToolGroup.Location in tools) {
             add("你能用 get_location 查对方现在在哪。需要的时候再查：对方问附近、问路，或者问天气没说城市；别无缘无故去查，也别把坐标念给对方。")
         }
@@ -120,7 +123,7 @@ object Prompt {
         val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
         val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached)?.let { m.id to it } }
-        val sendable = if (ToolGroup.Messages in tools) asSentMessages(converted) else converted.map { it.second }
+        val sendable = asSentMessages(converted, texts = ToolGroup.Messages in tools, voices = ToolGroup.Speak in tools)
         val paired = if (withTools) pairCalls(sendable) else sendable
         // The window can start mid-exchange; begin at a user turn, which every endpoint accepts.
         val fromUser = paired.dropWhile { it.role != "user" }.ifEmpty { paired }
@@ -152,25 +155,30 @@ object Prompt {
     }
 
     /**
-     * The TA's messages in a row go back as the send_message calls they are (or, from before,
-     * could have been), each with its result: the model sees itself sending separate messages,
-     * the way it is asked to, instead of one text with blank lines. A single message stays a
-     * plain reply. Ids come from the rows, so they stay the same from one request to the next.
+     * With [texts] (send_message offered), the TA's messages in a row go back as the
+     * send_message calls they are (or, from before, could have been), each with its result:
+     * the model sees itself sending separate messages, the way it is asked to, instead of one
+     * text with blank lines. A single message stays a plain reply. With [voices] (send_voice
+     * offered), a voice message goes back as the send_voice call it was, even on its own, so
+     * the model knows it spoke; otherwise as a line marked （语音）, never as typed words it
+     * might copy. Ids come from the rows, so they stay the same from one request to the next.
      */
-    private fun asSentMessages(list: List<Pair<Long, ApiMessage>>): List<ApiMessage> {
-        fun ApiMessage.said() = role == "assistant" && toolCalls.isEmpty() && content.isNotBlank()
+    private fun asSentMessages(list: List<Pair<Long, ApiMessage>>, texts: Boolean, voices: Boolean): List<ApiMessage> {
+        fun ApiMessage.said() = role == "assistant" && toolCalls.isEmpty() && content.isNotBlank() && (if (spoken) voices else texts)
         val out = ArrayList<ApiMessage>(list.size)
         var i = 0
         while (i < list.size) {
             var j = i
             while (j < list.size && list[j].second.said()) j++
-            if (j - i < 2) {
-                out += list[i].second
+            if (j == i || (j - i == 1 && !list[i].second.spoken)) {
+                val m = list[i].second
+                out += if (m.spoken) m.copy(content = "（语音）${m.content}") else m
                 i++
                 continue
             }
             val calls = list.subList(i, j).map { (id, m) ->
-                ToolCall("send_$id", ToolSpecs.sendMessage.name, buildJsonObject { put("text", m.content) }.toString())
+                val name = if (m.spoken) ToolSpecs.sendVoice.name else ToolSpecs.sendMessage.name
+                ToolCall("send_$id", name, buildJsonObject { put("text", m.content) }.toString())
             }
             out += ApiMessage("assistant", "", calls)
             calls.forEach { out += ApiMessage("tool", ToolSpecs.SENT, toolCallId = it.id) }
@@ -225,7 +233,7 @@ object Prompt {
                 // A half reply ending mid-sentence invites the model to continue it.
                 error != null -> null
                 calls.isNotEmpty() -> ApiMessage("assistant", content, calls, reasoning = reasoning)
-                content.isNotBlank() -> ApiMessage("assistant", content)
+                content.isNotBlank() -> ApiMessage("assistant", content, spoken = audio != null)
                 else -> null
             }
         }

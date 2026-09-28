@@ -35,7 +35,7 @@ import java.util.Locale
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -165,6 +165,20 @@ object ToolSpecs {
         ),
     )
 
+    val sendVoice = ToolSpec(
+        name = "send_voice",
+        groups = setOf(ToolGroup.Speak),
+        action = "发语音",
+        description = "用声音说：发一条语音条给对方，对方听到的是你的声音，也看得到文字。想用声音说的时候用，比如道晚安、撒娇、情绪浓的时候；平常还是打字。一条一两句话。",
+        parameters = schema(
+            required = listOf("text"),
+            "text" to prop("string", "要说的话，写成说出口的样子，不要括号里的动作和神情"),
+        ),
+    )
+
+    /** The calls that are the TA speaking: each becomes a bubble of its own. */
+    val speaking = setOf(sendMessage.name, sendVoice.name)
+
     /** What a sent message answers the model with. */
     const val SENT = "已发出。"
 
@@ -272,6 +286,7 @@ object ToolSpecs {
 
     val all = listOf(
         sendMessage,
+        sendVoice,
         addTodo,
         listTodos,
         updateTodo,
@@ -389,7 +404,7 @@ class ToolBox(
                 ToolSpecs.requestSecret.name -> requestSecret(args, companionId)
                 ToolSpecs.setMyAvatar.name -> setMyAvatar(args, conversationId, companionId)
                 // Sent messages become bubbles in ChatRepository; this is only reached by mistake.
-                ToolSpecs.sendMessage.name -> ToolOutcome(ToolSpecs.SENT, "")
+                ToolSpecs.sendMessage.name, ToolSpecs.sendVoice.name -> ToolOutcome(ToolSpecs.SENT, "")
                 ToolSpecs.readLetters.name -> readLetters(args, today, companionId)
                 ToolSpecs.memory.name -> (book ?: throw ToolFailure("现在记不了。", "这里记不了")).act(args, companionId)
                 ToolSpecs.getLocation.name -> getLocation()
