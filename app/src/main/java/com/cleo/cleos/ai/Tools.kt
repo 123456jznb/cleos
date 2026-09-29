@@ -29,15 +29,17 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import kotlin.math.roundToInt
 import java.util.Locale
 
 /**
  * What the model may do. Each group is switched on or off in settings. [Diary] is reading
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  * [Later] is not among the switches in settings: a TA gets it while its own "reach out"
- * switch is on (CompanionEntity.proactive), and it is never stored with the others.
+ * switch is on (CompanionEntity.proactive), and it is never stored with the others. [Alarm] is
+ * the phone's clock app; [Calendar] the phone's calendar.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -310,6 +312,84 @@ object ToolSpecs {
     /** Tools that leave no trace in the chat, neither a line nor "在…" while they run. */
     val quiet = setOf(noteForLater.name)
 
+    val setAlarm = ToolSpec(
+        name = "set_alarm",
+        groups = setOf(ToolGroup.Alarm),
+        action = "定闹钟",
+        description = "在对方手机自带的时钟里定一个闹钟，到点手机响铃，和对方自己定的一样（能贪睡、能关）。" +
+            "只能定钟点：在这个时间最近的一次响，今天过了就是明天；也可以按星期重复。" +
+            "更远的某一天、或者要写清楚是什么事的，用日历加日程带提醒。",
+        parameters = schema(
+            required = listOf("time"),
+            "time" to prop("string", "几点，24 小时制 HH:MM，比如 07:30、19:00"),
+            "label" to prop("string", "可不填。闹钟上显示的字，比如「起床」「吃药」"),
+            "repeat" to prop("string", "可不填。按星期重复：每天、工作日、周末，或者「一三五」；不填就只响一次"),
+        ),
+    )
+    val setTimer = ToolSpec(
+        name = "set_timer",
+        groups = setOf(ToolGroup.Alarm),
+        action = "开计时器",
+        description = "在对方手机的时钟里开一个倒计时，到点手机响。「十分钟后叫我」「面煮三分钟」这种用它。",
+        parameters = schema(
+            required = listOf("minutes"),
+            "minutes" to prop("number", "多少分钟，可以有小数，0.5 就是 30 秒；最多 1440"),
+            "label" to prop("string", "可不填。计时器上显示的字"),
+        ),
+    )
+    val readCalendar = ToolSpec(
+        name = "read_calendar",
+        groups = setOf(ToolGroup.Calendar),
+        action = "看日历",
+        description = "看对方手机日历上的安排：对方自己的，和你加的，按时间列出，每条带编号。",
+        parameters = schema(
+            "from" to prop("string", "从哪天看起，YYYY-MM-DD；不填是今天"),
+            "days" to prop("integer", "看几天，默认 7，最多 31"),
+            "query" to prop("string", "可不填。只看标题、地点或备注里有这个词的"),
+        ),
+    )
+    val addEvent = ToolSpec(
+        name = "add_event",
+        groups = setOf(ToolGroup.Calendar),
+        action = "加日程",
+        description = "在对方手机的日历里加一条日程，加在「Cleos」这个日历里。对方让你记个安排、到时候提醒的时候用；要提醒就带 remind。",
+        parameters = schema(
+            required = listOf("title", "start"),
+            "title" to prop("string", "什么事，一句话"),
+            "start" to prop("string", "开始：YYYY-MM-DD HH:MM；全天的只写日期 YYYY-MM-DD"),
+            "end" to prop("string", "可不填。结束，格式同上；不填就是一小时（全天的就是那一天）"),
+            "location" to prop("string", "可不填。地点"),
+            "notes" to prop("string", "可不填。备注"),
+            "remind" to prop("integer", "可不填。提前几分钟提醒：到点提醒填 0，提前半小时填 30；不填就不提醒"),
+        ),
+    )
+    val updateEvent = ToolSpec(
+        name = "update_event",
+        groups = setOf(ToolGroup.Calendar),
+        action = "改日程",
+        description = "改一条你加的日程（在「Cleos」日历里的）：只填要改的项。对方自己的日程改不了。",
+        parameters = schema(
+            required = listOf("id"),
+            "id" to prop("integer", "日程编号，来自 read_calendar 或 add_event 的结果"),
+            "title" to prop("string", "新的事由"),
+            "start" to prop("string", "新的开始：YYYY-MM-DD HH:MM，或全天的 YYYY-MM-DD"),
+            "end" to prop("string", "新的结束，格式同上"),
+            "location" to prop("string", "新的地点；要去掉就填 none"),
+            "notes" to prop("string", "新的备注；要去掉就填 none"),
+            "remind" to prop("string", "提前几分钟提醒；要去掉提醒就填 none"),
+        ),
+    )
+    val deleteEvent = ToolSpec(
+        name = "delete_event",
+        groups = setOf(ToolGroup.Calendar),
+        action = "删日程",
+        description = "删一条你加的日程（在「Cleos」日历里的）。对方自己的日程删不了。",
+        parameters = schema(
+            required = listOf("id"),
+            "id" to prop("integer", "日程编号，来自 read_calendar 或 add_event 的结果"),
+        ),
+    )
+
     val all = listOf(
         sendMessage,
         sendVoice,
@@ -326,6 +406,12 @@ object ToolSpecs {
         getWeather,
         getLocation,
         noteForLater,
+        setAlarm,
+        setTimer,
+        readCalendar,
+        addEvent,
+        updateEvent,
+        deleteEvent,
     )
     val byName = all.associateBy { it.name }
 
@@ -395,6 +481,10 @@ class ToolBox(
     private val location: LocationSource? = null,
     /** Where note_for_later keeps its notes; asked for at the call, since it is made after this. */
     private val later: () -> LaterBook? = { null },
+    /** The phone's clock app, for set_alarm and set_timer. */
+    private val alarms: AlarmSource? = null,
+    /** The phone's calendar. */
+    private val calendar: CalendarSource? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -438,11 +528,146 @@ class ToolBox(
                 ToolSpecs.memory.name -> (book ?: throw ToolFailure("现在记不了。", "这里记不了")).act(args, companionId)
                 ToolSpecs.getLocation.name -> getLocation()
                 ToolSpecs.noteForLater.name -> noteForLater(args, conversationId, companionId)
+                ToolSpecs.setAlarm.name -> setAlarm(args)
+                ToolSpecs.setTimer.name -> setTimer(args)
+                ToolSpecs.readCalendar.name -> readCalendar(args, today)
+                ToolSpecs.addEvent.name -> addEvent(args, today)
+                ToolSpecs.updateEvent.name -> updateEvent(args, today)
+                ToolSpecs.deleteEvent.name -> deleteEvent(args, today)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
             failed(f.result, f.note)
         }
+    }
+
+    private fun setAlarm(a: JsonObject): ToolOutcome {
+        val phone = alarms ?: throw ToolFailure("这里定不了闹钟。", "这里定不了")
+        val time = AlarmText.time(ToolArgs.text(a, "time") ?: throw ToolFailure("缺少 time：几点，写成 HH:MM。", "没说几点"))
+        val days = AlarmText.days(ToolArgs.text(a, "repeat"))
+        val label = ToolArgs.text(a, "label").orEmpty().trim().take(ALARM_LABEL_MAX)
+        phone.setAlarm(time.hour, time.minute, label, days)
+        val now = Instant.ofEpochMilli(clock()).atZone(zone())
+        val at = if (days.isEmpty()) LaterRules.at(AlarmText.rings(time, now), now) else "${AlarmText.repeatName(days)} $time"
+        val what = label.takeIf { it.isNotEmpty() }?.let { "「$it」" }.orEmpty()
+        return ToolOutcome("闹钟定好了：$at$what。在对方手机自带的时钟里，响铃、贪睡、关掉都在那里。", "定了闹钟：$at$what")
+    }
+
+    private fun setTimer(a: JsonObject): ToolOutcome {
+        val phone = alarms ?: throw ToolFailure("这里开不了计时器。", "这里开不了")
+        val minutes = (a["minutes"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content?.trim()?.toDoubleOrNull()
+            ?: throw ToolFailure("缺少 minutes：多少分钟，写个数。", "没说多久")
+        val seconds = (minutes * 60).roundToInt()
+        if (seconds !in 1..TIMER_MAX) throw ToolFailure("计时器要在 1 秒到 24 小时之间。", "时长不对")
+        val label = ToolArgs.text(a, "label").orEmpty().trim().take(ALARM_LABEL_MAX)
+        phone.setTimer(seconds, label)
+        val what = label.takeIf { it.isNotEmpty() }?.let { "「$it」" }.orEmpty()
+        return ToolOutcome("计时器开始了：${AlarmText.span(seconds)}$what，到点手机的时钟会响。", "开了计时器：${AlarmText.span(seconds)}$what")
+    }
+
+    private suspend fun readCalendar(a: JsonObject, today: LocalDate): ToolOutcome {
+        val cal = calendar ?: throw ToolFailure("这里看不了日历。", "这里看不了")
+        val from = ToolArgs.optionalDay(a, "from", today) ?: today
+        val days = (ToolArgs.int(a["days"]) ?: 7).coerceIn(1, CALENDAR_DAYS_MAX)
+        val last = from.plusDays(days - 1L)
+        val z = zone()
+        val all = cal.events(from.atStartOfDay(z).toInstant().toEpochMilli(), last.plusDays(1).atStartOfDay(z).toInstant().toEpochMilli())
+        val query = ToolArgs.text(a, "query")?.trim().orEmpty()
+        val found = if (query.isEmpty()) all else all.filter { query in it.title || query in it.location || query in it.notes }
+        val range = if (days == 1) CalendarText.dayName(from, today) else "${CalendarText.dayName(from, today)}到${CalendarText.dayName(last, today)}"
+        return ToolOutcome(CalendarText.list(found.take(CALENDAR_LIST_MAX), from, last, z, today), "看了日历：$range")
+    }
+
+    private suspend fun addEvent(a: JsonObject, today: LocalDate): ToolOutcome {
+        val cal = calendar ?: throw ToolFailure("这里加不了日程。", "这里加不了")
+        val title = ToolArgs.text(a, "title").orEmpty().trim().take(TITLE_MAX)
+        if (title.isEmpty()) throw ToolFailure("缺少 title：什么事。", "没有内容")
+        val startText = ToolArgs.text(a, "start")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw ToolFailure("缺少 start：什么时候，写成 YYYY-MM-DD HH:MM。", "没说什么时候")
+        val start = CalendarText.parse(startText, today)
+        val end = optional(a, "end")?.let { CalendarText.parse(it, today) }
+        val (begin, finish) = CalendarText.span(start, end, zone())
+        val remind = ToolArgs.int(a["remind"])?.coerceIn(0, REMIND_MAX)
+        val draft = EventDraft(title, begin, finish, start.allDay, optional(a, "location"), optional(a, "notes"), remind)
+        val id = cal.add(draft)
+        val event = CalEvent(id, title, begin, finish, start.allDay, draft.location.orEmpty(), draft.notes.orEmpty(), "Cleos", ours = true)
+        val at = CalendarText.whenText(event, zone(), today)
+        val reminder = remindText(remind)
+        return ToolOutcome(
+            "加好了：${CalendarText.line(event, zone(), today)}$reminder。在对方手机日历里「Cleos」这个日历中。",
+            "加了日程「$title」· $at$reminder",
+        )
+    }
+
+    private suspend fun updateEvent(a: JsonObject, today: LocalDate): ToolOutcome {
+        val cal = calendar ?: throw ToolFailure("这里改不了日程。", "这里改不了")
+        val id = ToolArgs.id(a["id"]) ?: throw ToolFailure("缺少 id：日程编号，来自 read_calendar。", "没说是哪条")
+        val old = cal.event(id) ?: throw ToolFailure("日历里没有 #$id 这条，先用 read_calendar 看看编号。", "没有这条日程")
+        notTheirs(old)
+        val z = zone()
+        val startText = optional(a, "start")
+        val endText = optional(a, "end")
+        // Moving the start keeps the length it had, unless an end comes with it.
+        val oldStart = if (old.allDay) {
+            CalendarText.When(Instant.ofEpochMilli(old.begin).atZone(java.time.ZoneOffset.UTC).toLocalDate(), null)
+        } else {
+            Instant.ofEpochMilli(old.begin).atZone(z).let { CalendarText.When(it.toLocalDate(), it.toLocalTime()) }
+        }
+        val start = startText?.let { CalendarText.parse(it, today) } ?: oldStart
+        val span = when {
+            endText != null -> CalendarText.span(start, CalendarText.parse(endText, today), z)
+            startText != null && start.allDay == old.allDay -> CalendarText.span(start, null, z).let { (b, _) -> b to b + (old.end - old.begin) }
+            startText != null -> CalendarText.span(start, null, z)
+            else -> null
+        }
+        val remindArg = ToolArgs.text(a, "remind")?.trim()?.takeIf { it.isNotEmpty() }
+        val remind = when {
+            remindArg == null -> null
+            ToolArgs.isNone(remindArg) -> EventDraft.NO_REMINDER
+            else -> remindArg.toIntOrNull()?.coerceIn(0, REMIND_MAX) ?: throw ToolFailure("remind 写成分钟数，要去掉就填 none。", "提醒没写对")
+        }
+        val draft = EventDraft(
+            title = ToolArgs.text(a, "title")?.trim()?.takeIf { it.isNotEmpty() }?.take(TITLE_MAX),
+            begin = span?.first,
+            end = span?.second,
+            allDay = if (span != null) start.allDay else null,
+            location = ToolArgs.text(a, "location")?.trim()?.let { if (ToolArgs.isNone(it)) "" else it },
+            notes = ToolArgs.text(a, "notes")?.trim()?.let { if (ToolArgs.isNone(it)) "" else it },
+            remind = remind,
+        )
+        cal.update(id, draft)
+        val now = cal.event(id) ?: old
+        return ToolOutcome("改好了：${CalendarText.line(now, z, today)}${remindText(remind)}。", "改了日程「${now.title}」· ${CalendarText.whenText(now, z, today)}")
+    }
+
+    private suspend fun deleteEvent(a: JsonObject, today: LocalDate): ToolOutcome {
+        val cal = calendar ?: throw ToolFailure("这里删不了日程。", "这里删不了")
+        val id = ToolArgs.id(a["id"]) ?: throw ToolFailure("缺少 id：日程编号，来自 read_calendar。", "没说是哪条")
+        val old = cal.event(id) ?: throw ToolFailure("日历里没有 #$id 这条，先用 read_calendar 看看编号。", "没有这条日程")
+        notTheirs(old)
+        cal.delete(id)
+        return ToolOutcome("删掉了：${CalendarText.line(old, zone(), today)}。", "删了日程「${old.title}」")
+    }
+
+    /** The person's own events are only read (see CalendarSource); the calendar says so again below this. */
+    private fun notTheirs(e: CalEvent) {
+        if (!e.ours) {
+            throw ToolFailure(
+                "#${e.id} 是对方自己的日程（在「${e.calendar.ifBlank { "日历" }}」里），你只能看，不能改也不能删。需要的话请对方自己改。",
+                "那条是对方自己的",
+            )
+        }
+    }
+
+    /** A text argument that says something: absent, blank and "none" are all nothing. */
+    private fun optional(a: JsonObject, key: String): String? =
+        ToolArgs.text(a, key)?.trim()?.takeIf { it.isNotEmpty() && !ToolArgs.isNone(it) }
+
+    private fun remindText(minutes: Int?): String = when (minutes) {
+        null -> ""
+        EventDraft.NO_REMINDER -> "，不再提醒"
+        0 -> "，到点提醒"
+        else -> "，提前 ${LaterRules.span(minutes.toLong())}提醒"
     }
 
     private suspend fun noteForLater(a: JsonObject, conversationId: Long, companionId: Long): ToolOutcome {
@@ -695,6 +920,11 @@ class ToolBox(
         const val LETTER_MAX = 2000
         const val LATER_WHAT_MAX = 200
         const val LATER_WHY_MAX = 200
+        const val ALARM_LABEL_MAX = 60
+        const val TIMER_MAX = 24 * 3600
+        const val CALENDAR_DAYS_MAX = 31
+        const val CALENDAR_LIST_MAX = 60
+        const val REMIND_MAX = 7 * 24 * 60
     }
 }
 

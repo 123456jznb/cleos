@@ -42,7 +42,8 @@ data class AppSettings(
     val glassTuning: Map<GlassPart, GlassTuning> = emptyMap(),
     /**
      * What the model may do. Reading the person's diary starts off: it is the one tool
-     * that hands the model something private, so it waits to be asked for.
+     * that hands the model something private, so it waits to be asked for. So do location and
+     * the calendar, which need a permission asked for when their switch is turned on.
      */
     val tools: Set<ToolGroup> = setOf(
         ToolGroup.Messages,
@@ -53,6 +54,7 @@ data class AppSettings(
         ToolGroup.Weather,
         ToolGroup.Letters,
         ToolGroup.Memory,
+        ToolGroup.Alarm,
     ),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",

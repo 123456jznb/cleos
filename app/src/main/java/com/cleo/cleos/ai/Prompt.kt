@@ -111,6 +111,19 @@ object Prompt {
             add("你能用 get_location 查对方现在在哪。需要的时候再查：对方问附近、问路，或者问天气没说城市；别无缘无故去查，也别把坐标念给对方。")
         }
         if (ToolGroup.Later in tools) add(LATER_RULE)
+        if (ToolGroup.Alarm in tools) {
+            add("对方让你定闹钟、叫醒、计时的时候，用 set_alarm 或 set_timer 在对方手机的时钟里定，定好了再说；没调用就别说定好了。对方没让，别自己给对方定闹钟。")
+        }
+        if (ToolGroup.Calendar in tools) {
+            add(
+                "对方问起安排、行程、哪天有没有空，先用 read_calendar 看了再说。对方让你记下某个安排、到时候提醒，用 add_event 加进日历，要提醒就带 remind。" +
+                    "对方自己的日程你只能看；改和删只限你加的。",
+            )
+        }
+        // A reminder the person asks for has to go off; a TA's own note may be stretched or dropped by the phone.
+        if (ToolGroup.Later in tools && (ToolGroup.Alarm in tools || ToolGroup.Calendar in tools)) {
+            add("对方要你到点提醒的事，用闹钟或日历，那样手机到点一定会响；note_for_later 是你自己想过一阵再说的话，不用来替对方办提醒。")
+        }
         if (outside.isNotEmpty()) {
             val names = outside.map { it.serverName }.distinct().joinToString("、")
             add(

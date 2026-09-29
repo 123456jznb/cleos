@@ -9,6 +9,8 @@ import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Later
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
+import com.cleo.cleos.ai.PhoneCalendar
+import com.cleo.cleos.ai.PhoneClock
 import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.McpClient
 import com.cleo.cleos.ai.McpHub
@@ -83,6 +85,8 @@ class AppContainer(context: Context) {
         memories = db.memories(),
         location = PhoneLocation(context, http),
         later = { later },
+        alarms = PhoneClock(context) { visible },
+        calendar = PhoneCalendar(context),
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(

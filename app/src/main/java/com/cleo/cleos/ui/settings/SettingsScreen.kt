@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.Mcp
+import com.cleo.cleos.ai.PhoneCalendar
 import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.SpeechEngine
@@ -120,6 +121,16 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
             vm.setTool(ToolGroup.Location, true)
         } else {
             locationHint = "没给定位权限，TA 查不了位置。"
+        }
+    }
+    var calendarHint by remember { mutableStateOf<String?>(null) }
+    // Likewise the calendar, which needs both: reading what is on it, and adding to Cleos's own.
+    val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) {
+            calendarHint = null
+            vm.setTool(ToolGroup.Calendar, true)
+        } else {
+            calendarHint = "没给日历权限，TA 看不了也加不了日程。"
         }
     }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -303,6 +314,28 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     Text("还没给定位权限，TA 查不了：把开关关掉再打开，会重新问你。", color = palette.error, fontSize = 12.sp)
                 }
                 locationHint?.let { Text(it, color = palette.contentSecondary, fontSize = 12.sp) }
+                ToolSwitch(
+                    "定闹钟",
+                    "你让 TA 定闹钟、计时，它在手机自带的时钟里定，到点手机响，和你自己定的一样。只在 Cleos 开着的时候能定：手机不让 App 在后台打开时钟。",
+                    ToolGroup.Alarm in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Alarm, it)
+                }
+                ToolSwitch(
+                    "日历",
+                    "TA 能看你手机日历上的安排；你让它记的日程，加在一个叫「Cleos」的日历里，可以带提醒。它只能改、删自己加的，你的日程只能看。要日历权限，打开时会问。",
+                    ToolGroup.Calendar in settings.tools,
+                ) { on ->
+                    when {
+                        !on -> vm.setTool(ToolGroup.Calendar, false)
+                        PhoneCalendar.allowed(appContext) -> vm.setTool(ToolGroup.Calendar, true)
+                        else -> askCalendar.launch(PhoneCalendar.PERMISSIONS)
+                    }
+                }
+                if (ToolGroup.Calendar in settings.tools && !PhoneCalendar.allowed(appContext)) {
+                    Text("还没给日历权限，TA 看不了：把开关关掉再打开，会重新问你。", color = palette.error, fontSize = 12.sp)
+                }
+                calendarHint?.let { Text(it, color = palette.contentSecondary, fontSize = 12.sp) }
                 ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
                     vm.setTool(ToolGroup.Weather, it)
                 }
