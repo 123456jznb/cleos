@@ -119,6 +119,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
@@ -275,6 +276,18 @@ fun ChatTab(
     val vm = appViewModel { ChatViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
     val c = appContainer()
+    // This chat on screen: what a TA says on its own here needs no notification (see Later), and
+    // the one it may have left is read now. Off again when the app goes to the back, another tab
+    // or screen comes up, or another conversation is opened.
+    LifecycleResumeEffect(state.conversationId) {
+        // Null until the conversation has loaded.
+        val shown = state.conversationId
+        if (shown != null) {
+            c.chatOnScreen = shown
+            c.notifier.clearConversation(shown)
+        }
+        onPauseOrDispose { if (shown != null && c.chatOnScreen == shown) c.chatOnScreen = null }
+    }
     val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
     var switching by remember { mutableStateOf(false) }
     var readingRecap by remember { mutableStateOf(false) }

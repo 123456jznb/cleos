@@ -13,12 +13,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.ui.CleosNavHost
 import com.cleo.cleos.ui.theme.CleosTheme
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val container get() = (application as CleosApp).container
@@ -70,10 +67,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         container.letters.tick()
-        // Back in the conversation a notification was about: it has said what it had to.
-        lifecycleScope.launch {
-            container.settings.currentConversation.first()?.let(container.notifier::clearConversation)
-        }
     }
 }
 

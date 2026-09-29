@@ -60,10 +60,17 @@ object LaterRules {
      */
     fun grace(waitMs: Long): Long = waitMs.coerceIn(30 * MINUTE, 3 * HOUR)
 
-    /** The person counts as in the conversation this long after they last wrote: nothing is pushed then. */
-    const val ACTIVE_MS = 10 * MINUTE
+    /**
+     * How long a note waits when it comes due while a reply is being written in its conversation, or
+     * the person is typing there: only so as not to land in the middle of it. There used to be a
+     * wider rule (anything within ten minutes of the person's last message waited ten minutes, on
+     * the idea that they were still talking and the next reply would bring it up). On the phone it
+     * made every short note late: "message me again in two minutes", asked mid-conversation, came
+     * thirteen minutes on, every time. The TA reads the conversation before it speaks anyway.
+     */
+    const val SOON_MINUTES = 1L
 
-    /** How long a note waits before trying again, after coming due mid-conversation or failing. */
+    /** How long a note waits before trying again after the request failed. */
     const val RETRY_MINUTES = 10L
 
     /**
@@ -209,35 +216,33 @@ class Later(
     }
 
     /**
-     * Note [id] came due. True: try again in a while (the person is mid-conversation, or the
-     * request failed), while it is still in time.
+     * Note [id] came due. The minutes until it is tried again (a reply being written there, the
+     * person typing, a request that failed), while it is still in time; null when it is done.
      */
-    suspend fun wake(id: Long): Boolean {
-        val note = db.later().get(id) ?: return false
-        val ta = db.companions().get(note.companionId) ?: return false
+    suspend fun wake(id: Long): Long? {
+        val note = db.later().get(id) ?: return null
+        val ta = db.companions().get(note.companionId) ?: return null
         val now = clock()
         if (!ta.proactive) {
             // Switched off since: what it noted goes unsaid.
             db.later().delete(id)
-            return false
+            return null
         }
         if (now >= note.expiresAt) {
             db.later().delete(id)
             log(ta, WakeEntity.EXPIRED, "手机晚了 ${LaterRules.span((now - note.dueAt) / 60_000)}才叫醒，过了时候")
-            return false
+            return null
         }
-        // Woken early (the clock changed): until it is due.
-        if (now < note.dueAt) return true
+        // Woken early (the clock changed): in a while.
+        if (now < note.dueAt) return LaterRules.SOON_MINUTES
         val conversationId = conversationFor(note, ta)
+        // Not on top of a reply being written, or of what the person is typing: a minute later.
+        if (chat.busy(conversationId) || chat.isTyping(conversationId)) return stillInTime(note, ta, LaterRules.SOON_MINUTES, "一直在聊，没找到空说")
         val lastSaid = db.messages().newest(conversationId, RECENT).firstOrNull { it.role == "user" && it.note == null }?.createdAt
-        if (chat.busy(conversationId) || (lastSaid != null && now - lastSaid < LaterRules.ACTIVE_MS)) {
-            // Mid-conversation: the next reply takes it in (ChatRepository.reply), or it waits a little.
-            return stillInTime(note, ta, "一直在聊，没找到空说")
-        }
         if (db.wakes().sentSince(ta.id, lastSaid ?: 0L) >= LaterRules.UNANSWERED_MAX) {
             // Left for the next reply to take in, if the person writes while it is still in time.
             log(ta, WakeEntity.HELD, "前面自己说的还没回，这件先不推，等你回来再说")
-            return false
+            return null
         }
         // Another wake already under way here keeps its place; this one will find the conversation busy.
         val mine = waking.putIfAbsent(conversationId, note) == null
@@ -251,27 +256,27 @@ class Later(
                 db.later().delete(id)
                 log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { it.content })
                 if (!showing(conversationId)) notifier.messages(ta, conversationId, result.messages)
-                false
+                null
             }
             is ChatRepository.WakeResult.Skipped -> {
                 db.later().delete(id)
                 log(ta, WakeEntity.SKIPPED, result.why)
-                false
+                null
             }
-            ChatRepository.WakeResult.Busy -> stillInTime(note, ta, "一直在聊，没找到空说")
+            ChatRepository.WakeResult.Busy -> stillInTime(note, ta, LaterRules.SOON_MINUTES, "一直在聊，没找到空说")
             is ChatRepository.WakeResult.Failed -> {
                 log(ta, WakeEntity.FAILED, result.why)
-                stillInTime(note, ta, null)
+                stillInTime(note, ta, LaterRules.RETRY_MINUTES, null)
             }
         }
     }
 
-    /** Whether a try in a while would still be in time; if not, [note] goes, logged as [why] when there is one. */
-    private suspend fun stillInTime(note: LaterEntity, ta: CompanionEntity, why: String?): Boolean {
-        if (clock() + LaterRules.RETRY_MINUTES * 60_000L < note.expiresAt) return true
+    /** [minutes], if a try that much later would still be in time; if not, [note] goes, logged as [why] when there is one. */
+    private suspend fun stillInTime(note: LaterEntity, ta: CompanionEntity, minutes: Long, why: String?): Long? {
+        if (clock() + minutes * 60_000L < note.expiresAt) return minutes
         db.later().delete(note.id)
         why?.let { log(ta, WakeEntity.EXPIRED, it) }
-        return false
+        return null
     }
 
     private suspend fun conversationFor(note: LaterEntity, ta: CompanionEntity): Long =
@@ -286,15 +291,15 @@ class Later(
         wantsNotifications.value = true
     }
 
-    /** Letter [id]'s time came. True: not yet (the clock changed), again in a while. */
-    suspend fun letterArrived(id: Long): Boolean {
-        val letter = db.letters().get(id) ?: return false
-        if (letter.author != LetterEntity.AUTHOR_AI || letter.readAt != null) return false
-        val at = letter.deliverAt ?: return false
-        if (at > clock()) return true
-        val ta = db.companions().get(letter.companionId) ?: return false
+    /** Letter [id]'s time came. The minutes until it is looked at again when it isn't yet (the clock changed); null when done. */
+    suspend fun letterArrived(id: Long): Long? {
+        val letter = db.letters().get(id) ?: return null
+        if (letter.author != LetterEntity.AUTHOR_AI || letter.readAt != null) return null
+        val at = letter.deliverAt ?: return null
+        if (at > clock()) return LaterRules.RETRY_MINUTES
+        val ta = db.companions().get(letter.companionId) ?: return null
         notifier.letter(ta, letter)
-        return false
+        return null
     }
 
     /**
@@ -346,13 +351,13 @@ class Later(
     }
 
     /**
-     * [kind] [id] once more, [LaterRules.RETRY_MINUTES] after the run under way ends: a job of its
+     * [kind] [id] once more, [minutes] after the run under way ends: a job of its
      * own, chained after it. WorkManager's own retry stretches every wait (10, 20, 30 minutes on),
      * and a note that came due mid-conversation should be looked at again soon after the talking
      * stops, not half an hour later when it may be past its time.
      */
-    fun again(kind: String, id: Long) {
-        enqueue(kind, id, clock() + LaterRules.RETRY_MINUTES * 60_000L, ExistingWorkPolicy.APPEND_OR_REPLACE)
+    fun again(kind: String, id: Long, minutes: Long) {
+        enqueue(kind, id, clock() + minutes * 60_000L, ExistingWorkPolicy.APPEND_OR_REPLACE)
     }
 
     companion object {
@@ -376,11 +381,11 @@ class LaterWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val later = (applicationContext as CleosApp).container.later
         val id = inputData.getLong(Later.KEY_ID, -1)
         val kind = inputData.getString(Later.KEY_KIND) ?: Later.KIND_WAKE
-        val again = when (kind) {
+        val wait = when (kind) {
             Later.KIND_LETTER -> later.letterArrived(id)
             else -> later.wake(id)
         }
-        if (again) later.again(kind, id)
+        if (wait != null) later.again(kind, id, wait)
         return Result.success()
     }
 }

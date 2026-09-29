@@ -182,6 +182,9 @@ class ChatRepository(
         if (now) typingIn += conversationId else typingIn -= conversationId
     }
 
+    /** Whether something is in the person's input box in [conversationId] right now. */
+    fun isTyping(conversationId: Long): Boolean = conversationId in typingIn
+
     /**
      * The person sent something here: a reply comes once they have stopped for a moment. One
      * waiting already just waits a little longer; one being written is followed by another,

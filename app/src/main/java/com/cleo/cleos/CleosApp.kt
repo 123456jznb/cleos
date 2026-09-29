@@ -32,7 +32,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -104,14 +103,21 @@ class AppContainer(context: Context) {
     @Volatile
     var visible = false
 
+    /**
+     * The conversation whose chat is on screen right now (the chat tab showing, the app in front),
+     * else null. Only what arrives there goes without a notification: the app being open is not
+     * enough, since on another tab, or in settings, nothing new in the chat is seen.
+     */
+    @Volatile
+    var chatOnScreen: Long? = null
+
     val later: Later = Later(
         context,
         db,
         chat,
         notifier,
         appScope,
-        // The conversation on screen needs no notification for what arrives in it.
-        showing = { id -> visible && settings.currentConversation.first() == id },
+        showing = { id -> visible && chatOnScreen == id },
     )
     val letters = Letters(db, settings, secrets, chatClient, appScope, written = { later.letterWritten(it) })
 
