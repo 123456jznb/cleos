@@ -209,6 +209,10 @@ interface MessageDao {
     )
     suspend fun repliedSince(conversationId: Long, since: Long): List<MessageEntity>
 
+    /** When the person wrote, to any TA, from [since] on: what their days' usual start and end are read from (RoutineRules). */
+    @Query("SELECT createdAt FROM messages WHERE role = 'user' AND note IS NULL AND createdAt >= :since")
+    suspend fun userTimesSince(since: Long): List<Long>
+
     /** Everything a wake put here from [since] on (its calls, their results, its thinking): for when it came to nothing. */
     @Query("DELETE FROM messages WHERE conversationId = :conversationId AND proactive = 1 AND createdAt >= :since")
     suspend fun deleteProactiveSince(conversationId: Long, since: Long)

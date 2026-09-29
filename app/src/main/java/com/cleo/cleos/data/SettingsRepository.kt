@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.cleo.cleos.ai.Greeting
 import com.cleo.cleos.ai.ReplyWhen
 import com.cleo.cleos.ai.SpeechEngine
 import com.cleo.cleos.ai.ToolGroup
@@ -163,6 +164,8 @@ class SettingsRepository(private val context: Context) {
         val speechMcpArgs = stringPreferencesKey("speech_mcp_args")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
+        val morningGreeted = longPreferencesKey("morning_greeted")
+        val nightGreeted = longPreferencesKey("night_greeted")
     }
 
     val settings: Flow<AppSettings> = context.settingsStore.data.map { it.toSettings() }
@@ -276,6 +279,15 @@ class SettingsRepository(private val context: Context) {
             if (id == null) it.remove(Keys.currentConversation) else it[Keys.currentConversation] = id.toString()
         }
     }
+
+    /** The last day (an epoch day, counted as RoutineRules.dayOf counts them) whose [greeting] is over, said or not. */
+    suspend fun greetedOn(greeting: Greeting): Long? = context.settingsStore.data.first()[greetedKey(greeting)]
+
+    suspend fun setGreetedOn(greeting: Greeting, day: Long) {
+        context.settingsStore.edit { it[greetedKey(greeting)] = day }
+    }
+
+    private fun greetedKey(greeting: Greeting) = if (greeting == Greeting.Morning) Keys.morningGreeted else Keys.nightGreeted
 }
 
 private val tuningJson = Json { ignoreUnknownKeys = true }

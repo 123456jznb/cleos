@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
 import com.cleo.cleos.ai.ApiEndpoint
 import com.cleo.cleos.ai.ChatException
+import com.cleo.cleos.ai.Habits
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
 import android.media.MediaPlayer
@@ -70,6 +71,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var deepThinking by mutableStateOf(false)
         private set
     var proactive by mutableStateOf(true)
+        private set
+
+    /** The person's usual day as the greetings read it (ai/Routine.kt); null until worked out. */
+    var habits by mutableStateOf<Habits?>(null)
         private set
     var historySize by mutableIntStateOf(40)
     var weatherCity by mutableStateOf("")
@@ -150,6 +155,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch { c.companions.all.collect { companionCount = it.size } }
+        viewModelScope.launch { habits = c.later.habits() }
         viewModelScope.launch {
             val s = c.settings.current()
             load(c.companions.current())

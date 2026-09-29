@@ -63,6 +63,11 @@ class LaterTest {
         assertFalse("note_for_later" in LaterRules.wakeText(note.copy(putOff = true), now, canPutOff = false))
         // The line it all stands on: bring something, ask for nothing.
         assertTrue("别问「在干嘛」「怎么不回我」" in text)
+        // The day ahead only when there is something in it, and as background, not the point.
+        assertFalse("日程" in text)
+        val withDay = LaterRules.wakeText(note, now, canPutOff = true, glance = "日程：今天 20:30 取快递")
+        assertTrue("日程：今天 20:30 取快递" in withDay)
+        assertTrue("别念清单" in withDay)
     }
 
     @Test

@@ -21,6 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.LaterRules
+import com.cleo.cleos.ai.RoutineRules
 import com.cleo.cleos.data.db.WakeEntity
 import com.cleo.cleos.glass.LocalGlassPalette
 import java.time.Instant
@@ -29,7 +30,8 @@ import java.time.ZonedDateTime
 
 /**
  * Under the "reach out" switch: whether notifications can get through at all, what the TA has
- * waiting (how many and when, never what: that is for later), and what came of the last one.
+ * waiting (how many and when, never what: that is for later), what the day's greetings go by
+ * (when the person's days usually start and end), and what came of the last wake.
  * That last line is the one to read when "it never says anything on its own" comes up: it tells
  * whether the phone woke it, whether it decided not to, or whether the request failed.
  */
@@ -70,6 +72,9 @@ internal fun ReachOutStatus(vm: SettingsViewModel) {
                 fontSize = 12.sp,
                 lineHeight = 17.sp,
             )
+        }
+        vm.habits?.let { h ->
+            Text(RoutineRules.describe(h), color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)
         }
         wake?.let { w ->
             Text("上次：${at(w.at)}，${describe(w)}", color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)

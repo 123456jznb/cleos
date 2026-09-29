@@ -204,7 +204,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 ) { vm.setThinking(it) }
                 ToolSwitch(
                     "主动找你",
-                    "聊天时，TA 会给自己记下想过一阵再说的事（比如你去做饭了，过一会儿问问做得怎么样）；到时候看看这之间聊了什么，自己决定要不要找你。不会因为你没回、好久没聊来催你。",
+                    "聊天时，TA 会给自己记下想过一阵再说的事（比如你去做饭了，过一会儿问问做得怎么样），到时候看看这之间聊了什么，自己决定要不要找你；早上你醒了、晚上睡前，也可能来打个招呼。不会因为你没回、好久没聊来催你。",
                     vm.proactive,
                 ) { vm.setReachOut(it) }
                 if (vm.proactive) ReachOutStatus(vm)

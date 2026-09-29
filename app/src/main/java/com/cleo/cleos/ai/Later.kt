@@ -9,6 +9,8 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.cleo.cleos.CleosApp
 import com.cleo.cleos.Notifier
+import com.cleo.cleos.data.Companions
+import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.LaterEntity
@@ -18,7 +20,9 @@ import com.cleo.cleos.data.db.WakeEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -39,6 +43,9 @@ import java.util.concurrent.TimeUnit
  * a slot is free); a TA asked every quarter of an hour whether to speak ends up speaking; and
  * "you haven't written in a while" trades on guilt. Plugins that do exactly these things are
  * common, and it is what they end up sounding like.
+ *
+ * The one exception, asked for by the person: a greeting when their day starts and when it ends
+ * (RoutineRules), which is kept as far from a timer as it can be.
  *
  * The phone decides when background work really runs: on some systems "in forty minutes" turns
  * into an hour, now and then into many. So every note expires. Past its time it is dropped
@@ -114,9 +121,9 @@ object LaterRules {
      * What the TA reads when a note comes due: a turn after the conversation that the person
      * never sees, saying so. The TA decides; SKIP is an answer, and so is putting it off once.
      * The last lines are the line the whole feature stands on: bring something, don't ask for
-     * anything.
+     * anything. [glance]: the day's calendar and todos (Glance), there to know, not to recite.
      */
-    fun wakeText(note: LaterEntity, now: ZonedDateTime, canPutOff: Boolean): String {
+    fun wakeText(note: LaterEntity, now: ZonedDateTime, canPutOff: Boolean, glance: String? = null): String {
         val written = ZonedDateTime.ofInstant(Instant.ofEpochMilli(note.createdAt), now.zone)
         return buildString {
             append("（这条不是对方发的，对方看不到。）\n")
@@ -125,9 +132,10 @@ object LaterRules {
             if (note.why.isNotBlank()) append("，当时").append(note.why.trim().trimEnd('。'))
             append("。\n").append(Prompt.timeLine(now)).append("。\n")
             append("看看从那以后你们又聊了什么，再决定：\n")
-            append("· 现在说：像平常一样给对方发消息，只说和这件事有关的。直接说，不用解释是记着的、被提醒的。\n")
+            append("· 现在说：像平常一样给对方发消息，主要说这件事。直接说，不用解释是记着的、被提醒的。\n")
             append("· 不说了（已经聊过了、过了时候、或者现在说不合适）：只回复 SKIP，后面可以跟一句为什么。\n")
             if (canPutOff) append("· 还想再等一等：用 note_for_later 重新记一笔，只能往后推这一次。\n")
+            if (glance != null) append("对方接下来的日程和待办，让你知道一下；真有用再顺带一句，别念清单：\n").append(glance).append("\n")
             append("说的话要给对方带去点什么：关心那件事、分享、提醒。别问「在干嘛」「怎么不回我」，也别提对方多久没说话。")
         }
     }
@@ -157,9 +165,9 @@ interface LaterBook {
 }
 
 /**
- * Notes and letters in the background: each waits in WorkManager until its time, which the phone
- * may stretch (see [LaterRules]). [showing]: whether that conversation is on screen right now,
- * in which case what arrives in it needs no notification.
+ * Notes, letters and the day's two greetings in the background: each waits in WorkManager until
+ * its time, which the phone may stretch (see [LaterRules]). [showing]: whether that conversation
+ * is on screen right now, in which case what arrives in it needs no notification.
  */
 class Later(
     private val context: Context,
@@ -168,6 +176,14 @@ class Later(
     private val notifier: Notifier,
     private val scope: CoroutineScope,
     private val showing: suspend (conversationId: Long) -> Boolean,
+    private val companions: Companions,
+    private val settings: SettingsRepository,
+    private val glance: Glance,
+    /**
+     * Whether the person is using the phone right now: screen on and past the lock screen. How a
+     * greeting tells they are up (or still up); a screen lit by a notification doesn't count.
+     */
+    private val inUse: () -> Boolean,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) : LaterBook {
@@ -245,10 +261,11 @@ class Later(
             log(ta, WakeEntity.HELD, "前面自己说的还没回，这件先不推，等你回来再说")
             return null
         }
+        val ahead = glance.of(zoned(now), zoned(now).plusHours(GLANCE_HOURS), zoned(now))
         // Another wake already under way here keeps its place; this one will find the conversation busy.
         val mine = waking.putIfAbsent(conversationId, note) == null
         val result = try {
-            chat.wake(conversationId, LaterRules.wakeText(note, zoned(now), canPutOff = !note.putOff))
+            chat.wake(conversationId, LaterRules.wakeText(note, zoned(now), canPutOff = !note.putOff, glance = ahead))
         } finally {
             if (mine) waking.remove(conversationId, note)
         }
@@ -296,6 +313,90 @@ class Later(
             ?: db.conversations().latestFor(ta.id)?.id
             ?: chat.newConversation(ta.id)
 
+    /** When the person's days usually start and end, from when they wrote lately. */
+    suspend fun habits(): Habits {
+        val since = clock() - RoutineRules.LOOKBACK_DAYS * 24 * 3_600_000L
+        return RoutineRules.habits(db.messages().userTimesSince(since), zone())
+    }
+
+    /**
+     * Today's [greeting]: looked into through its window, said (or not) once, then the next day's is
+     * set up. The minutes until it is looked at again within the window; null once it is over for
+     * today (the next one already queued then).
+     */
+    suspend fun greet(greeting: Greeting): Long? {
+        val now = zoned(clock())
+        val day = RoutineRules.dayOf(now)
+        // Not enough to go on yet, or no morning (or night) to speak of: looked at again tomorrow.
+        val window = RoutineRules.window(greeting, habits(), day, now.zone) ?: return nextDay(greeting, day)
+        // There is one to come: the permission is asked for the next time the app is open.
+        wantsNotifications.value = true
+        if (settings.greetedOn(greeting) == day.toEpochDay()) return nextDay(greeting, day)
+        if (now.isBefore(window.start)) return Duration.between(now, window.start).toMinutes().coerceAtLeast(1)
+        if (now.isAfter(window.endInclusive)) return over(greeting, day)
+        val ta = companions.current()
+        if (!ta.proactive) return over(greeting, day)
+        val conversationId = db.conversations().latestFor(ta.id)?.id ?: return over(greeting, day)
+        val lastToday = db.messages().userTimesSince(RoutineRules.startOf(day, now.zone).toInstant().toEpochMilli()).maxOrNull()
+        when (greeting) {
+            // Come to talk already: whatever greeting there is, it is in the replies.
+            Greeting.Morning -> if (lastToday != null) return over(greeting, day)
+            // Talking right now: no goodnight of its own in the middle of it.
+            Greeting.Night -> if (lastToday != null && now.toInstant().toEpochMilli() - lastToday < RoutineRules.TALKING.toMillis()) return over(greeting, day)
+        }
+        // Not up yet, or the phone put down: looked at again in a while.
+        if (!inUse()) return RoutineRules.CHECK_MINUTES
+        if (chat.busy(conversationId) || chat.isTyping(conversationId)) return LaterRules.SOON_MINUTES
+        val lastSaid = db.messages().newest(conversationId, RECENT).firstOrNull { it.role == "user" && it.note == null }?.createdAt
+        if (db.wakes().sentSince(ta.id, lastSaid ?: 0L) >= LaterRules.UNANSWERED_MAX) {
+            log(ta, WakeEntity.HELD, "前面自己说的还没回，这次不打招呼")
+            return over(greeting, day)
+        }
+        val tomorrow = RoutineRules.startOf(day.plusDays(1), now.zone)
+        val text = when (greeting) {
+            Greeting.Morning -> RoutineRules.morningText(now, glance.of(now, tomorrow, now))
+            Greeting.Night -> RoutineRules.nightText(now, lastToday?.let(::zoned), glance.of(tomorrow, tomorrow.plusDays(1), now))
+        }
+        // What was said reads as a greeting by itself; a skip or a failure says which one it was.
+        fun which(why: String) = (if (greeting == Greeting.Morning) "早上的招呼" else "睡前的招呼") + (if (why.isBlank()) "" else "：$why")
+        return when (val result = chat.wake(conversationId, text)) {
+            is ChatRepository.WakeResult.Sent -> {
+                log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { it.content })
+                if (!showing(conversationId)) notifier.messages(ta, conversationId, unanswered(conversationId).ifEmpty { result.messages })
+                over(greeting, day)
+            }
+            is ChatRepository.WakeResult.Skipped -> {
+                log(ta, WakeEntity.SKIPPED, which(result.why))
+                over(greeting, day)
+            }
+            ChatRepository.WakeResult.Busy -> LaterRules.SOON_MINUTES
+            is ChatRepository.WakeResult.Failed -> {
+                log(ta, WakeEntity.FAILED, which(result.why))
+                if (now.plusMinutes(LaterRules.RETRY_MINUTES).isBefore(window.endInclusive)) LaterRules.RETRY_MINUTES else over(greeting, day)
+            }
+        }
+    }
+
+    /** Today's [greeting] is over: marked so, and the next one queued. */
+    private suspend fun over(greeting: Greeting, day: LocalDate): Long? {
+        settings.setGreetedOn(greeting, day.toEpochDay())
+        return nextDay(greeting, day)
+    }
+
+    /**
+     * The next day's look at [greeting]: at the start of its window as things stand, or of the day
+     * when there is nothing to go on yet (the window is worked out afresh then). Never sooner than a
+     * minute on, whatever the clock did: this runs from the job itself.
+     */
+    private suspend fun nextDay(greeting: Greeting, day: LocalDate): Long? {
+        val next = day.plusDays(1)
+        val at = (RoutineRules.window(greeting, habits(), next, zone())?.start ?: RoutineRules.startOf(next, zone())).toInstant().toEpochMilli()
+        enqueue(kindOf(greeting), 0, maxOf(at, clock() + 60_000L), ExistingWorkPolicy.APPEND_OR_REPLACE)
+        return null
+    }
+
+    private fun kindOf(greeting: Greeting) = if (greeting == Greeting.Morning) KIND_MORNING else KIND_NIGHT
+
     /** A TA's letter was written: a notification when it arrives. */
     fun letterWritten(letter: LetterEntity) {
         val at = letter.deliverAt ?: return
@@ -332,6 +433,9 @@ class Later(
             for (letter in db.letters().onTheirWay(now)) {
                 enqueue(KIND_LETTER, letter.id, letter.deliverAt ?: continue, ExistingWorkPolicy.KEEP)
             }
+            // The greetings, unless their chain is already waiting: each works out its own time.
+            enqueue(KIND_MORNING, 0, now, ExistingWorkPolicy.KEEP)
+            enqueue(KIND_NIGHT, 0, now, ExistingWorkPolicy.KEEP)
         }
     }
 
@@ -377,6 +481,11 @@ class Later(
         const val KEY_ID = "id"
         const val KIND_WAKE = "wake"
         const val KIND_LETTER = "letter"
+        const val KIND_MORNING = "morning"
+        const val KIND_NIGHT = "night"
+
+        /** How far ahead a note's wake is shown the calendar. */
+        private const val GLANCE_HOURS = 24L
 
         /** Messages looked at to tell whether the person is in the conversation. */
         private const val RECENT = 30
@@ -390,7 +499,7 @@ class Later(
     }
 }
 
-/** Runs one note or letter when its time comes (see [Later]). */
+/** Runs one note, letter or greeting when its time comes (see [Later]). */
 class LaterWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val later = (applicationContext as CleosApp).container.later
@@ -398,6 +507,8 @@ class LaterWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val kind = inputData.getString(Later.KEY_KIND) ?: Later.KIND_WAKE
         val wait = when (kind) {
             Later.KIND_LETTER -> later.letterArrived(id)
+            Later.KIND_MORNING -> later.greet(Greeting.Morning)
+            Later.KIND_NIGHT -> later.greet(Greeting.Night)
             else -> later.wake(id)
         }
         if (wait != null) later.again(kind, id, wait)

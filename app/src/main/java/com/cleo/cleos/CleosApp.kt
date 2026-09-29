@@ -1,11 +1,14 @@
 package com.cleo.cleos
 
 import android.app.Application
+import android.app.KeyguardManager
 import android.content.Context
+import android.os.PowerManager
 import androidx.room.Room
 import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.Glance
 import com.cleo.cleos.ai.Later
 import com.cleo.cleos.ai.Letters
 import com.cleo.cleos.ai.PersonaMemory
@@ -73,6 +76,7 @@ class AppContainer(context: Context) {
 
     val companions = Companions(db, settings, secrets, images)
     val chatClient = ChatClient(http)
+    private val calendar = PhoneCalendar(context)
     // Typed: its note_for_later reaches [later], which is made further down from what uses this.
     val tools: ToolBox = ToolBox(
         db.todos(),
@@ -85,7 +89,7 @@ class AppContainer(context: Context) {
         location = PhoneLocation(context, http),
         later = { later },
         alarms = PhoneClock(context) { visible },
-        calendar = PhoneCalendar(context),
+        calendar = calendar,
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(
@@ -122,6 +126,13 @@ class AppContainer(context: Context) {
         notifier,
         appScope,
         showing = { id -> visible && chatOnScreen == id },
+        companions = companions,
+        settings = settings,
+        glance = Glance(db, calendar, settings) { PhoneCalendar.allowed(context) },
+        inUse = {
+            context.getSystemService(PowerManager::class.java)?.isInteractive == true &&
+                context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true
+        },
     )
     val letters = Letters(db, settings, secrets, chatClient, appScope, written = { later.letterWritten(it) })
 
