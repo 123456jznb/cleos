@@ -202,6 +202,13 @@ interface MessageDao {
     )
     suspend fun proactiveSince(conversationId: Long, since: Long): List<MessageEntity>
 
+    /** What the TA said here from [since] on, oldest first: a reply just written, for its notification. */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND role = 'assistant' " +
+            "AND error IS NULL AND content != '' AND createdAt >= :since ORDER BY createdAt, id",
+    )
+    suspend fun repliedSince(conversationId: Long, since: Long): List<MessageEntity>
+
     /** Everything a wake put here from [since] on (its calls, their results, its thinking): for when it came to nothing. */
     @Query("DELETE FROM messages WHERE conversationId = :conversationId AND proactive = 1 AND createdAt >= :since")
     suspend fun deleteProactiveSince(conversationId: Long, since: Long)

@@ -94,7 +94,11 @@ class AppContainer(context: Context) {
     )
     val transcriber = Transcriber(http, secrets)
     val speaker = Speaker(images, http, secrets, mcp)
-    val chat: ChatRepository = ChatRepository(db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope)
+    val chat: ChatRepository = ChatRepository(
+        db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope,
+        // A reply finished where the person isn't looking (they left, or went to another page): as a notification.
+        replied = { ta, conversationId, said -> if (!(visible && chatOnScreen == conversationId)) notifier.messages(ta, conversationId, said) },
+    )
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
     val notifier = Notifier(context, images)

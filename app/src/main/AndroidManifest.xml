@@ -14,6 +14,9 @@
     <!-- The calendar tools; asked for when their switch is turned on. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- ReplyKeeper: a reply the person left before it came is finished instead of frozen. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".CleosApp"
@@ -35,5 +38,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".ReplyKeeper"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

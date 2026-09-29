@@ -85,6 +85,11 @@ class ChatRepository(
     private val transcriber: Transcriber,
     private val speaker: Speaker,
     private val scope: CoroutineScope,
+    /**
+     * A reply has been written: what the TA said in it, in order. The app shows it as a
+     * notification unless that chat is on screen (AppContainer).
+     */
+    private val replied: suspend (ta: CompanionEntity, conversationId: Long, said: List<MessageEntity>) -> Unit = { _, _, _ -> },
 ) {
     /** The replies being written, by conversation. */
     private val _streaming = MutableStateFlow<Map<Long, StreamingReply>>(emptyMap())
@@ -145,11 +150,23 @@ class ChatRepository(
         }
     }
 
+    /**
+     * Conversations with a reply (or a wake) waiting or under way: while there are any, leaving the
+     * app keeps it running until they are done (ReplyKeeper).
+     */
+    private val _working = MutableStateFlow<Set<Long>>(emptySet())
+    val working: StateFlow<Set<Long>> = _working.asStateFlow()
+
     /** [block] as [conversationId]'s job: registered before it starts, so a quick one can't finish before it is on the map. */
     private fun launchFor(conversationId: Long, block: suspend CoroutineScope.() -> Unit) {
         val job = scope.launch(start = CoroutineStart.LAZY, block = block)
         jobs[conversationId] = job
-        job.invokeOnCompletion { jobs.remove(conversationId, job) }
+        _working.update { it + conversationId }
+        job.invokeOnCompletion {
+            jobs.remove(conversationId, job)
+            // Unless the next one here has started meanwhile.
+            if (jobs[conversationId] == null) _working.update { it - conversationId }
+        }
         job.start()
     }
 
@@ -580,6 +597,7 @@ class ChatRepository(
     }
 
     private suspend fun reply(conversationId: Long) {
+        val startedAt = System.currentTimeMillis()
         val s = settings.current()
         val ta = taOf(conversationId)
         val key = secrets.key(ta.apiBaseUrl)
@@ -629,6 +647,7 @@ class ChatRepository(
                 remember(leftOut, conversationId, endpointKey)
                 recaps.foldLater(conversationId)
                 if (due.isNotEmpty()) db.later().delete(due.map { it.id })
+                db.messages().repliedSince(conversationId, startedAt).takeIf { it.isNotEmpty() }?.let { replied(ta, conversationId, it) }
             }
             while (true) {
                 val mayRefuse = rounds == 0 && (groups.isNotEmpty() || outside.isNotEmpty() || withImages || thinking)

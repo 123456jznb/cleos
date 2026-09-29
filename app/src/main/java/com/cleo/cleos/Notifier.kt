@@ -17,8 +17,8 @@ import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MessageEntity
 
 /**
- * What a TA sends on its own (ai/Later.kt), and letters arriving, as notifications. Tapping one
- * opens that conversation, or that letter.
+ * What a TA sends on its own (ai/Later.kt), a reply it finished after the person left, and letters
+ * arriving, as notifications. Tapping one opens that conversation, or that letter.
  *
  * Both channels are created at high importance from the start. Android lets an app lower a
  * channel's importance but never raise it again (only the person can, in system settings): an
@@ -31,7 +31,7 @@ class Notifier(private val context: Context, private val images: ImageStore) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_MESSAGES, "TA 的消息", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "TA 自己想起来、主动发给你的消息"
+                description = "TA 发给你、你还没看到的消息：它自己想起来的，和你走开时它写完的回复"
             },
         )
         manager.createNotificationChannel(
@@ -39,10 +39,34 @@ class Notifier(private val context: Context, private val images: ImageStore) {
                 description = "TA 写给你的信寄到了"
             },
         )
+        // Low: it only has to be there, silently, for the few seconds a reply takes.
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_WORKING, "正在回复", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "你走开时 TA 还在写回复，写完之前 App 留在后台，写完就消失"
+                setShowBadge(false)
+            },
+        )
     }
 
     /** False when notifications are off for the app, or (Android 13 on) not allowed yet. */
     fun allowed(): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+    /** What ReplyKeeper shows while it keeps the app running. */
+    fun working(): android.app.Notification = NotificationCompat.Builder(context, CHANNEL_WORKING)
+        .setSmallIcon(R.drawable.ic_notify)
+        .setContentTitle("正在回你…")
+        .setContentText("写完就走，写好的会发给你")
+        .setOngoing(true)
+        .setSilent(true)
+        .setContentIntent(
+            PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+        .build()
 
     /**
      * [sent]: what the TA has said on its own in [conversationId] since the person last wrote there,
@@ -125,6 +149,7 @@ class Notifier(private val context: Context, private val images: ImageStore) {
     companion object {
         const val CHANNEL_MESSAGES = "ta_messages"
         const val CHANNEL_LETTERS = "letters"
+        const val CHANNEL_WORKING = "replying"
         const val EXTRA_CONVERSATION = "conversation"
         const val EXTRA_LETTER = "letter"
         private const val TAG_CONVERSATION = "conversation"

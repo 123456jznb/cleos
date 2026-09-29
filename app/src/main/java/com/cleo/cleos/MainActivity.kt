@@ -55,10 +55,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         container.visible = true
+        ReplyKeeper.stop(this)
     }
 
     override fun onStop() {
         container.visible = false
+        // Leaving while a TA is still writing: kept running until it is done (ReplyKeeper).
+        if (container.chat.working.value.isNotEmpty()) ReplyKeeper.start(this)
         super.onStop()
     }
 
