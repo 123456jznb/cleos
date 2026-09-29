@@ -44,7 +44,11 @@ class Notifier(private val context: Context, private val images: ImageStore) {
     /** False when notifications are off for the app, or (Android 13 on) not allowed yet. */
     fun allowed(): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()
 
-    /** [sent]: what the TA just said in [conversationId], in order. */
+    /**
+     * [sent]: what the TA has said on its own in [conversationId] since the person last wrote there,
+     * oldest first. One notification per conversation, so a later one replaces the earlier: it
+     * carries the earlier messages along rather than dropping them from the shade.
+     */
     fun messages(ta: CompanionEntity, conversationId: Long, sent: List<MessageEntity>) {
         if (sent.isEmpty() || !allowed()) return
         val name = ta.name.trim().ifEmpty { "TA" }
@@ -81,11 +85,6 @@ class Notifier(private val context: Context, private val images: ImageStore) {
             .setContentIntent(open(EXTRA_LETTER, letter.id))
             .build()
         post(TAG_LETTER, letter.id, notification)
-    }
-
-    /** Once the conversation is on screen, its notification has said what it had to. */
-    fun clearConversation(conversationId: Long) {
-        NotificationManagerCompat.from(context).cancel(TAG_CONVERSATION, conversationId.toInt())
     }
 
     private fun post(tag: String, id: Long, notification: android.app.Notification) {

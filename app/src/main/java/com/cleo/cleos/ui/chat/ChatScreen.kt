@@ -276,16 +276,14 @@ fun ChatTab(
     val vm = appViewModel { ChatViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
     val c = appContainer()
-    // This chat on screen: what a TA says on its own here needs no notification (see Later), and
-    // the one it may have left is read now. Off again when the app goes to the back, another tab
-    // or screen comes up, or another conversation is opened.
+    // This chat on screen: what a TA says on its own here needs no notification (see Later). Off
+    // again when the app goes to the back, another tab or screen comes up, or another conversation
+    // is opened. A notification already up stays: it goes when the person swipes it away or taps it,
+    // not because the chat was opened (they asked to keep them).
     LifecycleResumeEffect(state.conversationId) {
         // Null until the conversation has loaded.
         val shown = state.conversationId
-        if (shown != null) {
-            c.chatOnScreen = shown
-            c.notifier.clearConversation(shown)
-        }
+        if (shown != null) c.chatOnScreen = shown
         onPauseOrDispose { if (shown != null && c.chatOnScreen == shown) c.chatOnScreen = null }
     }
     val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())

@@ -13,6 +13,7 @@ import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.LaterEntity
 import com.cleo.cleos.data.db.LetterEntity
+import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.data.db.WakeEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -255,7 +256,7 @@ class Later(
             is ChatRepository.WakeResult.Sent -> {
                 db.later().delete(id)
                 log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { it.content })
-                if (!showing(conversationId)) notifier.messages(ta, conversationId, result.messages)
+                if (!showing(conversationId)) notifier.messages(ta, conversationId, unanswered(conversationId).ifEmpty { result.messages })
                 null
             }
             is ChatRepository.WakeResult.Skipped -> {
@@ -270,6 +271,17 @@ class Later(
             }
         }
     }
+
+    /**
+     * What the TA has said on its own in [conversationId] since the person last wrote, oldest first
+     * (at most [NOTIFY_MAX]): what its notification shows, earlier wakes' messages included.
+     */
+    private suspend fun unanswered(conversationId: Long): List<MessageEntity> =
+        db.messages().newest(conversationId, RECENT)
+            .takeWhile { !(it.role == "user" && it.note == null) }
+            .filter { it.role == "assistant" && it.proactive && it.error == null && it.content.isNotBlank() }
+            .take(NOTIFY_MAX)
+            .reversed()
 
     /** [minutes], if a try that much later would still be in time; if not, [note] goes, logged as [why] when there is one. */
     private suspend fun stillInTime(note: LaterEntity, ta: CompanionEntity, minutes: Long, why: String?): Long? {
@@ -368,6 +380,9 @@ class Later(
 
         /** Messages looked at to tell whether the person is in the conversation. */
         private const val RECENT = 30
+
+        /** Messages one notification carries at most: the newest. */
+        private const val NOTIFY_MAX = 10
 
         /** Wakes kept per TA, for the line in settings. */
         private const val KEPT = 20
