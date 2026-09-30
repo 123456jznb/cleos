@@ -41,12 +41,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.Opening
@@ -159,21 +161,30 @@ fun MainScreen(
             @Composable
             fun Page(index: Int, placed: Boolean, shift: () -> Float) {
                 Box(
-                    // ⚠️ Moved by placing it, not by a transform. Placing it somewhere else
-                    // is a real layout position, so the glass inside the page is told it
-                    // moved and re-reads the wallpaper under its new spot. A page slid by a
-                    // transform would keep refracting the wallpaper from where it started —
-                    // the reason CleosNavHost cross-fades instead of sliding.
+                    // ⚠️ Slid as a picture: the page stays where it rests as far as layout
+                    // knows, and only its drawing is shifted, from its own layer (the page
+                    // drawn once and moved as it is). It used to be moved by placing it: a
+                    // real layout position each frame, so every piece of glass on it re-read
+                    // the wallpaper under its new spot, and every piece crossing the edge of
+                    // the screen built its effect anew (LiquidGlass clamps what it samples to
+                    // the part on screen), dozens a frame on two pages: the frames dropped
+                    // and the flash. The one thing given up: for the 0.3 s of the slide, the
+                    // wallpaper seen through a bubble moves along with it. The top bar looks
+                    // through at the chat itself, which moves with it, so it stays right.
                     //
-                    // Reading the animation in here and nowhere else also keeps the whole
-                    // page out of recomposition: it is re-placed each frame, not rebuilt.
+                    // Reading the animation in the draw and nowhere else keeps the page out
+                    // of recomposition and layout: it is only drawn somewhere else.
                     // A page off screen is measured but not placed, so nothing of it is drawn.
-                    Modifier.fillMaxSize().layout { measurable, constraints ->
-                        val p = measurable.measure(constraints)
-                        layout(p.width, p.height) {
-                            if (placed) p.place((shift() * pageWidth).roundToInt(), 0)
+                    Modifier
+                        .fillMaxSize()
+                        .layout { measurable, constraints ->
+                            val p = measurable.measure(constraints)
+                            layout(p.width, p.height) {
+                                if (placed) p.place(0, 0)
+                            }
                         }
-                    },
+                        .drawWithContent { translate(left = shift() * pageWidth) { this@drawWithContent.drawContent() } }
+                        .graphicsLayer(),
                 ) {
                     holder.SaveableStateProvider(index) {
                         when (index) {
