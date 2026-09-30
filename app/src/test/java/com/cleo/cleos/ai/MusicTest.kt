@@ -67,6 +67,14 @@ class MusicTest {
             LyricsHit("七里香", "周杰伦", 298.0, "[00:27.38]窗外的麻雀 在电线杆上多嘴", false),
         )
         assertEquals(298.0, LyricsPick.best(both, 299_000)!!.durationS, 0.0)
+        // None within three seconds: one within eight is most likely the same song cut a little differently,
+        // but only when nothing is closer.
+        val cut = LyricsHit("HOTSHOT", "YSB Tril", 137.0, "[00:10.00]x", false)
+        assertEquals(137.0, LyricsPick.best(listOf(cut), 131_500)!!.durationS, 0.0)
+        assertEquals(133.0, LyricsPick.best(listOf(cut, cut.copy(durationS = 133.0)), 131_500)!!.durationS, 0.0)
+        assertNull(LyricsPick.best(listOf(cut), 125_000))
+        // A player's "(Explicit)" is not part of the name LRCLIB knows the song by.
+        assertEquals("HOTSHOT", LyricsPick.bareTitle("HOTSHOT (Explicit)"))
         // Nothing to sing is an answer too.
         assertTrue(LyricsPick.best(listOf(LyricsHit("Intro", "x", 60.0, null, true)), 60_000)!!.instrumental)
         assertEquals("周杰伦", LyricsPick.firstArtist("周杰伦/费玉清"))

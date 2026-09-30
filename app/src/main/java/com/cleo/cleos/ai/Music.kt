@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import com.cleo.cleos.NowPlayingListener
 import kotlinx.coroutines.channels.awaitClose
@@ -239,6 +240,10 @@ class PhoneMusic(private val context: Context) : MusicSource {
     private fun pick(list: List<Seen>): Seen? =
         list.firstOrNull { it.state?.state == PlaybackState.STATE_PLAYING && it.metadata != null } ?: list.firstOrNull { it.metadata != null }
 
+    /** The last song whose metadata went to the log: once a song, not at every pause. */
+    @Volatile
+    private var logged: String? = null
+
     private fun describe(seen: Seen): NowPlaying? {
         val m = seen.metadata ?: return null
         val title = (m.getString(MediaMetadata.METADATA_KEY_TITLE) ?: m.description.title?.toString()).orEmpty().trim()
@@ -246,6 +251,14 @@ class PhoneMusic(private val context: Context) : MusicSource {
         val artist = (m.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: m.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: m.description.subtitle?.toString()).orEmpty().trim()
         val state = seen.state
+        // What each player tells, for when a song's words or length come out wrong on some phone:
+        // the names of what it sets, never what it sets them to.
+        val song = "${seen.controller.packageName}|$title|$artist"
+        if (song != logged) {
+            logged = song
+            Log.i(TAG, "${seen.controller.packageName}: ${m.keySet().sorted().joinToString(",") { it.substringAfterLast('.') }}; " +
+                "length ${m.getLong(MediaMetadata.METADATA_KEY_DURATION) / 1000} s")
+        }
         return NowPlaying(
             player = seen.controller.packageName,
             title = title,
@@ -262,6 +275,8 @@ class PhoneMusic(private val context: Context) : MusicSource {
     }
 
     companion object {
+        private const val TAG = "PhoneMusic"
+
         fun allowed(context: Context): Boolean = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
 
         /**
@@ -283,12 +298,13 @@ class Listening(private val music: MusicSource, private val lyrics: Lyrics) {
     suspend fun line(): String? {
         if (!music.allowed()) return null
         val np = music.now()?.takeIf { it.playing } ?: return null
-        // Usually known already (the chat's bar asked when the song began); not worth holding a reply up long for.
+        // Usually known already (the chat's bar asked when the song began). Not worth holding a reply up
+        // long for; a lookup not done by then goes on, for the next message.
         val words = withTimeoutOrNull(WORDS_WAIT_MS) { lyrics.of(np.title, np.artist, np.durationMs) }
         return MusicText.listening(np, words, np.position(SystemClock.elapsedRealtime()))
     }
 
     private companion object {
-        const val WORDS_WAIT_MS = 2_500L
+        const val WORDS_WAIT_MS = 4_000L
     }
 }

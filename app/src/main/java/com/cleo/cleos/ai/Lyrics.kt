@@ -1,10 +1,11 @@
 package com.cleo.cleos.ai
 
 import android.icu.text.Transliterator
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -15,6 +16,7 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /** One line of a song's words and when it starts. An empty [text] is a stretch with no singing. */
 data class LyricLine(val atMs: Long, val text: String)
@@ -81,18 +83,28 @@ object LyricsPick {
     const val SAME_WITHIN_MS = 3_000L
 
     /**
-     * The one that is the song playing: within [SAME_WITHIN_MS] of its length, since a live take
-     * or another cut has its words at other times (with no length to go by, any with times). The
-     * same recording is often there several times over, in simplified and in traditional
-     * characters (七里香 came back traditional first): simplified goes first, as Cleos is read
-     * in it, then the closest in length.
+     * With none that close, how far one may be and still be taken: most likely the same song cut a
+     * little differently, its lines then a second or so off. Nearer than that, a radio edit and the
+     * album version.
+     */
+    const val NEAR_WITHIN_MS = 8_000L
+
+    /**
+     * The one that is the song playing: within [SAME_WITHIN_MS] of its length, else [NEAR_WITHIN_MS],
+     * since a live take or another cut has its words at other times (with no length to go by, any
+     * with times). The same recording is often there several times over, in simplified and in
+     * traditional characters (七里香 came back traditional first): simplified goes first, as Cleos
+     * is read in it, then the closest in length.
      */
     fun best(hits: List<LyricsHit>, durationMs: Long): LyricsHit? {
         fun off(h: LyricsHit) = if (durationMs > 0) kotlin.math.abs(h.durationS * 1000 - durationMs) else 0.0
-        val same = hits.filter { h ->
-            if (durationMs > 0) (h.synced != null || h.instrumental) && off(h) <= SAME_WITHIN_MS else h.synced != null
+        val order = compareBy<LyricsHit> { traditional(it.synced) }.thenBy { off(it) }
+        if (durationMs <= 0) return hits.filter { it.synced != null }.minWithOrNull(order)
+        val usable = hits.filter { it.synced != null || it.instrumental }
+        for (within in listOf(SAME_WITHIN_MS, NEAR_WITHIN_MS)) {
+            usable.filter { off(it) <= within }.minWithOrNull(order)?.let { return it }
         }
-        return same.minWithOrNull(compareBy<LyricsHit> { traditional(it.synced) }.thenBy { off(it) })
+        return null
     }
 
     /** How many characters of [text] are written only in traditional characters (among the common ones). */
@@ -104,7 +116,7 @@ object LyricsPick {
     fun firstArtist(artist: String): String =
         artist.split('/', '、', ',', '，', '&', ';').first().split(" feat", " ft.", " Feat", " FT").first().trim()
 
-    /** "晴天 (Live)" → "晴天": what a second try searches for. */
+    /** "HOTSHOT (Explicit)" → "HOTSHOT": what is searched for; a version in brackets is told apart by its length. */
     fun bareTitle(title: String): String = title.replace(Regex("""\s*[(（\[【].*?[)）\]】]"""), "").trim().ifEmpty { title }
 }
 
@@ -113,39 +125,62 @@ object LyricsPick {
  * from mainland China without a proxy (tried: 晴天, 平凡之路, 孤勇者 all came back timed). Asked
  * once a song; a song it doesn't have is remembered as having none. [agent] names the app, as
  * LRCLIB asks every client to.
+ *
+ * A lookup, once begun, runs to its end in [scope] whoever stops waiting for it. A reply waits
+ * only a few seconds; on the phone the first lookup took longer than that, was called off with the
+ * reply, and was never kept, so every message after it came without the words too.
  */
-class Lyrics(private val http: OkHttpClient, private val agent: String) {
-    private val lock = Mutex()
+class Lyrics(http: OkHttpClient, private val agent: String, private val scope: CoroutineScope) {
+    private val http = http.newBuilder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
     private val found = object : LinkedHashMap<String, List<LyricLine>>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<LyricLine>>?) = size > KEPT
     }
+    private val asking = HashMap<String, Deferred<List<LyricLine>?>>()
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Empty when there are no words to be had (or none sung); null when LRCLIB couldn't be reached. */
     suspend fun of(title: String, artist: String, durationMs: Long): List<LyricLine>? {
         if (title.isBlank()) return emptyList()
         val key = "$title|$artist|${durationMs / 1000}"
-        // One at a time: the chat's bar and a reply asking for the same song find it here the second time.
-        return lock.withLock {
-            found[key]?.let { return@withLock it }
-            val lines = fetch(title, artist, durationMs) ?: return@withLock null
-            found[key] = lines
-            lines
+        // The chat's bar and a reply asking for the same song wait on the same lookup.
+        val lookup = synchronized(this) {
+            found[key]?.let { return it }
+            asking.getOrPut(key) {
+                scope.async(Dispatchers.IO) {
+                    val lines = fetch(title, artist, durationMs)
+                    synchronized(this@Lyrics) {
+                        if (lines != null) found[key] = lines
+                        asking.remove(key)
+                    }
+                    lines
+                }
+            }
         }
+        return lookup.await()
     }
 
-    private suspend fun fetch(title: String, artist: String, durationMs: Long): List<LyricLine>? = withContext(Dispatchers.IO) {
-        try {
+    /** Never throws: a lookup that fails is null, and asked again next time. */
+    private fun fetch(title: String, artist: String, durationMs: Long): List<LyricLine>? {
+        val started = System.currentTimeMillis()
+        return try {
             val first = LyricsPick.firstArtist(artist)
-            val exact = search { addQueryParameter("track_name", title).apply { if (first.isNotEmpty()) addQueryParameter("artist_name", first) } }
-            val hit = LyricsPick.best(exact, durationMs)
-                ?: LyricsPick.best(search { addQueryParameter("q", "${LyricsPick.bareTitle(title)} $first".trim()) }, durationMs)
+            val bare = LyricsPick.bareTitle(title)
+            // By title and artist first: one answer, and the right one, most of the time.
+            val byName = search { addQueryParameter("track_name", bare).apply { if (first.isNotEmpty()) addQueryParameter("artist_name", first) } }
+            var hit = LyricsPick.best(byName, durationMs)
+            var asked = 1
+            if (hit == null) {
+                hit = LyricsPick.best(search { addQueryParameter("q", "$bare $first".trim()) }, durationMs)
+                asked++
+            }
             val lines = hit?.synced?.let(Lrc::parse) ?: emptyList()
+            Log.i(TAG, (if (lines.isEmpty()) "none" else "${lines.size} lines") + " after $asked asked, ${System.currentTimeMillis() - started} ms")
             // In the characters the player writes the song in: some songs LRCLIB has only in
             // traditional ones (every copy of 七里香 the right length is), shown beside a title in simplified.
             val convert = LyricsPick.traditional(title + artist) == 0 && lines.any { LyricsPick.traditional(it.text) > 0 }
             if (convert) lines.map { it.copy(text = simplified(it.text)) } else lines
-        } catch (_: IOException) {
+        } catch (e: Exception) {
+            Log.w(TAG, "unreachable after ${System.currentTimeMillis() - started} ms: ${e.javaClass.simpleName} ${e.message}")
             null
         }
     }
@@ -179,6 +214,7 @@ class Lyrics(private val http: OkHttpClient, private val agent: String) {
     }
 
     private companion object {
+        const val TAG = "Lyrics"
         const val HOST = "lrclib.net"
         const val KEPT = 60
     }
