@@ -93,6 +93,11 @@ fun GlassTabBar(
     var rowWidth by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf(false) }
 
+    // Where the lens last came to rest. It stays behind as a lump the lens is still
+    // joined to, so leaving a tab pulls a thread out of it; see `lensMotion.blob`.
+    var anchorIndex by remember { mutableIntStateOf(selectedIndex) }
+    val lensMotion = remember { GlassMotion() }
+
     val count = tabs.size
     val insetPx = with(density) { Inset.toPx() }
     val currentSelected by rememberUpdatedState(selectedIndex)
@@ -112,6 +117,8 @@ fun GlassTabBar(
             }
             stretch = 0f
         }
+        // Only once it has arrived: until then the thread has to trail from the tab it left.
+        anchorIndex = selectedIndex
     }
 
     // Which tab the lens is over right now; labels light up as it passes.
@@ -175,6 +182,7 @@ fun GlassTabBar(
                                     stretch = abs(velocity) * 0.012f
                                 }
                                 stretch = 0f
+                                anchorIndex = index
                             }
                             if (index != currentSelected) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -214,6 +222,17 @@ fun GlassTabBar(
                     val lh = baseH + 22.dp.toPx() * h - stretch * 0.3f
                     val cx = insetPx + (if (lensX.value.isNaN()) currentSelected * iw else lensX.value) + iw / 2f
                     val cy = (BarHeight + Overhang * 2).toPx() / 2f
+                    // Written here rather than from the gesture: this runs every frame the
+                    // lens moves, in the layout pass, so the thread is never a frame behind
+                    // the lens it hangs off. The glass reads it when it draws, just after.
+                    lensMotion.blob = trailingBlob(
+                        anchorCx = insetPx + anchorIndex * iw + iw / 2f,
+                        lensCx = cx,
+                        lensLeft = cx - w / 2f,
+                        lensHeight = lh,
+                        span = iw,
+                        restHeight = baseH,
+                    )
                     IntOffset((cx - w / 2f).roundToInt(), (cy - lh / 2f).roundToInt())
                 }
                 .layout { measurable, _ ->
@@ -225,9 +244,48 @@ fun GlassTabBar(
                     val placeable = measurable.measure(Constraints.fixed(w, lh))
                     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                 }
-                .liquidGlass(lensSource, lensStyle, GlassShape.Capsule),
+                .liquidGlass(lensSource, lensStyle, GlassShape.Capsule, lensMotion),
         )
     }
+}
+
+/**
+ * The lump still sitting on the tab the lens is leaving, given to the lens as its second
+ * shape so the two are drawn as one melting thing.
+ *
+ * Both the lump and the reach between them fade out over one tab's width. The reach is
+ * zero at *both* ends, which is the part worth keeping:
+ *  - at the far end that is the snap;
+ *  - at the near end it is what stops the lens from looking fat while it sits still.
+ *    A soft minimum never returns quite the nearer of the two distances, so a lump parked
+ *    inside the resting lens would quietly inflate its outline by a fraction of the reach.
+ *
+ * Returns null once there is nothing left to draw, which also spares the shader the work.
+ */
+internal fun trailingBlob(
+    anchorCx: Float,
+    lensCx: Float,
+    lensLeft: Float,
+    lensHeight: Float,
+    span: Float,
+    restHeight: Float,
+): GlassBlob? {
+    if (span <= 0f) return null
+    val t = (abs(anchorCx - lensCx) / span).coerceIn(0f, 1f)
+    val merge = restHeight * 0.5f * (4f * t * (1f - t))
+    if (merge <= 0.5f) return null
+    val left = 1f - t
+    val w = span * 0.62f * left
+    val h = restHeight * 0.62f * left
+    if (w <= 1f || h <= 1f) return null
+    return GlassBlob(
+        centerX = anchorCx - lensLeft,
+        centerY = lensHeight / 2f,
+        width = w,
+        height = h,
+        radius = h / 2f,
+        merge = merge,
+    )
 }
 
 @Composable

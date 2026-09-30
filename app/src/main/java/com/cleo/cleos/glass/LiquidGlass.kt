@@ -170,9 +170,25 @@ private class LiquidGlassNode(
         // margin keeps its reach inside the layer (e.g. the bar seen through the tab lens).
         // A flat backdrop has no glass in it, so nothing to make room for.
         val nested = if (backdrop.flat) 0f else NESTED_MARGIN.toPx()
+        // A second shape sits outside this node, usually well outside it, and the waist
+        // between them bulges past both by up to the reach. None of that is drawn unless
+        // the layer covers it, so the padding has to grow by however far the blob sticks
+        // out on its furthest side. Padding is the same on all four sides, so one number.
+        val blob = m?.blob?.takeIf { it.merge > 0f && it.width > 0f && it.height > 0f }
+        val blobPad = if (blob == null) {
+            0f
+        } else {
+            val halfW = blob.width / 2f
+            val halfH = blob.height / 2f
+            max(
+                max(halfW - blob.centerX, blob.centerX + halfW - w),
+                max(halfH - blob.centerY, blob.centerY + halfH - h),
+            ).coerceAtLeast(0f) + blob.merge
+        }
         // 1.5x the blur radius covers the kernel (sigma is about 0.58 x radius, and 3 sigma
         // is where the tail stops mattering) without paying for 2x.
-        val pad = ceil(max(reach, shadowReach) + max(swellX, swellY) + blurPx * 1.5f + nested + 2f).toInt()
+        val pad =
+            ceil(max(reach, shadowReach) + max(swellX, swellY) + blurPx * 1.5f + nested + blobPad + 2f).toInt()
         val layerSize = IntSize(ceil(w).toInt() + pad * 2, ceil(h).toInt() + pad * 2)
 
         l.topLeft = IntOffset(-pad, -pad)
@@ -222,6 +238,14 @@ private class LiquidGlassNode(
                 touchY = if (touching) tp.y + pad else 0f,
                 touchRadius = max(max(glassW, glassH) * 0.45f, 1f),
                 touchGlow = if (touching) glow else 0f,
+                // Blob centre relative to the glass centre: the shader works in that
+                // space, and the glass centre is the node centre however much it swelled.
+                blobX = if (blob == null) 0f else blob.centerX - w / 2f,
+                blobY = if (blob == null) 0f else blob.centerY - h / 2f,
+                blobHalfW = if (blob == null) 0f else blob.width / 2f,
+                blobHalfH = if (blob == null) 0f else blob.height / 2f,
+                blobRadius = blob?.radius ?: 0f,
+                blobMerge = blob?.merge ?: 0f,
                 blur = blurPx,
             )
             val fx = (shaderEffect as? GlassShaderEffect) ?: GlassShaderEffect().also { shaderEffect = it }
@@ -307,6 +331,12 @@ private data class GlassParams(
     val touchY: Float,
     val touchRadius: Float,
     val touchGlow: Float,
+    val blobX: Float,
+    val blobY: Float,
+    val blobHalfW: Float,
+    val blobHalfH: Float,
+    val blobRadius: Float,
+    val blobMerge: Float,
     val blur: Float,
 )
 
@@ -341,6 +371,8 @@ private class GlassShaderEffect {
         shader.setFloatUniform("light", LIGHT_X, LIGHT_Y)
         shader.setFloatUniform("shadow", p.shadowAlpha, p.shadowRadius, p.shadowOffsetY)
         shader.setFloatUniform("touch", p.touchX, p.touchY, p.touchRadius, p.touchGlow)
+        shader.setFloatUniform("blob", p.blobX, p.blobY, p.blobHalfW, p.blobHalfH)
+        shader.setFloatUniform("blobShape", p.blobRadius, p.blobMerge)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val combined = if (p.blur > 0.5f) {
             android.graphics.RenderEffect.createChainEffect(

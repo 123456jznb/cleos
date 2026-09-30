@@ -86,8 +86,43 @@ fun lerp(a: GlassStyle, b: GlassStyle, t: Float): GlassStyle {
 }
 
 /**
- * Live state of one piece of glass: where a finger is (the glass lights up under it)
- * and how far the outline has swollen past the view's bounds, in dp per side.
+ * A second rounded rect this glass melts into: two shapes near each other grow a waist
+ * between them, and pulling them apart draws that waist out into a thread which finally
+ * snaps. The tab lens uses it to stay attached to the tab it is leaving.
+ *
+ * Coordinates are px relative to the **node's top-left**, so the blob normally sits
+ * outside the node — that is the point, it marks where the glass came from. The glass
+ * grows its own layer to cover it.
+ *
+ * ## Why this is cheap
+ *
+ * The usual way to do this is "blur everything, then cut at a threshold": two passes over
+ * the whole area, and the edge comes out soft. Here both shapes already report, for every
+ * pixel, how far away their edge is — taking a **soft minimum** of those two distances
+ * bulges the waist on its own, exactly, for the cost of one more distance evaluation.
+ */
+@Immutable
+data class GlassBlob(
+    /** Centre, relative to the node's top-left. */
+    val centerX: Float,
+    val centerY: Float,
+    val width: Float,
+    val height: Float,
+    val radius: Float,
+    /**
+     * How far the two shapes reach for each other, px — the whole character of the
+     * effect: how thick the thread is, and how far they get before it snaps.
+     *
+     * **0 turns the merge off**, and off is what every other piece of glass in the app
+     * leaves it at, so none of them pay for this.
+     */
+    val merge: Float,
+)
+
+/**
+ * Live state of one piece of glass: where a finger is (the glass lights up under it),
+ * how far the outline has swollen past the view's bounds (in dp per side), and which
+ * second shape it is melting into.
  * Whoever handles the gesture animates these; the glass only reads them, and because
  * they are read while drawing, animating them redraws the glass without recomposing.
  */
@@ -97,4 +132,5 @@ class GlassMotion {
     var glow by mutableFloatStateOf(0f)
     var swellX by mutableFloatStateOf(0f)
     var swellY by mutableFloatStateOf(0f)
+    var blob by mutableStateOf<GlassBlob?>(null)
 }

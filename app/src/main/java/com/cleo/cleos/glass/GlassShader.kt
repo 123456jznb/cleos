@@ -55,10 +55,30 @@ uniform float rimWidth;
 uniform float2 light;
 uniform float3 shadow;
 uniform float4 touch;
+// A second rounded rect this glass melts into: xy = centre offset from the glass centre,
+// zw = half size. `blobShape` is (corner radius, reach). Reach 0 means no second shape,
+// which is what every piece of glass but the tab lens passes.
+uniform float4 blob;
+uniform float2 blobShape;
 
 float sdRoundRect(float2 p, float2 b, float r) {
     float2 q = abs(p) - b + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+/**
+ * Soft minimum: `min` with the corner rounded off over a width of k.
+ *
+ * Used on two distance fields it is what grows the waist — near the midpoint both shapes
+ * are about equally far, the subtracted term is largest, and the merged surface bulges
+ * out to meet itself. Past k apart the term vanishes and this is exactly `min`, i.e. the
+ * two shapes are simply separate. That is the snap: it falls out of the formula, nothing
+ * has to decide when the thread breaks.
+ *
+ */
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
 }
 
 // Outward normal. `r` here may be larger than the real corner radius: rounding the
@@ -77,6 +97,11 @@ float2 outwardNormal(float2 p, float2 b, float r) {
     return float2(p.x < 0.0 ? -n.x : n.x, p.y < 0.0 ? -n.y : n.y);
 }
 
+/** The merged surface, as one distance field. Only called while a second shape exists. */
+float mergedDist(float2 p, float2 halfSize, float r, float2 blobHalf, float blobR, float k) {
+    return smin(sdRoundRect(p, halfSize, r), sdRoundRect(p - blob.xy, blobHalf, blobR), k);
+}
+
 float4 sampleAt(float2 p) {
     return content.eval(clamp(p, visible.xy, visible.zw));
 }
@@ -88,9 +113,24 @@ half4 main(float2 coord) {
     float r = min(radius, minHalf);
     float d = sdRoundRect(p, halfSize, r);
 
+    // The second shape. With none, `merging` is 0 and every line below behaves exactly
+    // as it did before this existed.
+    float2 pb = p - blob.xy;
+    float2 blobHalf = blob.zw;
+    float blobR = min(blobShape.x, min(blobHalf.x, blobHalf.y));
+    float k = blobShape.y;
+    float merging = (k > 0.0 && blobHalf.x > 0.0 && blobHalf.y > 0.0) ? 1.0 : 0.0;
+    if (merging > 0.0) {
+        d = smin(d, sdRoundRect(pb, blobHalf, blobR), k);
+    }
+
     float4 below = float4(0.0);
     if (shadow.x > 0.0) {
-        float ds = sdRoundRect(p - float2(0.0, shadow.z), halfSize, r);
+        float2 lift2 = float2(0.0, shadow.z);
+        float ds = sdRoundRect(p - lift2, halfSize, r);
+        if (merging > 0.0) {
+            ds = smin(ds, sdRoundRect(pb - lift2, blobHalf, blobR), k);
+        }
         float s = clamp(1.0 - max(ds, 0.0) / shadow.y, 0.0, 1.0);
         below = float4(0.0, 0.0, 0.0, shadow.x * s * s);
     }
@@ -104,7 +144,26 @@ half4 main(float2 coord) {
     float rim = max(min(bevel, minHalf), 0.001);
     float t = clamp(1.0 - depth / rim, 0.0, 1.0);
     float bend = 1.0 - sqrt(1.0 - t * t);
-    float2 n = outwardNormal(p, halfSize, max(r, rim));
+
+    // Which way the surface faces. For a single rect the analytic normal is used, partly
+    // because its radius can be fudged to hide the diagonal crease. A merged surface has
+    // no closed form to fudge, so its normal comes from the field's own slope instead —
+    // which is the only thing that gets the waist right: there the surface faces along
+    // the thread, a direction neither shape's own normal points in.
+    float2 n;
+    if (merging > 0.0) {
+        float e = 1.0;
+        float2 g = float2(
+            mergedDist(p + float2(e, 0.0), halfSize, r, blobHalf, blobR, k)
+                - mergedDist(p - float2(e, 0.0), halfSize, r, blobHalf, blobR, k),
+            mergedDist(p + float2(0.0, e), halfSize, r, blobHalf, blobR, k)
+                - mergedDist(p - float2(0.0, e), halfSize, r, blobHalf, blobR, k));
+        float gl = length(g);
+        n = gl > 0.0001 ? g / gl : outwardNormal(p, halfSize, max(r, rim));
+    } else {
+        n = outwardNormal(p, halfSize, max(r, rim));
+    }
+
     float2 offset = n * (bend * refraction);
     float2 base = origin + halfSize + p / zoom;
 
