@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
@@ -29,7 +28,10 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -39,11 +41,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.Opening
 import com.cleo.cleos.glass.GlassTab
@@ -63,6 +67,16 @@ import com.cleo.cleos.ui.todo.TodoTab
  * bar, and a gap), which each tab reserves at the bottom of its content.
  */
 private val TabBarReserve = 88.dp
+
+/**
+ * Whether the tab page reading it is the one on screen. The pages stay composed while another
+ * shows (MainScreen), so what used to stop because leaving a tab threw its page away (the chat
+ * counting as looked at, a voice message playing, "typing") has to stop on this instead.
+ */
+val LocalPageShown = compositionLocalOf { true }
+
+/** How long after the app comes up the pages not yet opened are built, one after another, off screen. */
+private const val WARM_UP_MS = 600L
 
 @Composable
 fun MainScreen(
@@ -88,8 +102,24 @@ fun MainScreen(
     var from by remember { mutableIntStateOf(tab) }
     val slide = remember { Animatable(1f) }
     var pageWidth by remember { mutableIntStateOf(0) }
+    // Every page, once built, stays built, the way WeChat's and Telegram's tabs do: switching
+    // then only moves pages and never builds one. Built on the spot, a page slid in empty and
+    // filled in a few frames later, when its diary or todos came back from the database: the
+    // flash that was left after pages stopped being rebuilt mid-slide. The ones not opened yet
+    // are built a moment after the app comes up, so the first visit is as smooth as the next.
+    var alive by remember { mutableStateOf(setOf(tab)) }
+    LaunchedEffect(Unit) {
+        for (index in 0..3) {
+            delay(WARM_UP_MS)
+            alive = alive + index
+        }
+    }
+    val focus = LocalFocusManager.current
     LaunchedEffect(tab) {
         val target = tab
+        alive = alive + target
+        // A page left no longer goes away, and a field focused on it would keep the keyboard up over the next.
+        focus.clearFocus()
         if (from == target) return@LaunchedEffect
         slide.snapTo(0f)
         // Two frames for the page coming in to build and draw itself off to the side, where
@@ -127,19 +157,22 @@ fun MainScreen(
                 .backdropSource(page, behind = LocalWallpaperBackdrop.current, overscan = WallpaperOverscan),
         ) {
             @Composable
-            fun Page(index: Int, shift: () -> Float) {
+            fun Page(index: Int, placed: Boolean, shift: () -> Float) {
                 Box(
-                    // ⚠️ `offset` with a lambda, not a transform. It moves the page by
-                    // **placing it somewhere else**, which is a real layout position, so
-                    // the glass inside the page is told it moved and re-reads the
-                    // wallpaper under its new spot. A page slid by a transform would keep
-                    // refracting the wallpaper from where it started — the reason
-                    // CleosNavHost cross-fades instead of sliding.
+                    // ⚠️ Moved by placing it, not by a transform. Placing it somewhere else
+                    // is a real layout position, so the glass inside the page is told it
+                    // moved and re-reads the wallpaper under its new spot. A page slid by a
+                    // transform would keep refracting the wallpaper from where it started —
+                    // the reason CleosNavHost cross-fades instead of sliding.
                     //
                     // Reading the animation in here and nowhere else also keeps the whole
                     // page out of recomposition: it is re-placed each frame, not rebuilt.
-                    Modifier.fillMaxSize().offset {
-                        IntOffset((shift() * pageWidth).roundToInt(), 0)
+                    // A page off screen is measured but not placed, so nothing of it is drawn.
+                    Modifier.fillMaxSize().layout { measurable, constraints ->
+                        val p = measurable.measure(constraints)
+                        layout(p.width, p.height) {
+                            if (placed) p.place((shift() * pageWidth).roundToInt(), 0)
+                        }
                     },
                 ) {
                     holder.SaveableStateProvider(index) {
@@ -163,14 +196,15 @@ fun MainScreen(
             // sliding), every start and end of a slide threw the page on screen away and built
             // it again, and for a frame its glass had nothing under it: the black flash.
             val dir = if (tab > from) 1f else -1f
-            val shown = if (from == tab) listOf(tab) else listOf(from, tab)
-            for (index in shown) {
+            for (index in (alive + from + tab).sorted()) {
                 key(index) {
-                    Page(index) {
-                        when {
-                            from == tab -> 0f
-                            index == from -> -slide.value * dir
-                            else -> (1f - slide.value) * dir
+                    CompositionLocalProvider(LocalPageShown provides (index == tab)) {
+                        Page(index, placed = index == tab || index == from) {
+                            when {
+                                from == tab -> 0f
+                                index == from -> -slide.value * dir
+                                else -> (1f - slide.value) * dir
+                            }
                         }
                     }
                 }

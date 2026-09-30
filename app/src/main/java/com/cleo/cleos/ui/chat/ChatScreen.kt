@@ -134,6 +134,7 @@ import com.cleo.cleos.ai.LyricLine
 import com.cleo.cleos.ai.MusicAction
 import com.cleo.cleos.ai.NowPlaying
 import com.cleo.cleos.ai.ToolGroup
+import com.cleo.cleos.ui.LocalPageShown
 import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.ai.McpAsk
 import com.cleo.cleos.ai.Prompt
@@ -289,13 +290,15 @@ fun ChatTab(
     val vm = appViewModel { ChatViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
     val c = appContainer()
+    // Whether this is the tab on screen: the page stays composed while another tab shows (MainScreen).
+    val pageShown = LocalPageShown.current
     // This chat on screen: what a TA says on its own here needs no notification (see Later). Off
     // again when the app goes to the back, another tab or screen comes up, or another conversation
     // is opened. A notification already up stays: it goes when the person swipes it away or taps it,
     // not because the chat was opened (they asked to keep them).
-    LifecycleResumeEffect(state.conversationId) {
+    LifecycleResumeEffect(state.conversationId, pageShown) {
         // Null until the conversation has loaded.
-        val shown = state.conversationId
+        val shown = state.conversationId?.takeIf { pageShown }
         if (shown != null) c.chatOnScreen = shown
         onPauseOrDispose { if (shown != null && c.chatOnScreen == shown) c.chatOnScreen = null }
     }
@@ -303,7 +306,9 @@ fun ChatTab(
     // 一起听歌: what the phone plays, followed only while this screen is up and the switch is on.
     val appSettings by remember { c.settings.settings }.collectAsStateWithLifecycle(AppSettings())
     val listeningOn = ToolGroup.Music in appSettings.tools
-    val nowPlaying by remember(listeningOn) { if (listeningOn) c.music.watch() else flowOf(null) }.collectAsStateWithLifecycle(null)
+    val nowPlaying by remember(listeningOn, pageShown) {
+        if (listeningOn && pageShown) c.music.watch() else flowOf(null)
+    }.collectAsStateWithLifecycle(null)
     // Up while a song plays, and a while after it is paused; the last song stays drawn as the bar goes.
     var barShown by remember { mutableStateOf(false) }
     var barSong by remember { mutableStateOf<NowPlaying?>(null) }
@@ -432,6 +437,13 @@ fun ChatTab(
             vm.typing(false)
         }
     }
+    // Off to another tab, the page staying as it is: the same, but for what is in the box, which waits here.
+    LaunchedEffect(pageShown) {
+        if (!pageShown) {
+            stopPlaying()
+            endVoice(cancel = true)
+        }
+    }
     val palette = LocalGlassPalette.current
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -474,7 +486,7 @@ fun ChatTab(
         if (sentCount > 0) listState.animateScrollToItem(0)
     }
     // Something in the box: the TA waits for it before answering.
-    LaunchedEffect(input.isNotBlank()) { vm.typing(input.isNotBlank()) }
+    LaunchedEffect(input.isNotBlank(), pageShown) { vm.typing(pageShown && input.isNotBlank()) }
 
     val scope = rememberCoroutineScope()
     val inputFocus = remember { FocusRequester() }
