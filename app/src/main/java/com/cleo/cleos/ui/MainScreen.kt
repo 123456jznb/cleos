@@ -30,11 +30,13 @@ import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
@@ -90,6 +92,11 @@ fun MainScreen(
         val target = tab
         if (from == target) return@LaunchedEffect
         slide.snapTo(0f)
+        // Two frames for the page coming in to build and draw itself off to the side, where
+        // nobody sees it, before anything moves: its first composition and its glass are the
+        // heavy part, and inside the slide they cost a frame the eye catches.
+        withFrameNanos { }
+        withFrameNanos { }
         slide.animateTo(1f, tween(300, easing = FastOutSlowInEasing))
         // Left until the end on purpose: it is what keeps the outgoing page alive, and
         // if this coroutine is cancelled by another tap it stays put, so the next slide
@@ -146,15 +153,27 @@ fun MainScreen(
                 }
             }
 
-            if (from == tab) {
-                Page(tab) { 0f }
-            } else {
-                // Only these two are ever on screen: tab 0 to tab 3 slides once, it does
-                // not flip through 1 and 2 — they would show for a few frames, each
-                // paying to build itself, for a glimpse nobody asked for.
-                val dir = if (tab > from) 1f else -1f
-                Page(from) { -slide.value * dir }
-                Page(tab) { (1f - slide.value) * dir }
+            // Only these two are ever on screen: tab 0 to tab 3 slides once, it does not flip
+            // through 1 and 2 — they would show for a few frames, each paying to build itself,
+            // for a glimpse nobody asked for.
+            //
+            // Each page under its own key, wherever it stands in the list: the page on screen
+            // before a slide is the same page during it, and the one that slid in is the same
+            // page after. Drawn from two places in the code instead (one for still, two for
+            // sliding), every start and end of a slide threw the page on screen away and built
+            // it again, and for a frame its glass had nothing under it: the black flash.
+            val dir = if (tab > from) 1f else -1f
+            val shown = if (from == tab) listOf(tab) else listOf(from, tab)
+            for (index in shown) {
+                key(index) {
+                    Page(index) {
+                        when {
+                            from == tab -> 0f
+                            index == from -> -slide.value * dir
+                            else -> (1f - slide.value) * dir
+                        }
+                    }
+                }
             }
         }
         // The keyboard covers the bar anyway; sliding it away lets the input sit on the keys.
