@@ -175,6 +175,7 @@ import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -360,7 +361,13 @@ fun ChatTab(
         voiceHint = if (granted) "可以了，再按住说话" else "要给 Cleos 用话筒的权限，才能发语音"
     }
 
+    // A TA's voice message being made ready for the ear (EarVoice) before it plays.
+    val preparing = remember { arrayOfNulls<Job>(1) }
+    val playScope = rememberCoroutineScope()
+
     fun stopPlaying() {
+        preparing[0]?.cancel()
+        preparing[0] = null
         player[0]?.let {
             runCatching { it.stop() }
             it.release()
@@ -369,22 +376,32 @@ fun ChatTab(
         playing = null
     }
 
-    fun play(file: String) {
+    /**
+     * Plays [file]. One of the TA's ([theirs]) plays beside the ear when headphones are on and that
+     * is switched on: made the first time it is played, which takes a moment; it shows as playing
+     * meanwhile, and a tap then stops it as usual.
+     */
+    fun play(file: String, theirs: Boolean) {
         val again = playing == file
         stopPlaying()
         if (again) return
-        val p = MediaPlayer()
-        runCatching {
-            p.setDataSource(c.images.file(file).path)
-            p.setOnCompletionListener { stopPlaying() }
-            p.prepare()
-            p.start()
-        }.onSuccess {
-            player[0] = p
-            playing = file
-        }.onFailure {
-            p.release()
-            voiceHint = "这段语音放不了"
+        playing = file
+        preparing[0] = playScope.launch {
+            val ear = if (theirs && appSettings.earVoice && c.ear.headphones()) c.ear.prepared(file) else null
+            preparing[0] = null
+            val p = MediaPlayer()
+            runCatching {
+                p.setDataSource((ear ?: c.images.file(file)).path)
+                p.setOnCompletionListener { stopPlaying() }
+                p.prepare()
+                p.start()
+            }.onSuccess {
+                player[0] = p
+            }.onFailure {
+                p.release()
+                playing = null
+                voiceHint = "这段语音放不了"
+            }
         }
     }
 
@@ -725,7 +742,7 @@ fun ChatTab(
                                         onOpenImage = onOpenImage,
                                         transcribing = m.id in state.transcribing,
                                         playingFile = playing,
-                                        onPlay = { play(it) },
+                                        onPlay = { play(it, theirs = m.role == "assistant") },
                                         onRetryVoice = { vm.retryVoice(m.id) },
                                         quote = quote?.let { quoteLabel(it) },
                                         onOpenQuote = { quote?.let { jumpTo(it.id) } },

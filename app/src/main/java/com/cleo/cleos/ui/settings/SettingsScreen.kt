@@ -107,6 +107,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
     var pendingRestore by remember { mutableStateOf<android.net.Uri?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showNotices by remember { mutableStateOf(false) }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) vm.exportBackup(uri)
     }
@@ -539,6 +540,12 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 }
                 Chip(if (vm.speechBusy) "正在合成…" else "试听", selected = false) { vm.previewSpeech() }
                 vm.speechResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+                ToolSwitch(
+                    "戴耳机时在耳边说",
+                    "戴着耳机听 TA 的语音条，声音像贴在耳边说话，还会一边说一边慢慢挪：从一只耳朵绕到脑后、到另一只耳朵，或者从面前靠过来。" +
+                        "用的是假人头在耳边 25 厘米实测的数据。外放时照原样放。一条语音第一次放要先算一下，会晚一点点。",
+                    settings.earVoice,
+                ) { vm.setEarVoice(it) }
                 // Setting up a voice doesn't let the TA use it: that is the switch up in 「TA 能做的事」.
                 if (ToolGroup.Speak !in settings.tools && Speech.ready(settings)) {
                     Text(
@@ -663,6 +670,16 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
                 )
+                // Credit the data's licence asks for, where the people who get the app can see it.
+                Text(
+                    "语音条「在耳边」用的是 J. M. Arend、A. Neidhardt、C. Pörschmann 发布的 Neumann KU100 近场 HRIR 数据" +
+                        "（Zenodo，doi:10.5281/zenodo.4297951，CC BY 4.0；Cleos 只留了三档距离、换了存法），" +
+                        "做法移植自 binaural-voice（github.com/Saekisui/binaural-voice，MIT）。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Chip("看许可全文", selected = false) { showNotices = true }
             }
         }
     }
@@ -732,6 +749,29 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 }) { Text("删除", color = palette.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        )
+    }
+
+    if (showNotices) {
+        val context = LocalContext.current
+        // Read from the files that ship with the app, so what is shown is what the licences say, word for word.
+        val notices = remember {
+            NOTICES.joinToString("\n\n————\n\n") { path ->
+                runCatching { context.assets.open(path).use { it.readBytes().decodeToString() } }.getOrDefault("")
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showNotices = false },
+            title = { Text("用到的别人的东西") },
+            text = {
+                Text(
+                    notices,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = { TextButton(onClick = { showNotices = false }) { Text("好") } },
         )
     }
 
@@ -923,4 +963,7 @@ internal fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
 
 /** Where every release goes: a 蓝奏云 folder, so the link stays the same from one version to the next. */
 private const val RELEASES_URL = "https://wwbnf.lanzouc.com/b01gicbubg"
+
+/** What 「看许可全文」 shows: where the ear's data comes from, and the licence of the code it was ported from. */
+private val NOTICES = listOf("hrir/README.txt", "licenses/binaural-voice.txt")
 private const val RELEASES_CODE = "5y4u"

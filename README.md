@@ -28,6 +28,11 @@
 - **语音条**：TA 想用声音说的时候发语音条（`send_voice`），你能听也看得到字。声音由你选的服务合成：MCP 里的合成工具
   （回音频或音频链接都认，比如 MiniMax）、OpenAI 格式的 `/audio/speech`（硅基流动 CosyVoice、OpenAI）或 ElevenLabs；
   合成不出来就改成文字发。在设置「TA 的声音」里配，能试听。
+  戴着耳机听，语音条像贴在耳边说话，还会一边说一边挪：从一只耳朵绕到脑后到另一只、从脑后或面前靠到耳边，或者就待在一只耳朵边上（随机挑一种）。
+  用的是 Neumann KU100 假人头在耳边 25 厘米起实测的头相关脉冲响应（近场 HRIR），距离不同，声音的样子就不同，
+  不是只调左右音量。只在说话时挪，停顿里不动（不然下一句像是从一只耳朵跳到另一只）。
+  第一次放一条时在手机上算（先按语音条的采样率重采样，再 1024 点一帧、半帧重叠地卷积），存在缓存里，之后直接放；
+  外放照原样。开关在「TA 的声音」下面，默认开。（`ai/Binaural.kt`、`ai/EarVoice.kt`）
 - **表情包**：输入框右边的笑脸里是你自己的表情包：从相册加，起个名字、写一句图里是什么（TA 看不到图，是按名字认的），点一下就发。
   会动的（GIF、动图 WebP）原样存，在聊天里动三遍就停，点一下再动：一直动的话，玻璃底下整屏每帧都得重画。
   消息里的表情包只是几个字 `[[sticker:名字]]`，图不进请求：TA 发一张花的是这几个字的钱，看不了图的模型也知道你发了什么。
@@ -139,3 +144,14 @@ keyPassword=...
 
 国内网络拉 Google Maven（dl.google.com）要代理，可以在命令行加
 `-Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890`。
+
+## 用到的别人的东西
+
+- 语音条「在耳边」的数据：J. M. Arend, A. Neidhardt, C. Pörschmann, *Spherical Near-Field (NF) HRIR Compilation of the Neumann KU100*,
+  Zenodo 2020, [doi:10.5281/zenodo.4297951](https://doi.org/10.5281/zenodo.4297951)，**CC BY 4.0**。
+  `app/src/main/assets/hrir/ku100_near.bin` 由 [binaural-voice](https://github.com/Saekisui/binaural-voice) 里的
+  `ku100_nearfield_circ360.npz` 转来（`tools/convert_hrir.py`）：只留水平面 0.25 / 0.5 / 0.75 米三档，乘上数据集给的距离增益，改成 16 位整数存。
+  说明在同目录的 `README.txt`，App 的「关于 → 看许可全文」里也有。
+- 语音绕着头走的做法移植自 [binaural-voice](https://github.com/Saekisui/binaural-voice)，MIT 许可，Copyright (c) 2026 Saekisui；
+  许可全文在 `app/src/main/assets/licenses/binaural-voice.txt`，App 里同样能看到。
+- 表情包的做法参考了 [cute-chat-stickers](https://github.com/Anko3o/cute-chat-stickers) 的思路（没用它的代码和数据）。

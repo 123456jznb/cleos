@@ -89,6 +89,8 @@ data class AppSettings(
     val speechMcpTool: String = "",
     val speechMcpTextParam: String = "text",
     val speechMcpArgs: String = "",
+    /** The TA's voice messages played beside the ear when headphones are on (EarVoice). */
+    val earVoice: Boolean = true,
 )
 
 /**
@@ -163,6 +165,7 @@ class SettingsRepository(private val context: Context) {
         val speechMcpTool = stringPreferencesKey("speech_mcp_tool")
         val speechMcpTextParam = stringPreferencesKey("speech_mcp_text_param")
         val speechMcpArgs = stringPreferencesKey("speech_mcp_args")
+        val earVoice = booleanPreferencesKey("ear_voice")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
         val morningGreeted = longPreferencesKey("morning_greeted")
@@ -207,6 +210,7 @@ class SettingsRepository(private val context: Context) {
             speechMcpTool = this[Keys.speechMcpTool] ?: d.speechMcpTool,
             speechMcpTextParam = this[Keys.speechMcpTextParam] ?: d.speechMcpTextParam,
             speechMcpArgs = this[Keys.speechMcpArgs] ?: d.speechMcpArgs,
+            earVoice = this[Keys.earVoice] ?: d.earVoice,
         )
     }
 
@@ -245,6 +249,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.speechMcpTool] = next.speechMcpTool
             prefs[Keys.speechMcpTextParam] = next.speechMcpTextParam
             prefs[Keys.speechMcpArgs] = next.speechMcpArgs
+            prefs[Keys.earVoice] = next.earVoice
         }
     }
 

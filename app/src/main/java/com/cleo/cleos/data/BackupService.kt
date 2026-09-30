@@ -74,6 +74,7 @@ data class BackupSettings(
     val speechMcpTool: String = "",
     val speechMcpTextParam: String = "text",
     val speechMcpArgs: String = "",
+    val earVoice: Boolean = true,
 )
 
 /** The backup format: one zip, `backup.json` plus the pictures under `images/`. */
@@ -217,6 +218,7 @@ class BackupService(
                 speechMcpTool = s.speechMcpTool,
                 speechMcpTextParam = s.speechMcpTextParam,
                 speechMcpArgs = s.speechMcpArgs,
+                earVoice = s.earVoice,
                 knownSince = lead?.knownSince,
             ),
             conversations = db.conversations().all(),
@@ -380,6 +382,7 @@ class BackupService(
                     speechMcpTool = bs.speechMcpTool,
                     speechMcpTextParam = bs.speechMcpTextParam,
                     speechMcpArgs = bs.speechMcpArgs,
+                    earVoice = bs.earVoice,
                 )
             }
             settings.setCurrentCompanion(companions.first().id)

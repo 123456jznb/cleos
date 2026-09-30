@@ -305,8 +305,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             speechResult = try {
                 val clip = c.speaker.speak(s, Speech.SAMPLE)
-                play(c.images.file(clip.file))
-                "能用，正在放（${Voice.duration(clip.ms)}）。"
+                // Heard the way the TA's messages will be: beside the ear, on headphones.
+                val ear = if (settings.value.earVoice && c.ear.headphones()) c.ear.prepared(clip.file) else null
+                play(c.images.file(clip.file), ear)
+                "能用，正在放（${Voice.duration(clip.ms)}${if (ear != null) "，戴着耳机，在耳边" else ""}）。"
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -316,23 +318,27 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** Plays a try-out, then throws it away. */
-    private fun play(file: File) {
+    /** Plays a try-out ([ear], what was made of it for the ear, when there is that), then throws both away. */
+    private fun play(file: File, ear: File? = null) {
         speechPlayer?.release()
         val p = MediaPlayer()
+        fun gone() {
+            file.delete()
+            if (ear != null) c.ear.forget(file.name)
+        }
         runCatching {
-            p.setDataSource(file.path)
+            p.setDataSource((ear ?: file).path)
             p.setOnCompletionListener {
                 it.release()
                 if (speechPlayer === it) speechPlayer = null
-                file.delete()
+                gone()
             }
             p.prepare()
             p.start()
             speechPlayer = p
         }.onFailure {
             p.release()
-            file.delete()
+            gone()
             throw it
         }
     }
@@ -506,6 +512,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** The colour of the person's own bubbles (ARGB); null follows the wallpaper. */
     fun setMyBubble(argb: Int?) {
         viewModelScope.launch { c.settings.update { it.copy(myBubble = argb) } }
+    }
+
+    /** The TA's voice messages beside the ear on headphones (EarVoice). */
+    fun setEarVoice(on: Boolean) {
+        viewModelScope.launch { c.settings.update { it.copy(earVoice = on) } }
     }
 
     var backupBusy by mutableStateOf(false)

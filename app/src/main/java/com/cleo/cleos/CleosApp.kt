@@ -8,6 +8,7 @@ import androidx.room.Room
 import com.cleo.cleos.ai.AiSelfAvatar
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.EarVoice
 import com.cleo.cleos.ai.Glance
 import com.cleo.cleos.ai.Later
 import com.cleo.cleos.ai.Letters
@@ -109,6 +110,9 @@ class AppContainer(context: Context) {
     )
     val transcriber = Transcriber(http, secrets)
     val speaker = Speaker(images, http, secrets, mcp)
+
+    /** The TA's voice messages beside the ear, on headphones. */
+    val ear = EarVoice(context, images)
     val chat: ChatRepository = ChatRepository(
         db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope,
         // A reply finished where the person isn't looking (they left, or went to another page): as a notification.

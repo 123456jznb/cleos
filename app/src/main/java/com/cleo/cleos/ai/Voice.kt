@@ -51,8 +51,8 @@ object Voice {
     fun text(body: String): String? =
         runCatching { ((json.parseToJsonElement(body) as JsonObject)["text"] as? JsonPrimitive)?.contentOrNull }.getOrNull()
 
-    /** The 44-byte header of a WAV file holding [dataBytes] of 16-bit mono PCM at [rate]. */
-    fun wavHeader(dataBytes: Int, rate: Int = RATE): ByteArray =
+    /** The 44-byte header of a WAV file holding [dataBytes] of 16-bit PCM at [rate], mono unless [channels] says. */
+    fun wavHeader(dataBytes: Int, rate: Int = RATE, channels: Int = 1): ByteArray =
         ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray())
             putInt(36 + dataBytes)
@@ -60,10 +60,10 @@ object Voice {
             put("fmt ".toByteArray())
             putInt(16)
             putShort(1) // PCM
-            putShort(1) // mono
+            putShort(channels.toShort())
             putInt(rate)
-            putInt(rate * 2) // bytes a second
-            putShort(2) // bytes a frame
+            putInt(rate * 2 * channels) // bytes a second
+            putShort((2 * channels).toShort()) // bytes a frame
             putShort(16) // bits a sample
             put("data".toByteArray())
             putInt(dataBytes)
