@@ -85,6 +85,18 @@ class MusicTest {
     }
 
     @Test
+    fun onlyMusicAppsAreListenedTo() {
+        assertTrue(MusicApps.counts("com.tencent.qqmusic"))
+        assertTrue(MusicApps.counts("com.netease.cloudmusic"))
+        assertTrue(MusicApps.counts("com.spotify.music"))
+        // Video apps tell the system what they play too: a caption is not a song.
+        assertFalse(MusicApps.counts("com.ss.android.ugc.aweme"))
+        assertFalse(MusicApps.counts("tv.danmaku.bili"))
+        assertFalse(MusicApps.counts("com.google.android.youtube"))
+        assertFalse(MusicApps.counts("com.android.chrome"))
+    }
+
+    @Test
     fun aPlayersOwnLyricInfoGivesTheRealSongAndItsWords() {
         // As ColorOS reads it (ColorOS-Live-Lyrics-Bridge's example), and QQ 音乐 publishes it.
         val own = PlayerLyrics.parse(

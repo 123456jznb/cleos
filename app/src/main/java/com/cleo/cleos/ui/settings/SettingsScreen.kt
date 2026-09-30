@@ -353,7 +353,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     "一起听歌",
                     "你用手机上的音乐 App 放歌时（网易云、QQ 音乐、酷狗都行），TA 知道在放哪首、唱到哪句，像在旁边一起听；" +
                         "聊天页顶上会有一条小播放条。你让 TA 停一下、换一首，它也能帮你切。" +
-                        "要开一次「通知使用权」：只用来看在放什么歌，不读你的通知。",
+                        "只认音乐 App，抖音、B 站这类放视频的不会读。要开一次「通知使用权」：只用来看在放什么歌，不读你的通知。",
                     ToolGroup.Music in settings.tools,
                 ) { on ->
                     vm.setTool(ToolGroup.Music, on)

@@ -4,6 +4,7 @@ import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -68,6 +69,35 @@ interface MusicSource {
 
     /** Throws [ToolFailure] when there is nothing to control. */
     fun control(action: MusicAction)
+}
+
+/**
+ * The players whose music counts: a known list, not whatever plays. Any app that plays anything
+ * can tell the system what it plays, and 抖音 does (on the phone, active beside QQ 音乐): its
+ * "song" would be a video's caption and whoever posted it, going to the TA and onto the chat's
+ * bar. Only music is listened to together, and only music is paused or skipped. A player missing
+ * from here is added when someone finds theirs isn't picked up.
+ */
+object MusicApps {
+    private val known = setOf(
+        // 国内
+        "com.tencent.qqmusic", "com.tencent.qqmusicpad", "com.tencent.qqmusiclite",
+        "com.netease.cloudmusic", "com.hihonor.cloudmusic",
+        "com.kugou.android", "com.kugou.android.lite",
+        "cn.kuwo.player", "cn.wenyu.bodian",
+        "com.luna.music", "cmccwm.mobilemusic",
+        // 手机自带的
+        "com.heytap.music", "com.oppo.music", "com.oneplus.music", "com.miui.player", "com.huawei.music",
+        "com.hihonor.music", "com.android.bbkmusic", "com.sec.android.app.music",
+        // 本地播放器
+        "com.salt.music", "cn.toside.music.mobile", "com.ikunshare.music.mobile", "com.maxmpz.audioplayer",
+        "in.krosbits.musicolet", "code.name.monkey.retromusic",
+        // 国外
+        "com.spotify.music", "com.apple.android.music", "com.google.android.apps.youtube.music", "com.amazon.mp3",
+        "com.soundcloud.android", "deezer.android.app", "com.aspiro.tidal", "com.metrolist.music",
+    )
+
+    fun counts(player: String): Boolean = player in known
 }
 
 /** What the TA reads about the music, and what music_control says back. */
@@ -135,6 +165,11 @@ object MusicText {
  */
 class PhoneMusic(private val context: Context) : MusicSource {
     private val listener = ComponentName(context, NowPlayingListener::class.java)
+
+    /** A build being tried out also takes the stand-in player it is tried with. */
+    private val trying = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+    private fun counts(player: String) = MusicApps.counts(player) || (trying && player == TEST_PLAYER)
     private val manager get() = context.getSystemService(MediaSessionManager::class.java)
 
     override fun allowed(): Boolean = allowed(context)
@@ -142,7 +177,7 @@ class PhoneMusic(private val context: Context) : MusicSource {
     private fun controllers(): List<MediaController> {
         if (!allowed()) return emptyList()
         return runCatching { manager.getActiveSessions(listener) }.getOrDefault(emptyList())
-            .filter { it.packageName != context.packageName }
+            .filter { counts(it.packageName) }
     }
 
     override fun now(): NowPlaying? = pick(controllers().map { Seen(it) })?.let(::describe)
@@ -192,7 +227,7 @@ class PhoneMusic(private val context: Context) : MusicSource {
         }
         fun follow(list: List<MediaController>) {
             watched.forEach { it.controller.unregisterCallback(it.callback) }
-            watched = list.filter { it.packageName != context.packageName }.map { c ->
+            watched = list.filter { counts(it.packageName) }.map { c ->
                 Seen(c).also { seen ->
                     seen.callback = object : MediaController.Callback() {
                         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -289,6 +324,7 @@ class PhoneMusic(private val context: Context) : MusicSource {
 
     companion object {
         private const val TAG = "PhoneMusic"
+        private const val TEST_PLAYER = "com.cleo.testplayer"
 
         fun allowed(context: Context): Boolean = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
 
