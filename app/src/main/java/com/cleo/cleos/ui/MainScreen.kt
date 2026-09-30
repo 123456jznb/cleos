@@ -1,6 +1,9 @@
 package com.cleo.cleos.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoStories
@@ -33,8 +37,11 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.Opening
 import com.cleo.cleos.glass.GlassTab
@@ -74,6 +81,22 @@ fun MainScreen(
             c.opening.value = null
         }
     }
+    // Tab pages slide across rather than cutting. `from` is the page being left and
+    // `slide` runs 0..1; while they differ both pages exist, and only then.
+    var from by remember { mutableIntStateOf(tab) }
+    val slide = remember { Animatable(1f) }
+    var pageWidth by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tab) {
+        val target = tab
+        if (from == target) return@LaunchedEffect
+        slide.snapTo(0f)
+        slide.animateTo(1f, tween(300, easing = FastOutSlowInEasing))
+        // Left until the end on purpose: it is what keeps the outgoing page alive, and
+        // if this coroutine is cancelled by another tap it stays put, so the next slide
+        // starts from the page actually on screen instead of jumping.
+        from = target
+    }
+
     val holder = rememberSaveableStateHolder()
     val page = rememberBackdrop()
     val density = LocalDensity.current
@@ -93,15 +116,45 @@ fun MainScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                .onSizeChanged { pageWidth = it.width }
                 .backdropSource(page, behind = LocalWallpaperBackdrop.current, overscan = WallpaperOverscan),
         ) {
-            holder.SaveableStateProvider(tab) {
-                when (tab) {
-                    0 -> ChatTab(bottomInset, onOpenSettings, onOpenConversations, onOpenImage)
-                    1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
-                    2 -> TodoTab(bottomInset, onOpenSettings)
-                    else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters, onOpenMemory)
+            @Composable
+            fun Page(index: Int, shift: () -> Float) {
+                Box(
+                    // ⚠️ `offset` with a lambda, not a transform. It moves the page by
+                    // **placing it somewhere else**, which is a real layout position, so
+                    // the glass inside the page is told it moved and re-reads the
+                    // wallpaper under its new spot. A page slid by a transform would keep
+                    // refracting the wallpaper from where it started — the reason
+                    // CleosNavHost cross-fades instead of sliding.
+                    //
+                    // Reading the animation in here and nowhere else also keeps the whole
+                    // page out of recomposition: it is re-placed each frame, not rebuilt.
+                    Modifier.fillMaxSize().offset {
+                        IntOffset((shift() * pageWidth).roundToInt(), 0)
+                    },
+                ) {
+                    holder.SaveableStateProvider(index) {
+                        when (index) {
+                            0 -> ChatTab(bottomInset, onOpenSettings, onOpenConversations, onOpenImage)
+                            1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
+                            2 -> TodoTab(bottomInset, onOpenSettings)
+                            else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters, onOpenMemory)
+                        }
+                    }
                 }
+            }
+
+            if (from == tab) {
+                Page(tab) { 0f }
+            } else {
+                // Only these two are ever on screen: tab 0 to tab 3 slides once, it does
+                // not flip through 1 and 2 — they would show for a few frames, each
+                // paying to build itself, for a glimpse nobody asked for.
+                val dir = if (tab > from) 1f else -1f
+                Page(from) { -slide.value * dir }
+                Page(tab) { (1f - slide.value) * dir }
             }
         }
         // The keyboard covers the bar anyway; sliding it away lets the input sit on the keys.
