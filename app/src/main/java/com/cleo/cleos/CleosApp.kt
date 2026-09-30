@@ -33,6 +33,7 @@ import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.McpServers
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
+import com.cleo.cleos.data.Stickers
 import com.cleo.cleos.data.db.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +115,7 @@ class AppContainer(context: Context) {
         replied = { ta, conversationId, said -> if (!(visible && chatOnScreen == conversationId)) notifier.messages(ta, conversationId, said) },
         listening = { Listening(music, lyrics).line() },
     )
+    val stickers = Stickers(context, db, images)
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
     val notifier = Notifier(context, images)

@@ -16,7 +16,10 @@ import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
+import com.cleo.cleos.data.PickedSticker
+import com.cleo.cleos.data.StickerException
 import com.cleo.cleos.data.db.MessageEntity
+import com.cleo.cleos.data.db.StickerEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +61,13 @@ data class ChatUiState(
     val voiceReady: Boolean = false,
     val loaded: Boolean = false,
 )
+
+/** A sticker in the naming dialog: a picture just picked, or one already in the collection. */
+sealed interface StickerDraft {
+    data class New(val picked: PickedSticker) : StickerDraft
+
+    data class Edit(val sticker: StickerEntity) : StickerDraft
+}
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val conversationId = MutableStateFlow<Long?>(null)
@@ -175,11 +185,75 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return true
     }
 
+    /**
+     * A sticker from the drawer, at once, on its own, the way chat apps send them: with the quote
+     * waiting if there is one, while typed words and picked pictures stay for the next message.
+     */
+    fun sendSticker(sticker: StickerEntity): Boolean {
+        val id = conversationId.value ?: return false
+        if (!c.chat.sendSticker(id, sticker.name, quoting)) return false
+        quoting = null
+        return true
+    }
+
+    /** Puts [emoji] on one of the TA's messages, or takes it off again. */
+    fun react(messageId: Long, emoji: String) = c.chat.react(messageId, emoji)
+
+    /** A sticker being named (one just picked) or renamed; null when none is. */
+    var stickerDraft by mutableStateOf<StickerDraft?>(null)
+        private set
+
+    /** What is wrong with the name tried last, shown in the dialog. */
+    var stickerProblem by mutableStateOf<String?>(null)
+        private set
+
+    /** A picture from the gallery to become a sticker: copied in, then named ([saveSticker]). */
+    fun pickSticker(uri: Uri, onFail: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val picked = c.stickers.import(uri)
+                stickerProblem = null
+                stickerDraft = StickerDraft.New(picked)
+            } catch (e: StickerException) {
+                onFail(e.message ?: "这张图用不了")
+            }
+        }
+    }
+
+    fun renameSticker(sticker: StickerEntity) {
+        stickerProblem = null
+        stickerDraft = StickerDraft.Edit(sticker)
+    }
+
+    fun saveSticker(name: String, description: String) {
+        val draft = stickerDraft ?: return
+        viewModelScope.launch {
+            val problem = when (draft) {
+                is StickerDraft.New -> c.stickers.add(draft.picked, name, description)
+                is StickerDraft.Edit -> c.stickers.edit(draft.sticker.id, name, description)
+            }
+            stickerProblem = problem
+            if (problem == null && stickerDraft == draft) stickerDraft = null
+        }
+    }
+
+    /** The dialog closed without saving: a picture picked for it goes again. */
+    fun dropStickerDraft() {
+        (stickerDraft as? StickerDraft.New)?.let { c.stickers.discard(it.picked) }
+        stickerDraft = null
+        stickerProblem = null
+    }
+
+    fun deleteSticker(sticker: StickerEntity) {
+        viewModelScope.launch { c.stickers.delete(sticker.id) }
+    }
+
     override fun onCleared() {
         conversationId.value?.let { c.chat.typing(it, false) }
         // Picked but never sent: nothing will ever point at these files.
         val unsent = attachments.map { it.file }
         if (unsent.isNotEmpty()) c.appScope.launch { c.images.delete(unsent) }
+        (stickerDraft as? StickerDraft.New)?.let { c.stickers.discard(it.picked) }
     }
 
     fun stop() {

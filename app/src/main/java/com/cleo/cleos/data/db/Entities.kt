@@ -235,6 +235,31 @@ data class MessageEntity(
     /** "assistant": said on the TA's own when something it noted came due, not in answer to anything. */
     @ColumnInfo(defaultValue = "0")
     val proactive: Boolean = false,
+    /** "assistant": the emoji the person stuck on it from the long-press menu (MessageReaction list as JSON). */
+    val reactions: String? = null,
+)
+
+/**
+ * A sticker in the person's collection, which both sides send from. A message carries it as a
+ * few words, [[sticker:name]] (StickerText), never as the picture: the model knows it by [name]
+ * and [description], and a sticker costs what those words cost. Shared by every TA.
+ */
+@Serializable
+@Entity(tableName = "stickers")
+data class StickerEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** What it is called in a message; no other sticker has it as its name or among its [aliases]. */
+    val name: String,
+    /** One line saying what is in the picture, for the TA, who never sees it. */
+    val description: String = "",
+    /** A file in ImageStore, as it was picked when it moves (GIF, WebP), else downscaled. */
+    val file: String,
+    val width: Int,
+    val height: Int,
+    val animated: Boolean = false,
+    /** Names it had before (a JSON array): messages sent under one still show it. */
+    val aliases: String = "[]",
+    val createdAt: Long,
 )
 
 @Serializable

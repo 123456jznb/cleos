@@ -56,6 +56,7 @@ data class AppSettings(
         ToolGroup.Letters,
         ToolGroup.Memory,
         ToolGroup.Alarm,
+        ToolGroup.Stickers,
     ),
     /** Where "今天天气怎么样" means, when the model isn't told a city. */
     val weatherCity: String = "",

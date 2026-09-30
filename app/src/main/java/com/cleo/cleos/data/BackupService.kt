@@ -11,6 +11,7 @@ import com.cleo.cleos.ai.ReplyWhen
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
+import com.cleo.cleos.data.db.StickerEntity
 import com.cleo.cleos.data.db.TodoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -93,6 +94,8 @@ data class BackupFile(
     val letters: List<LetterEntity> = emptyList(),
     /** Absent in backups from before TAs kept memories. */
     val memories: List<MemoryEntity> = emptyList(),
+    /** Absent in backups from before there were stickers; their pictures are under `images/` with the rest. */
+    val stickers: List<StickerEntity> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "cleos-backup"
@@ -109,10 +112,12 @@ data class BackupSummary(
     val todos: Int,
     val images: Int,
     val voices: Int = 0,
+    val stickers: Int = 0,
 ) {
     override fun toString() =
         "$tas 个 TA、$conversations 段对话（$messages 条消息）、$diary 篇日记、$letters 封信、$todos 条待办、$images 张图" +
-            if (voices > 0) "、$voices 段语音" else ""
+            (if (voices > 0) "、$voices 段语音" else "") +
+            if (stickers > 0) "、$stickers 个表情包" else ""
 }
 
 /** Recordings are named voice_…, among the pictures (VoiceRecorder). */
@@ -221,16 +226,20 @@ class BackupService(
             companions = companions,
             letters = db.letters().all(),
             memories = db.memories().all(),
+            stickers = db.stickers().all(),
         )
+        val stickerFiles = data.stickers.map { it.file }.toSet()
         val pictures = (data.diary.flatMap { e -> DiaryBlocks.images(DiaryBlocks.decode(e.blocks)).map { it.file } } +
             data.messages.flatMap { m -> MessageImages.decode(m.images).map { it.file } } +
             // Recordings live with the pictures and travel the same way.
             data.messages.mapNotNull { m -> MessageAudios.decode(m.audio)?.file } +
             companions.mapNotNull { it.avatar } +
+            stickerFiles +
             listOfNotNull(s.wallpaper, s.userAvatar)).toSet()
 
         var written = 0
         var voices = 0
+        var stickers = 0
         ZipOutputStream(BufferedOutputStream(raw)).use { zip ->
             zip.putNextEntry(ZipEntry(JSON_NAME))
             zip.write(json.encodeToString(data).toByteArray(Charsets.UTF_8))
@@ -241,10 +250,17 @@ class BackupService(
                 zip.putNextEntry(ZipEntry("images/$name"))
                 f.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
-                if (name.startsWith(VOICE_PREFIX)) voices++ else written++
+                when {
+                    name.startsWith(VOICE_PREFIX) -> voices++
+                    name in stickerFiles -> stickers++
+                    else -> written++
+                }
             }
         }
-        return BackupSummary(companions.size, data.conversations.size, data.messages.size, data.diary.size, data.letters.size, data.todos.size, written, voices)
+        return BackupSummary(
+            companions.size, data.conversations.size, data.messages.size, data.diary.size, data.letters.size, data.todos.size,
+            written, voices, stickers,
+        )
     }
 
     private suspend fun restoreFrom(input: InputStream, takeSnapshot: Boolean): BackupSummary {
@@ -308,6 +324,8 @@ class BackupService(
             val diary = d.diary.map {
                 if (it.author == DiaryEntryEntity.AUTHOR_AI && it.companionId == null) it.copy(companionId = Companions.FIRST) else it
             }
+            // A sticker is its picture: one whose file didn't come along would be a name drawn as nothing.
+            val stickers = d.stickers.filter { images.file(it.file).exists() }
             db.withTransaction {
                 // What TAs noted to come back to, and what came of it: not in backups, and about
                 // conversations that are about to go.
@@ -319,6 +337,7 @@ class BackupService(
                 db.todos().clear()
                 db.letters().clear()
                 db.memories().clear()
+                db.stickers().clear()
                 db.companions().clear()
                 db.companions().insertAll(companions)
                 db.conversations().insertAll(d.conversations)
@@ -327,6 +346,7 @@ class BackupService(
                 db.todos().insertAll(d.todos)
                 db.letters().insertAll(d.letters)
                 db.memories().insertAll(d.memories)
+                db.stickers().insertAll(stickers)
             }
             settings.update {
                 it.copy(
@@ -364,7 +384,10 @@ class BackupService(
             }
             settings.setCurrentCompanion(companions.first().id)
             settings.setCurrentConversation(null)
-            return BackupSummary(companions.size, d.conversations.size, d.messages.size, d.diary.size, d.letters.size, d.todos.size, pictures.size)
+            return BackupSummary(
+                companions.size, d.conversations.size, d.messages.size, d.diary.size, d.letters.size, d.todos.size,
+                pictures.size - stickers.size, stickers = stickers.size,
+            )
         } finally {
             staging.deleteRecursively()
         }

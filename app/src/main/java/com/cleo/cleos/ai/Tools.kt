@@ -38,9 +38,11 @@ import java.util.Locale
  * the person's diary; [AiDiary] is the model's own entries, writing and reading back.
  * [Later] is not among the switches in settings: a TA gets it while its own "reach out"
  * switch is on (CompanionEntity.proactive), and it is never stored with the others. [Alarm] is
- * the phone's clock app; [Calendar] the phone's calendar.
+ * the phone's clock app; [Calendar] the phone's calendar. [Stickers] has no tool at all: the TA
+ * writes a sticker's name into what it says, so it is told about apart from the tools, and a model
+ * that takes no tools sends them too.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar, Music }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar, Music, Stickers }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a

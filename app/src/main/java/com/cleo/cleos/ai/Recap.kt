@@ -5,6 +5,7 @@ import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
@@ -120,7 +121,7 @@ object Recap {
     }.trimEnd()
 
     private fun lineOf(m: MessageEntity): String? {
-        fun said(text: String) = text.trim().replace('\n', ' ').take(LINE_MAX)
+        fun said(text: String) = StickerText.plain(text).trim().replace('\n', ' ').take(LINE_MAX)
         return when {
             m.error != null -> null
             // The person's answer to a request for a secret: the line the chat shows, not the entry.

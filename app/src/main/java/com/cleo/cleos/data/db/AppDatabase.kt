@@ -22,8 +22,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemoryEntity::class,
         LaterEntity::class,
         WakeEntity::class,
+        StickerEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -53,6 +54,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         // 12 -> 13: what TAs note to come back to, and what came of it (two tables); whether each
         // TA may reach out on its own (on to begin with); which messages it sent that way (none yet).
         AutoMigration(from = 12, to = 13),
+        // 13 -> 14: the sticker collection (a table), and the emoji stuck on messages (a nullable column).
+        AutoMigration(from = 13, to = 14),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -65,6 +68,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun memories(): MemoryDao
     abstract fun later(): LaterDao
     abstract fun wakes(): WakeDao
+    abstract fun stickers(): StickerDao
 
     /**
      * Before version 5 there was one TA, so every entry a TA wrote was TA 1's. (Conversations

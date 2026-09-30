@@ -26,7 +26,8 @@ object MessageQuotes {
     /** A quote of [m], or null when there is nothing in it to quote (a line, a card). */
     fun of(m: MessageEntity): MessageQuote? {
         if ((m.role != "user" && m.role != "assistant") || m.note != null) return null
-        val words = m.content.trim()
+        // A sticker is quoted by its name: the picture isn't kept with the quote.
+        val words = StickerText.plain(m.content).trim()
         val pictures = MessageImages.decode(m.images).size
         val text = when {
             words.isNotEmpty() -> words

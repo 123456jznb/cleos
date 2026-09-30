@@ -9,10 +9,13 @@ import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
+import com.cleo.cleos.data.MessageReactions
 import com.cleo.cleos.data.MessageThought
 import com.cleo.cleos.data.MessageThoughts
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
+import com.cleo.cleos.data.StickerBook
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
@@ -32,6 +35,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -295,12 +300,18 @@ class ChatRepository(
     /**
      * The tools [ta] gets: the ones switched on, send_voice only once there is a voice to speak
      * with, and note_for_later only while it may reach out on its own (a switch of its own, not
-     * one of the shared ones).
+     * one of the shared ones). Stickers are not a tool: they go along even when tools can't
+     * ([stickersFor]), and a request asking for no tools but stickers would still count as one
+     * with tools, and be refused over and over by a model that takes none.
      */
     private fun groupsFor(s: AppSettings, ta: CompanionEntity): Set<ToolGroup> {
-        val on = if (Speech.ready(s)) s.tools else s.tools - ToolGroup.Speak
+        val on = (if (Speech.ready(s)) s.tools else s.tools - ToolGroup.Speak) - ToolGroup.Stickers
         return if (ta.proactive) on + ToolGroup.Later else on
     }
+
+    /** The collection, read once for a request, and whether the TA may send from it (its switch). */
+    private suspend fun stickersFor(s: AppSettings): Pair<StickerBook, Boolean> =
+        StickerBook(db.stickers().all()) to (ToolGroup.Stickers in s.tools)
 
     /**
      * A voice message: stored at once, so it shows while it is being turned into text, then
@@ -373,12 +384,34 @@ class ChatRepository(
             )
             val conversation = db.conversations().get(conversationId)
             if (conversation != null && conversation.title == DEFAULT_TITLE) {
-                db.conversations().rename(conversationId, content.lineSequence().first().take(24).ifBlank { "[图片]" })
+                db.conversations().rename(conversationId, StickerText.plain(content).lineSequence().first().take(24).ifBlank { "[图片]" })
             }
             db.conversations().touch(conversationId, at)
             answerSoon(conversationId)
         }
         return true
+    }
+
+    /** A sticker from the drawer: sent as its name, the way the TA sends them (StickerText). */
+    fun sendSticker(conversationId: Long, name: String, quote: MessageQuote? = null): Boolean =
+        send(conversationId, StickerText.token(name), quote = quote)
+
+    /** Taken one at a time: two quick taps must not each put back what the other changed. */
+    private val reacting = Mutex()
+
+    /**
+     * Puts [emoji] on the TA's message [messageId], or takes it off when it is on. Nothing is
+     * answered: the TA hears of it with the person's next message (Prompt), the way a reaction in
+     * a chat app is seen without being a message of its own.
+     */
+    fun react(messageId: Long, emoji: String) {
+        scope.launch {
+            reacting.withLock {
+                val m = db.messages().get(messageId)?.takeIf { it.role == "assistant" } ?: return@withLock
+                val next = MessageReactions.toggle(MessageReactions.decode(m.reactions), emoji, stamp())
+                db.messages().setReactions(messageId, MessageReactions.encode(next))
+            }
+        }
     }
 
     /** Throw away [assistantMessageId] (a failed or unwanted reply) and ask again. */
@@ -531,7 +564,11 @@ class ChatRepository(
         var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta) - ToolGroup.Music
         var thinking = ta.deepThinking && endpointKey !in refusesThinking
         val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
-        fun build() = Prompt.withWake(Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap), instruction)
+        val (stickers, sendStickers) = stickersFor(s)
+        fun build() = Prompt.withWake(
+            Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap, stickers = stickers, sendStickers = sendStickers),
+            instruction,
+        )
         var messages = build()
         var rounds = 0
         suspend fun sent() = db.messages().proactiveSince(conversationId, since)
@@ -644,7 +681,10 @@ class ChatRepository(
             // The song playing as this reply begins, told beside the time. Asked for even when the model
             // takes no tools: it is something to know, not something to do.
             val heard = if (ToolGroup.Music in s.tools) runCatching { listening() }.getOrNull() else null
-            fun build() = Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what }, heard)
+            val (stickers, sendStickers) = stickersFor(s)
+            fun build() = Prompt.messages(
+                s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what }, heard, stickers, sendStickers,
+            )
             var messages = prepare(build())
             var rounds = 0
             // What the last refusal made this reply leave out, and when.

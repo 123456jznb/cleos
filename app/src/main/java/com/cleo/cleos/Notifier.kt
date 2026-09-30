@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.graphics.drawable.IconCompat
 import com.cleo.cleos.data.ImageStore
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MessageEntity
@@ -82,11 +83,11 @@ class Notifier(private val context: Context, private val images: ImageStore) {
             .apply { avatar(ta)?.let { setIcon(IconCompat.createWithBitmap(it)) } }
             .build()
         val style = NotificationCompat.MessagingStyle(Person.Builder().setName("我").build())
-        for (m in sent) style.addMessage(if (m.audio != null) "[语音] ${m.content}" else m.content, m.createdAt, them)
+        for (m in sent) style.addMessage(if (m.audio != null) "[语音] ${m.content}" else StickerText.plain(m.content), m.createdAt, them)
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(name)
-            .setContentText(sent.last().content)
+            .setContentText(StickerText.plain(sent.last().content))
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

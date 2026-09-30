@@ -4,8 +4,12 @@ import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
+import com.cleo.cleos.data.MessageReactions
+import com.cleo.cleos.data.StickerBook
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
+import com.cleo.cleos.data.db.StickerEntity
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import com.cleo.cleos.data.db.MemoryEntity
@@ -55,10 +59,23 @@ object Prompt {
     /** How much of a quoted message the model is shown: enough to know which one it is. */
     private const val QUOTE_SHOWN = 100
 
+    /** How much of a message the person stuck an emoji on the model is shown: which one it was. */
+    private const val REACTED_SHOWN = 20
+
     /**
-     * What changes as the conversation goes on comes last: what the TA remembers, which
-     * changes whenever they remember something, then the [recap], which changes every so many
-     * messages. Everything before stays the same, so the cached prefix survives both.
+     * Stickers go as names (StickerText): the model never sees the pictures, only this list of what
+     * is in them. "Not every time" because a model told it can send stickers sends one with every
+     * message; the person's are written the same way, so it reads them the way it writes its own.
+     */
+    private const val STICKER_RULE =
+        "你可以发表情包：单独写一行 [[sticker:名字]]，对方看到的就是那张图。名字照下面的一字不差地写，别编没有的；" +
+            "一次最多发一张，不用每次都发，想发的时候再发。对方发来的表情包也是这样写的。你的表情包（名字：图里是什么）："
+
+    /**
+     * What changes as the conversation goes on comes last: the [stickers] the TA may send, which
+     * change when the person adds one, then what the TA remembers, which changes whenever they
+     * remember something, then the [recap], which changes every so many messages. Everything
+     * before stays the same, so the cached prefix survives all three.
      */
     fun system(
         settings: AppSettings,
@@ -68,12 +85,14 @@ object Prompt {
         zone: ZoneId = ZoneId.systemDefault(),
         recap: String? = null,
         outside: List<McpTool> = emptyList(),
+        stickers: List<StickerEntity> = emptyList(),
     ): String = buildList {
         if (ta.name.isNotBlank()) add("你叫${ta.name.trim()}。")
         if (settings.userName.isNotBlank()) add("和你说话的人叫${settings.userName.trim()}。")
         if (ta.persona.isNotBlank()) add(ta.persona.trim())
         toolRule(tools, outside)?.let(::add)
         add(FORMAT_RULE)
+        if (stickers.isNotEmpty()) add(STICKER_RULE + "\n" + StickerText.menu(stickers))
         if (ToolGroup.Memory in tools) MemoryDigest.forChat(memories, zone)?.let(::add)
         Recap.forChat(recap)?.let(::add)
     }.joinToString("\n\n")
@@ -146,7 +165,8 @@ object Prompt {
      * without tool support can read a conversation that used them. With [images] false
      * no picture is attached (the text still says one was sent). [due]: what the TA noted that
      * has come due, said beside the time (LaterRules.dueLine). [listening]: the song playing,
-     * likewise (MusicText.listening).
+     * likewise (MusicText.listening). [stickers]: the collection; the TA is offered it with
+     * [sendStickers] (its switch), and without, the person's stickers are told in words.
      */
     fun messages(
         settings: AppSettings,
@@ -160,10 +180,14 @@ object Prompt {
         outside: List<McpTool> = emptyList(),
         due: List<String> = emptyList(),
         listening: String? = null,
+        stickers: StickerBook = StickerBook.EMPTY,
+        sendStickers: Boolean = false,
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
-        val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached)?.let { m.id to it } }
+        val words: (String) -> String = if (sendStickers) { text -> text } else { text -> StickerText.described(text, stickers) }
+        val reacted = reactions(history)
+        val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached, words, reacted)?.let { m.id to it } }
         val sendable = asSentMessages(converted, texts = ToolGroup.Messages in tools, voices = ToolGroup.Speak in tools)
         val paired = if (withTools) pairCalls(sendable) else sendable
         // The window can start mid-exchange; begin at a user turn, which every endpoint accepts.
@@ -194,7 +218,42 @@ object Prompt {
             val heard = listening?.let { "$it\n" }.orEmpty()
             merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$heard$noted${it.content}") }
         }
-        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside))) + merged
+        val offered = if (sendStickers) stickers.all else emptyList()
+        return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside, offered))) + merged
+    }
+
+    /**
+     * What the person stuck on the TA's messages, by the message of theirs that came next: that is
+     * when the TA hears of it, in the order things happened, and there it stays from one request to
+     * the next (the cached prefix with it). One put on after their last message waits for the next.
+     * Only what is in [history] is told: a reaction on a message long gone from it is let go.
+     */
+    private fun reactions(history: List<MessageEntity>): Map<Long, List<String>> {
+        // The person's messages the model gets to read: one with nothing in it yet (a voice
+        // message not turned into words) would take the line with it.
+        val theirs = history.filter { it.role == "user" && (it.content.isNotBlank() || it.images != null) }
+        if (theirs.isEmpty()) return emptyMap()
+        val out = HashMap<Long, MutableList<String>>()
+        for (m in history) {
+            if (m.role != "assistant") continue
+            val list = MessageReactions.decode(m.reactions)
+            if (list.isEmpty()) continue
+            list.groupBy { r -> theirs.firstOrNull { it.createdAt > r.at }?.id }.forEach { (next, put) ->
+                if (next != null) out.getOrPut(next) { mutableListOf() } += reactedLine(m, put.map { it.emoji })
+            }
+        }
+        return out
+    }
+
+    private fun reactedLine(m: MessageEntity, emoji: List<String>): String {
+        fun cut(s: String) = s.replace('\n', ' ').let { if (it.length > REACTED_SHOWN) it.take(REACTED_SHOWN) + "…" else it }
+        val sticker = StickerText.only(m.content)
+        val what = when {
+            sticker != null -> "你发的表情包「$sticker」"
+            m.audio != null -> "你的语音「${cut(m.content)}」"
+            else -> "你说的「${cut(StickerText.plain(m.content))}」"
+        }
+        return "（对方给${what}贴了 ${emoji.joinToString(" ")}）"
     }
 
     /**
@@ -267,9 +326,10 @@ object Prompt {
      * A person's message as the model reads it. Pictures are named by id (#45-1: message
      * 45, first picture), so the model can point at one, e.g. to use it as its avatar.
      */
-    private fun MessageEntity.userText(canSee: Boolean, attached: Boolean): String {
+    private fun MessageEntity.userText(canSee: Boolean, attached: Boolean, words: (String) -> String): String {
         // A voice message goes as what it said; one not turned into text says nothing yet.
-        val said = if (audio != null && content.isNotBlank()) "（语音）$content" else content
+        val text = words(content)
+        val said = if (audio != null && text.isNotBlank()) "（语音）$text" else text
         val count = MessageImages.decode(images).size
         val body = if (count == 0) {
             said
@@ -293,11 +353,19 @@ object Prompt {
         return if (q.role == "assistant") "（回复你说的：「$words」）" else "（接着自己说的：「$words」）"
     }
 
-    private fun MessageEntity.toApi(withTools: Boolean, canSee: Boolean, attached: Set<Long>): ApiMessage? = when (role) {
+    private fun MessageEntity.toApi(
+        withTools: Boolean,
+        canSee: Boolean,
+        attached: Set<Long>,
+        words: (String) -> String,
+        reacted: Map<Long, List<String>>,
+    ): ApiMessage? = when (role) {
         "user" -> {
             val attach = id in attached
-            userText(canSee, attach).takeIf { it.isNotBlank() }?.let { text ->
-                ApiMessage("user", text, images = if (attach) MessageImages.decode(images).map { it.file } else emptyList())
+            userText(canSee, attach, words).takeIf { it.isNotBlank() }?.let { text ->
+                // What they stuck on the TA's messages before writing this, first: it happened first.
+                val before = reacted[id]?.joinToString("\n")?.let { "$it\n" }.orEmpty()
+                ApiMessage("user", before + text, images = if (attach) MessageImages.decode(images).map { it.file } else emptyList())
             }
         }
         "assistant" -> {

@@ -5,6 +5,7 @@ import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.DiaryBlocks
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
@@ -205,7 +206,7 @@ object LetterPrompt {
         if (said.isNotEmpty()) {
             append("最近你们聊的（从早到晚）：\n")
             for (m in said.sortedBy { it.createdAt }) {
-                append(if (m.role == "user") "对方：" else "你：").append(m.content.trim().replace('\n', ' ').take(SAID_MAX)).append('\n')
+                append(if (m.role == "user") "对方：" else "你：").append(StickerText.plain(m.content).trim().replace('\n', ' ').take(SAID_MAX)).append('\n')
             }
             append('\n')
         }

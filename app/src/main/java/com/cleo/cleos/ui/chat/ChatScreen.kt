@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.content.ClipData
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Extension
@@ -105,6 +107,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -115,6 +118,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -149,8 +153,12 @@ import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
+import com.cleo.cleos.data.MessageReactions
 import com.cleo.cleos.data.MessageThoughts
+import com.cleo.cleos.data.StickerBook
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.MessageEntity
+import com.cleo.cleos.data.db.StickerEntity
 import com.cleo.cleos.glass.Backdrop
 import com.cleo.cleos.glass.GlassButton
 import com.cleo.cleos.glass.GlassIconButton
@@ -452,6 +460,16 @@ fun ChatTab(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_ATTACHMENTS)) {
         vm.attach(it)
     }
+    // Stickers: the collection, the drawer inside the input's glass, and a picture picked to add.
+    val stickers by remember { c.stickers.all }.collectAsStateWithLifecycle(emptyList())
+    val stickerBook = remember(stickers) { StickerBook(stickers) }
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    var deletingSticker by remember { mutableStateOf<StickerEntity?>(null) }
+    val stickerPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.pickSticker(uri) { voiceHint = it }
+    }
+    val focusManager = LocalFocusManager.current
+    BackHandler(enabled = drawerOpen && pageShown) { drawerOpen = false }
 
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
@@ -615,6 +633,25 @@ fun ChatTab(
                 onVoiceStart = { startVoice() },
                 onVoiceMove = { cancelling = it },
                 onVoiceEnd = { endVoice(it) },
+                drawerOpen = drawerOpen,
+                onDrawer = {
+                    drawerOpen = !drawerOpen
+                    // The drawer takes the keyboard's place; typing again closes it (onFieldFocus).
+                    if (drawerOpen) {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    }
+                },
+                onFieldFocus = { drawerOpen = false },
+                drawer = {
+                    StickerDrawer(
+                        stickers = stickers,
+                        onSend = { if (vm.sendSticker(it)) sentCount++ },
+                        onAdd = { stickerPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        onRename = vm::renameSticker,
+                        onDelete = { deletingSticker = it },
+                    )
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = inputBottom)
@@ -636,7 +673,7 @@ fun ChatTab(
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
-        CompositionLocalProvider(LocalFaces provides faces) {
+        CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook) {
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
@@ -698,6 +735,7 @@ fun ChatTab(
                                             keyboard?.show()
                                         },
                                         highlighted = m.id == flashed,
+                                        onReact = { vm.react(m.id, it) },
                                     )
                                 }
                             }
@@ -749,6 +787,20 @@ fun ChatTab(
                 readingRecap = false
             },
             onDismiss = { readingRecap = false },
+        )
+    }
+
+    vm.stickerDraft?.let { draft ->
+        StickerDialog(draft, vm.stickerProblem, onSave = vm::saveSticker, onDismiss = vm::dropStickerDraft)
+    }
+    deletingSticker?.let { s ->
+        DeleteStickerDialog(
+            s,
+            onConfirm = {
+                vm.deleteSticker(s)
+                deletingSticker = null
+            },
+            onDismiss = { deletingSticker = null },
         )
     }
 }
@@ -835,6 +887,7 @@ private fun MessageBubble(
     onOpenQuote: () -> Unit = {},
     onQuote: () -> Unit = {},
     highlighted: Boolean = false,
+    onReact: (String) -> Unit = {},
 ) {
     val palette = LocalGlassPalette.current
     val mine = message.role == "user"
@@ -846,6 +899,11 @@ private fun MessageBubble(
     val faces = LocalFaces.current
     val pictures = remember(message.images) { MessageImages.decode(message.images) }
     val thought = remember(message.thought) { MessageThoughts.decode(message.thought) }
+    // Words and stickers, in order; the words alone are what 复制 copies.
+    val book = LocalStickers.current
+    val pieces = remember(message.content, book) { StickerText.split(message.content, book) }
+    val words = remember(pieces) { pieces.filterIsInstance<StickerText.Piece.Words>().joinToString("\n") { it.text } }
+    val reactions = remember(message.reactions) { MessageReactions.decode(message.reactions) }
 
     Row(
         Modifier.fillMaxWidth().background(glow, RoundedCornerShape(18.dp)),
@@ -881,36 +939,50 @@ private fun MessageBubble(
                             onClick = { onPlay(audio.file) },
                             onLongClick = { menu = true },
                         )
-                    } else if (message.content.isNotEmpty()) {
-                        GlassSurface(
-                            modifier = Modifier
-                                .widthIn(max = bubbleMaxWidth())
-                                .combinedClickable(
-                                    interactionSource = null,
-                                    indication = null,
-                                    onClick = {},
-                                    onLongClick = { menu = true },
-                                ),
-                            style = if (mine) palette.bubbleMine else palette.bubble,
-                            shape = GlassShape.Rounded(20.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                message.content,
-                                color = if (mine) palette.mineContent else palette.content,
-                                fontSize = 16.sp,
-                                lineHeight = 23.sp,
-                            )
+                    } else {
+                        pieces.forEach { piece ->
+                            when (piece) {
+                                // A sticker stands on its own, outside any bubble, as chat apps draw them.
+                                is StickerText.Piece.Sticker -> StickerView(piece.sticker) { menu = true }
+                                is StickerText.Piece.Words -> GlassSurface(
+                                    modifier = Modifier
+                                        .widthIn(max = bubbleMaxWidth())
+                                        .combinedClickable(
+                                            interactionSource = null,
+                                            indication = null,
+                                            onClick = {},
+                                            onLongClick = { menu = true },
+                                        ),
+                                    style = if (mine) palette.bubbleMine else palette.bubble,
+                                    shape = GlassShape.Rounded(20.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        piece.text,
+                                        color = if (mine) palette.mineContent else palette.content,
+                                        fontSize = 16.sp,
+                                        lineHeight = 23.sp,
+                                    )
+                                }
+                            }
                         }
                     }
                     // The message this one answers, under it like in WeChat; a tap finds it.
                     if (quote != null) QuoteBox(quote, onOpenQuote)
+                    if (reactions.isNotEmpty()) ReactionChips(reactions) { menu = true }
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    if (message.content.isNotEmpty()) {
+                    // Only on what the TA said: the person reacts to it, and the TA hears of it.
+                    if (!mine && message.error == null) {
+                        ReactionPicker(on = remember(reactions) { reactions.map { it.emoji }.toSet() }) { emoji ->
+                            menu = false
+                            onReact(emoji)
+                        }
+                    }
+                    if (words.isNotBlank()) {
                         DropdownMenuItem(text = { Text("复制") }, onClick = {
                             menu = false
-                            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", message.content))) }
+                            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", words))) }
                         })
                     }
                     if (message.error == null && MessageQuotes.of(message) != null) {
@@ -1160,6 +1232,9 @@ private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepo
     val faces = LocalFaces.current
     // Thinking with words to show: those stand in for the typing dots.
     val thinkingAloud = live.text.isEmpty() && live.thought.isNotBlank()
+    // What has come in so far, stickers drawn as they complete; one still being written isn't shown yet.
+    val book = LocalStickers.current
+    val pieces = remember(live.text, book) { StickerText.split(StickerText.finishedPart(live.text), book) }
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start,
@@ -1172,22 +1247,34 @@ private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepo
                     Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
                     Spacer(Modifier.width(AvatarGap))
                 }
-                GlassSurface(
-                    modifier = Modifier.widthIn(max = bubbleMaxWidth()),
-                    style = palette.bubble,
-                    shape = GlassShape.Rounded(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                ) {
-                    if (live.text.isEmpty()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TypingDots()
-                            if (live.thinking) {
-                                Spacer(Modifier.width(8.dp))
-                                Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (pieces.isEmpty()) {
+                        GlassSurface(
+                            style = palette.bubble,
+                            shape = GlassShape.Rounded(20.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TypingDots()
+                                if (live.thinking) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("在想", color = palette.contentSecondary, fontSize = 13.sp)
+                                }
                             }
                         }
-                    } else {
-                        Text(live.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
+                    }
+                    pieces.forEach { piece ->
+                        when (piece) {
+                            is StickerText.Piece.Sticker -> StickerView(piece.sticker) {}
+                            is StickerText.Piece.Words -> GlassSurface(
+                                modifier = Modifier.widthIn(max = bubbleMaxWidth()),
+                                style = palette.bubble,
+                                shape = GlassShape.Rounded(20.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                Text(piece.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -1464,6 +1551,10 @@ private fun ChatInputBar(
     onVoiceStart: () -> Boolean = { false },
     onVoiceMove: (Boolean) -> Unit = {},
     onVoiceEnd: (Boolean) -> Unit = {},
+    drawerOpen: Boolean = false,
+    onDrawer: () -> Unit = {},
+    onFieldFocus: () -> Unit = {},
+    drawer: @Composable () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalGlassPalette.current
@@ -1476,6 +1567,8 @@ private fun ChatInputBar(
             .heightIn(min = BarHeight)
             .liquidGlass(backdrop, palette.input, GlassShape.Rounded(BarHeight / 2)),
     ) {
+        // The stickers, in the same glass as the rest, where the keyboard would otherwise be.
+        if (drawerOpen) drawer()
         if (quote != null) {
             Row(
                 Modifier
@@ -1554,8 +1647,27 @@ private fun ChatInputBar(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focus)
+                        .onFocusChanged { if (it.isFocused) onFieldFocus() }
                         .semantics { contentDescription = "输入消息" },
                 )
+            }
+            // Narrower than the squares either side: the text keeps as much of the bar as it can.
+            Box(Modifier.size(width = 40.dp, height = BarHeight), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (drawerOpen) palette.content.copy(alpha = 0.1f) else Color.Transparent)
+                        .clickable(onClick = onDrawer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.EmojiEmotions,
+                        contentDescription = if (drawerOpen) "收起表情包" else "表情包",
+                        tint = if (drawerOpen) palette.accentContent else palette.contentSecondary,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
             }
             Box(Modifier.size(BarHeight), contentAlignment = Alignment.Center) {
                 // Plain fills inside the glass, like the chips on a card: glass in glass reads as a hole.

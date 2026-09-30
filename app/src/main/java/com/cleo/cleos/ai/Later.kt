@@ -11,6 +11,7 @@ import com.cleo.cleos.CleosApp
 import com.cleo.cleos.Notifier
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.SettingsRepository
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.LaterEntity
@@ -272,7 +273,7 @@ class Later(
         return when (result) {
             is ChatRepository.WakeResult.Sent -> {
                 db.later().delete(id)
-                log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { it.content })
+                log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { StickerText.plain(it.content) })
                 if (!showing(conversationId)) notifier.messages(ta, conversationId, unanswered(conversationId).ifEmpty { result.messages })
                 null
             }
@@ -361,7 +362,7 @@ class Later(
         fun which(why: String) = (if (greeting == Greeting.Morning) "早上的招呼" else "睡前的招呼") + (if (why.isBlank()) "" else "：$why")
         return when (val result = chat.wake(conversationId, text)) {
             is ChatRepository.WakeResult.Sent -> {
-                log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { it.content })
+                log(ta, WakeEntity.SENT, result.messages.joinToString(" / ") { StickerText.plain(it.content) })
                 if (!showing(conversationId)) notifier.messages(ta, conversationId, unanswered(conversationId).ifEmpty { result.messages })
                 over(greeting, day)
             }

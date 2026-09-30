@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.data.ChatSearch
+import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.MessageEntity
 import com.cleo.cleos.glass.GlassIconButton
 import com.cleo.cleos.glass.GlassShape
@@ -278,7 +279,7 @@ fun SearchScreen(onBack: () -> Unit, onFound: () -> Unit) {
 @Composable
 private fun Hit(message: MessageEntity, who: String, query: String, conversation: String?, onClick: () -> Unit) {
     val palette = LocalGlassPalette.current
-    val snippet = remember(message.content, query) { ChatSearch.snippet(message.content, query) }
+    val snippet = remember(message.content, query) { ChatSearch.snippet(StickerText.plain(message.content), query) }
     GlassSurface(
         modifier = Modifier.fillMaxWidth().clickable(interactionSource = null, indication = null, onClick = onClick),
         shape = GlassShape.Rounded(20.dp),

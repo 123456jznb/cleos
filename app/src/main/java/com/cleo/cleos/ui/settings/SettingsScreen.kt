@@ -282,6 +282,14 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                 if (ToolGroup.Speak in settings.tools && !Speech.ready(settings)) {
                     Text("还没配好声音，TA 暂时发不了：在下面「TA 的声音」里选一个。", color = palette.error, fontSize = 12.sp)
                 }
+                ToolSwitch(
+                    "发表情包",
+                    "TA 会从你的表情包里挑着发，偶尔一张（表情包在聊天输入框的笑脸里加）。TA 看不到图，是按名字和说明认的，" +
+                        "所以名字起得像在说那张图最好。这个不需要模型支持工具。",
+                    ToolGroup.Stickers in settings.tools,
+                ) {
+                    vm.setTool(ToolGroup.Stickers, it)
+                }
                 ToolSwitch("待办", "帮你记下、查看、改日期、打勾", ToolGroup.Todos in settings.tools) {
                     vm.setTool(ToolGroup.Todos, it)
                 }
@@ -591,7 +599,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
 
             Section("数据") {
                 Text(
-                    "把每个 TA、聊天、日记、信、记忆、待办和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
+                    "把每个 TA、聊天、日记、信、记忆、待办、表情包和图片打包成一个文件。换手机、重装之前先导出一份。API Key 不会导出。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,

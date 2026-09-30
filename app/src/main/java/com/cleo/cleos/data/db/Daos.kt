@@ -152,6 +152,9 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content WHERE id = :id")
     suspend fun setContent(id: Long, content: String)
 
+    @Query("UPDATE messages SET reactions = :reactions WHERE id = :id")
+    suspend fun setReactions(id: Long, reactions: String?)
+
     /** The newest [limit] messages, newest first. Callers reverse them for the API. */
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun newest(conversationId: Long, limit: Int): List<MessageEntity>
@@ -445,6 +448,34 @@ interface LetterDao {
     suspend fun insertAll(items: List<LetterEntity>)
 
     @Query("DELETE FROM letters")
+    suspend fun clear()
+}
+
+@Dao
+interface StickerDao {
+    /** In the order they were added: the drawer's, and the TA's list's, which should stay put (it is in the cached prompt). */
+    @Query("SELECT * FROM stickers ORDER BY createdAt, id")
+    fun observeAll(): Flow<List<StickerEntity>>
+
+    @Query("SELECT * FROM stickers ORDER BY createdAt, id")
+    suspend fun all(): List<StickerEntity>
+
+    @Query("SELECT * FROM stickers WHERE id = :id")
+    suspend fun get(id: Long): StickerEntity?
+
+    @Insert
+    suspend fun insert(sticker: StickerEntity): Long
+
+    @Update
+    suspend fun update(sticker: StickerEntity)
+
+    @Query("DELETE FROM stickers WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Insert
+    suspend fun insertAll(items: List<StickerEntity>)
+
+    @Query("DELETE FROM stickers")
     suspend fun clear()
 }
 
