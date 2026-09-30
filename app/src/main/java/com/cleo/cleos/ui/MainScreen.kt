@@ -102,7 +102,12 @@ fun MainScreen(
     // Tab pages slide across rather than cutting. `from` is the page being left and
     // `slide` runs 0..1; while they differ both pages exist, and only then.
     var from by remember { mutableIntStateOf(tab) }
-    val slide = remember { Animatable(1f) }
+    // A new one for every switch, at 0 already in the frame the tab changes. One kept across
+    // switches still stood at 1 from the last slide in that frame (it was set back to 0 by the
+    // effect below, which only runs after it): for one frame the new page was drawn where it
+    // ends up, over everything, and then went back to slide in. The flash, caught on the phone
+    // in a screen recording slowed down ten times.
+    val slide = remember(tab) { Animatable(0f) }
     var pageWidth by remember { mutableIntStateOf(0) }
     // Every page, once built, stays built, the way WeChat's and Telegram's tabs do: switching
     // then only moves pages and never builds one. Built on the spot, a page slid in empty and
@@ -123,7 +128,6 @@ fun MainScreen(
         // A page left no longer goes away, and a field focused on it would keep the keyboard up over the next.
         focus.clearFocus()
         if (from == target) return@LaunchedEffect
-        slide.snapTo(0f)
         // Two frames for the page coming in to build and draw itself off to the side, where
         // nobody sees it, before anything moves: its first composition and its glass are the
         // heavy part, and inside the slide they cost a frame the eye catches.
