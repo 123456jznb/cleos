@@ -195,6 +195,8 @@ fun GlassLabScreen(onBack: () -> Unit) {
                     shown.tint.alpha > editing.tint.alpha + 0.005f ->
                         "上面有字，在现在的壁纸上太透会看不清：着色会补到 %.2f。".format(shown.tint.alpha)
                     current == GlassPart.TopBar -> "标题那个胶囊不会比默认更透，按钮照你调的。"
+                    current == GlassPart.Lens ->
+                        "调的是它停着的样子。按住、拖动时会更鼓更亮，按同样的比例跟着变：色散调成 0，按住也不会出彩边。"
                     current == GlassPart.Bubble ->
                         "你自己发的气泡也是这块玻璃，染强调色或你在设置里挑的颜色。着色同样会补到字看得清；挑了颜色的至少补到 %.2f，免得颜色透没了。"
                             .format(GlassPalettes.PICKED_TINT)
@@ -229,6 +231,7 @@ private fun pieceGeometry(part: GlassPart?, corner: Float): Triple<Dp, Dp, Glass
     GlassPart.TopBar -> Triple(180.dp, 56.dp, GlassShape.Capsule)
     GlassPart.TabBar -> Triple(310.dp, 64.dp, GlassShape.Capsule)
     GlassPart.Input -> Triple(290.dp, 50.dp, GlassShape.Capsule)
+    GlassPart.Lens -> Triple(96.dp, 58.dp, GlassShape.Capsule)
     null -> Triple(240.dp, 110.dp, if (corner >= 100f) GlassShape.Capsule else GlassShape.Rounded(corner.dp))
 }
 
@@ -264,6 +267,7 @@ private fun BoxScope.PieceContent(part: GlassPart?, palette: GlassPalette) {
             TabPreview(Icons.Outlined.AutoStories, "日记", palette.content)
             TabPreview(Icons.Outlined.TaskAlt, "待办", palette.content)
         }
+        GlassPart.Lens -> TabPreview(Icons.Rounded.ChatBubble, "聊天", palette.accentContent)
         GlassPart.Input -> Text(
             "说点什么…",
             color = palette.contentSecondary,

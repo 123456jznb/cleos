@@ -58,6 +58,8 @@ data class GlassPalette(
     /** The user's bubbles before any colour and contrast floor: what a colour being picked is tried on. */
     val mineBase: GlassStyle? = null,
     val topBarTitleStyle: GlassStyle? = null,
+    /** The lens held, following the lens as tuned; null untuned. */
+    val lensHeldStyle: GlassStyle? = null,
     /** Luminance of the wallpaper's darkest / brightest patch, when known. */
     val troughLum: Float? = null,
     val peakLum: Float? = null,
@@ -67,6 +69,10 @@ data class GlassPalette(
     val topBar: GlassStyle get() = parts[GlassPart.TopBar] ?: chrome
     val tabBar: GlassStyle get() = parts[GlassPart.TabBar] ?: chrome
     val input: GlassStyle get() = parts[GlassPart.Input] ?: bar
+
+    /** The tab bar's lens at rest and held, as tuned (see [GlassPart.Lens]). */
+    val lens: GlassStyle get() = parts[GlassPart.Lens] ?: lensRest
+    val lensPressed: GlassStyle get() = lensHeldStyle ?: lensHeld
 
     /** The user's own bubbles: the bubble tuning, in the accent colour. */
     val bubbleMine: GlassStyle get() = bubbleMineStyle ?: accentSurface
@@ -106,6 +112,7 @@ object GlassPalettes {
             GlassPart.TopBar to b.chrome,
             GlassPart.TabBar to b.chrome,
             GlassPart.Input to b.bar,
+            GlassPart.Lens to b.lensRest,
         )
         val parts = defaults.mapValues { (part, style) ->
             floor(floored, part, tuning[part]?.applyTo(style, dark) ?: style)
@@ -116,6 +123,7 @@ object GlassPalettes {
         val (mineStyle, mineInk) = mineFor(mineBase, mine ?: b.accent, trough, peak, least = mine?.let(::pickedTint) ?: 0f)
         val topBar = parts.getValue(GlassPart.TopBar)
         val title = topBar.copy(tint = topBar.tint.copy(alpha = maxOf(topBar.tint.alpha, floored.bar.tint.alpha)))
+        val lensHeld = tuning[GlassPart.Lens]?.let { heldFrom(parts.getValue(GlassPart.Lens), b.lensRest, b.lensHeld) }
         return floored.copy(
             parts = parts,
             partDefaults = defaults,
@@ -123,6 +131,29 @@ object GlassPalettes {
             mineContent = mineInk,
             mineBase = mineBase,
             topBarTitleStyle = title,
+            lensHeldStyle = lensHeld,
+        )
+    }
+
+    /**
+     * The lens held, for a resting lens tuned to [rest]: every knob moved from it as far, in
+     * proportion, as the untuned held lens is from the untuned resting one. In proportion so that
+     * what was tuned away stays away when pressed: dispersion tuned to 0 must not bring the rainbow
+     * back the moment the lens is held. A knob the resting lens has at 0 (no blur) moves by the
+     * same amount instead.
+     */
+    internal fun heldFrom(rest: GlassStyle, defaultRest: GlassStyle, defaultHeld: GlassStyle): GlassStyle {
+        fun follow(tuned: Float, r: Float, h: Float) = (if (r == 0f) tuned + (h - r) else tuned * (h / r)).coerceAtLeast(0f)
+        return defaultHeld.copy(
+            blur = follow(rest.blur.value, defaultRest.blur.value, defaultHeld.blur.value).dp,
+            refraction = follow(rest.refraction.value, defaultRest.refraction.value, defaultHeld.refraction.value).dp,
+            bevel = follow(rest.bevel.value, defaultRest.bevel.value, defaultHeld.bevel.value).dp,
+            dispersion = follow(rest.dispersion, defaultRest.dispersion, defaultHeld.dispersion),
+            zoom = follow(rest.zoom, defaultRest.zoom, defaultHeld.zoom),
+            tint = rest.tint.copy(alpha = follow(rest.tint.alpha, defaultRest.tint.alpha, defaultHeld.tint.alpha).coerceAtMost(1f)),
+            saturation = follow(rest.saturation, defaultRest.saturation, defaultHeld.saturation),
+            highlight = follow(rest.highlight, defaultRest.highlight, defaultHeld.highlight).coerceAtMost(1.5f),
+            shadowAlpha = follow(rest.shadowAlpha, defaultRest.shadowAlpha, defaultHeld.shadowAlpha).coerceAtMost(1f),
         )
     }
 
@@ -178,7 +209,9 @@ object GlassPalettes {
      * readable anyway.
      */
     internal fun floor(p: GlassPalette, part: GlassPart, style: GlassStyle): GlassStyle =
-        raise(p, style, p.worstLum, withAccent = part == GlassPart.TopBar || part == GlassPart.TabBar)
+        // The lens carries no words of its own: the label under it belongs to the tab bar, whose floor covers it.
+        if (part == GlassPart.Lens) style
+        else raise(p, style, p.worstLum, withAccent = part == GlassPart.TopBar || part == GlassPart.TabBar)
 
     private fun raise(p: GlassPalette, style: GlassStyle, worstLum: Float?, withAccent: Boolean): GlassStyle {
         if (worstLum == null) return style

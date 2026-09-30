@@ -138,7 +138,7 @@ fun GlassTabBar(
         }
     }
 
-    val lensStyle = lerp(palette.lensRest, palette.lensHeld, held.value.coerceIn(0f, 1f))
+    val lensStyle = lerp(palette.lens, palette.lensPressed, held.value.coerceIn(0f, 1f))
 
     Box(modifier.height(BarHeight + Overhang * 2)) {
         // A held lens at either end reaches a little past the bar, hence the overscan.

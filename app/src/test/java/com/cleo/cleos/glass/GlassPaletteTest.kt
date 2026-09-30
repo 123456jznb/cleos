@@ -111,4 +111,33 @@ class GlassPaletteTest {
         // Nothing picked: the accent keeps the tuned clarity wherever its white text reads anyway.
         assertEquals(0.15f, tint(dark = true, trough = 0.01f, peak = 0.05f, mine = null), 0.01f)
     }
+
+    @Test
+    fun theTabLensCanBeTunedAndHoldingItFollowsTheTuning() {
+        for (dark in listOf(false, true)) {
+            val untuned = GlassPalettes.build(dark = dark, trough = 0.05f, peak = 0.95f)
+            assertEquals(untuned.lensRest, untuned.lens)
+            assertEquals(untuned.lensHeld, untuned.lensPressed)
+
+            // The rainbow tuned away stays away when the lens is held.
+            val noRainbow = GlassTuning.of(untuned.lensRest, dark).copy(dispersion = 0f)
+            val tuned = GlassPalettes.build(dark = dark, trough = 0.05f, peak = 0.95f, tuning = mapOf(GlassPart.Lens to noRainbow))
+            assertEquals(0f, tuned.lens.dispersion, 0f)
+            assertEquals(0f, tuned.lensPressed.dispersion, 0f)
+            // What was left alone swells as before when held.
+            assertEquals(untuned.lensHeld.refraction.value, tuned.lensPressed.refraction.value, 0.001f)
+            assertEquals(untuned.lensHeld.zoom, tuned.lensPressed.zoom, 0.001f)
+            // Twice the bend at rest, twice the bend held.
+            val bent = GlassTuning.of(untuned.lensRest, dark).copy(refraction = untuned.lensRest.refraction.value * 2)
+            val bentHeld = GlassPalettes.build(dark = dark, tuning = mapOf(GlassPart.Lens to bent)).lensPressed
+            assertEquals(untuned.lensHeld.refraction.value * 2, bentHeld.refraction.value, 0.001f)
+            // A knob the resting lens has at 0 (blur) moves by the same amount when held, not by a ratio of nothing.
+            val blurred = GlassTuning.of(untuned.lensRest, dark).copy(blur = 3f)
+            val blurredHeld = GlassPalettes.build(dark = dark, tuning = mapOf(GlassPart.Lens to blurred)).lensPressed
+            assertEquals(3f + untuned.lensHeld.blur.value - untuned.lensRest.blur.value, blurredHeld.blur.value, 0.001f)
+            // It carries no words, so the contrast floor leaves it as tuned, however clear.
+            val clear = GlassTuning.of(untuned.lensRest, dark).copy(tintAlpha = 0f)
+            assertEquals(0f, GlassPalettes.build(dark = dark, trough = 0.05f, peak = 0.95f, tuning = mapOf(GlassPart.Lens to clear)).lens.tint.alpha, 0f)
+        }
+    }
 }

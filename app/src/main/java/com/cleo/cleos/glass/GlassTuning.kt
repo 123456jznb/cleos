@@ -10,6 +10,9 @@ enum class GlassPart(val label: String) {
     TopBar("顶栏"),
     TabBar("Tab 栏"),
     Input("输入框"),
+
+    /** The piece of glass over the selected tab; what is tuned is how it rests, held follows (GlassPalettes.heldFrom). */
+    Lens("Tab 透镜"),
 }
 
 /**
