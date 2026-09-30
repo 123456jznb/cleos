@@ -2,7 +2,6 @@ package com.cleo.cleos.ui.theme
 
 import android.app.Activity
 import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,10 +17,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -138,7 +143,28 @@ private fun Wallpaper(file: String?, dark: Boolean, images: ImageStore, backdrop
     val modifier = Modifier.fillMaxSize().overscan(WallpaperOverscan).backdropSource(backdrop)
     val image = bitmap
     if (file != null && image != null) {
-        Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = modifier)
+        // The picture fills the screen, not the larger area the wallpaper is laid out in: filling that
+        // blew every picture up (1.3 times on a 360dp-wide phone), and one shaped like the screen lost
+        // an eighth on every side. Past the screen edge, where only blur looks, the picture carries on
+        // mirrored, so there is no seam for the blur to pick up.
+        val brush = remember(image) { ShaderBrush(ImageShader(image, TileMode.Mirror, TileMode.Mirror)) }
+        Box(
+            modifier.drawBehind {
+                val edge = WallpaperOverscan.toPx()
+                val w = size.width - 2 * edge
+                val h = size.height - 2 * edge
+                val scale = max(w / image.width, h / image.height)
+                val left = edge + (w - image.width * scale) / 2
+                val top = edge + (h - image.height * scale) / 2
+                withTransform({
+                    translate(left, top)
+                    scale(scale, scale, pivot = Offset.Zero)
+                }) {
+                    // In the picture's own pixels, the whole area: past the picture on every side.
+                    drawRect(brush, topLeft = Offset(-left / scale, -top / scale), size = Size(size.width / scale, size.height / scale))
+                }
+            },
+        )
     } else {
         DefaultWallpaper(dark, modifier)
     }
