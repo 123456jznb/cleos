@@ -268,12 +268,12 @@ object GlassPalettes {
                     highlight = 0.5f, shadowAlpha = 0f,
                 ),
                 lensRest = GlassStyle(
-                    blur = 0.dp, refraction = 10.dp, bevel = 12.dp, dispersion = 0.3f,
+                    blur = 0.dp, refraction = 10.dp, bevel = 12.dp, dispersion = 0.12f,
                     tint = Color.White.copy(alpha = 0.10f), saturation = 1.2f, lift = 0.02f,
                     highlight = 0.6f, shadowAlpha = 0f,
                 ),
                 lensHeld = GlassStyle(
-                    blur = 0.dp, refraction = 18.dp, bevel = 16.dp, dispersion = 0.6f,
+                    blur = 0.dp, refraction = 18.dp, bevel = 16.dp, dispersion = 0.22f,
                     tint = Color.White.copy(alpha = 0.03f), saturation = 1.3f, lift = 0.03f,
                     highlight = 0.95f, shadowAlpha = 0f, zoom = 1.18f,
                 ),
@@ -314,12 +314,12 @@ object GlassPalettes {
                 // The resting lens lies over the selected label, so its tint washes that
                 // label out; kept thin, with the rim highlight doing the work of showing it.
                 lensRest = GlassStyle(
-                    blur = 0.dp, refraction = 10.dp, bevel = 12.dp, dispersion = 0.3f,
+                    blur = 0.dp, refraction = 10.dp, bevel = 12.dp, dispersion = 0.12f,
                     tint = Color.White.copy(alpha = 0.16f), saturation = 1.2f, lift = 0.03f,
                     highlight = 0.9f, shadowAlpha = 0f,
                 ),
                 lensHeld = GlassStyle(
-                    blur = 0.dp, refraction = 18.dp, bevel = 16.dp, dispersion = 0.6f,
+                    blur = 0.dp, refraction = 18.dp, bevel = 16.dp, dispersion = 0.22f,
                     tint = Color.White.copy(alpha = 0.06f), saturation = 1.3f, lift = 0.03f,
                     highlight = 1f, shadowAlpha = 0.12f, zoom = 1.18f,
                 ),
