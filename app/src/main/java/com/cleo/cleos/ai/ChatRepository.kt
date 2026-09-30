@@ -90,6 +90,8 @@ class ChatRepository(
      * notification unless that chat is on screen (AppContainer).
      */
     private val replied: suspend (ta: CompanionEntity, conversationId: Long, said: List<MessageEntity>) -> Unit = { _, _, _ -> },
+    /** The song playing, as a reply is told it (Listening), while 一起听歌 is on; null when nothing plays. */
+    private val listening: suspend () -> String? = { null },
 ) {
     /** The replies being written, by conversation. */
     private val _streaming = MutableStateFlow<Map<Long, StreamingReply>>(emptyMap())
@@ -524,8 +526,9 @@ class ChatRepository(
         val now = ZonedDateTime.now()
         val since = System.currentTimeMillis()
         // No outside services and no pictures: nobody is there to allow a call, and deciding
-        // whether to say something shouldn't cost what answering a picture does.
-        var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta)
+        // whether to say something shouldn't cost what answering a picture does. No music either:
+        // a song is paused or skipped when the person asks, and a wake is nobody asking.
+        var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta) - ToolGroup.Music
         var thinking = ta.deepThinking && endpointKey !in refusesThinking
         val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
         fun build() = Prompt.withWake(Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap), instruction)
@@ -638,7 +641,10 @@ class ChatRepository(
             // What it noted that has come due while the two are talking: this reply takes it in,
             // and once it has gone through, it is dealt with (Later wakes nobody for it).
             val due = if (ta.proactive) db.later().dueFor(ta.id, System.currentTimeMillis()) else emptyList()
-            fun build() = Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what })
+            // The song playing as this reply begins, told beside the time. Asked for even when the model
+            // takes no tools: it is something to know, not something to do.
+            val heard = if (ToolGroup.Music in s.tools) runCatching { listening() }.getOrNull() else null
+            fun build() = Prompt.messages(s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what }, heard)
             var messages = prepare(build())
             var rounds = 0
             // What the last refusal made this reply leave out, and when.

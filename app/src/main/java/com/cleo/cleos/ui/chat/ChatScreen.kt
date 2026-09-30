@@ -1,18 +1,24 @@
 package com.cleo.cleos.ui.chat
 
 import android.Manifest
+import android.os.SystemClock
 import android.content.ClipData
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -85,6 +91,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -123,6 +130,11 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.cleo.cleos.ai.ChatRepository
+import com.cleo.cleos.ai.LyricLine
+import com.cleo.cleos.ai.MusicAction
+import com.cleo.cleos.ai.NowPlaying
+import com.cleo.cleos.ai.ToolGroup
+import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.ai.McpAsk
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.Recap
@@ -155,6 +167,7 @@ import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
@@ -287,6 +300,32 @@ fun ChatTab(
         onPauseOrDispose { if (shown != null && c.chatOnScreen == shown) c.chatOnScreen = null }
     }
     val companions by remember { c.companions.all }.collectAsStateWithLifecycle(emptyList())
+    // 一起听歌: what the phone plays, followed only while this screen is up and the switch is on.
+    val appSettings by remember { c.settings.settings }.collectAsStateWithLifecycle(AppSettings())
+    val listeningOn = ToolGroup.Music in appSettings.tools
+    val nowPlaying by remember(listeningOn) { if (listeningOn) c.music.watch() else flowOf(null) }.collectAsStateWithLifecycle(null)
+    // Up while a song plays, and a while after it is paused; the last song stays drawn as the bar goes.
+    var barShown by remember { mutableStateOf(false) }
+    var barSong by remember { mutableStateOf<NowPlaying?>(null) }
+    LaunchedEffect(nowPlaying) {
+        val np = nowPlaying
+        if (np != null) barSong = np
+        val left = when {
+            np == null -> 0L
+            np.playing -> Long.MAX_VALUE
+            else -> PAUSED_SHOWN_MS - (SystemClock.elapsedRealtime() - np.at)
+        }
+        barShown = left > 0
+        if (left in 1 until Long.MAX_VALUE) {
+            delay(left)
+            barShown = false
+        }
+    }
+    val words by produceState<List<LyricLine>?>(null, barSong?.song, barShown) {
+        value = null
+        val np = barSong
+        if (np != null && barShown) value = c.lyrics.of(np.title, np.artist, np.durationMs)
+    }
     var switching by remember { mutableStateOf(false) }
     var readingRecap by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -519,6 +558,26 @@ fun ChatTab(
                     }
                 },
             )
+            AnimatedVisibility(
+                visible = barShown,
+                enter = fadeIn() + slideInVertically { -it / 2 },
+                exit = fadeOut() + slideOutVertically { -it / 2 },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = statusTop + TopBarHeight + 2.dp, start = 16.dp, end = 16.dp),
+            ) {
+                barSong?.let { np ->
+                    ListeningBar(
+                        backdrop = page,
+                        np = np,
+                        words = words,
+                        who = state.aiName.ifBlank { "TA" },
+                        onToggle = { runCatching { c.music.control(if (np.playing) MusicAction.Pause else MusicAction.Play) } },
+                        onNext = { runCatching { c.music.control(MusicAction.Next) } },
+                        onOpen = { if (!c.music.open()) voiceHint = "打不开这个播放器" },
+                    )
+                }
+            }
             ChatInputBar(
                 backdrop = page,
                 text = input,
@@ -573,7 +632,7 @@ fun ChatTab(
                 contentPadding = PaddingValues(
                     start = 12.dp,
                     end = 12.dp,
-                    top = statusTop + TopBarHeight + 8.dp,
+                    top = statusTop + TopBarHeight + 8.dp + (if (barShown) ListeningBarSpace else 0.dp),
                     bottom = inputTop + 12.dp,
                 ),
                 // Bottom: a short conversation should sit just above the input, where the

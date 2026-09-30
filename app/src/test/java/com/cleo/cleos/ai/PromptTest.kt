@@ -108,6 +108,24 @@ class PromptTest {
     }
 
     @Test
+    fun theSongPlayingRidesBesideTheTimeToo() {
+        val song = "（你们正在一起听《晴天》—周杰伦，放到 1:23 / 4:29）"
+        val out = Prompt.messages(
+            AppSettings(),
+            ta(),
+            listOf(msg("user", "这首好好听")),
+            now,
+            setOf(ToolGroup.Music),
+            listening = song,
+        )
+        assertEquals("（现在是2026年9月22日 星期二 21:05）\n$song\n这首好好听", out.last().content)
+        // Not in the system prompt, which stays the same from turn to turn; the rule is.
+        assertFalse(out.first().content.contains("晴天"))
+        assertTrue(out.first().content.contains("music_control"))
+        assertFalse(Prompt.system(AppSettings(), ta(), setOf(ToolGroup.Todos)).contains("music_control"))
+    }
+
+    @Test
     fun aWakeGoesLastOnThePersonsSideAndStartsATurnOfItsOwn() {
         val base = listOf(ApiMessage("system", "s"), ApiMessage("user", "去做饭了"), ApiMessage("assistant", "去吧", reasoning = "r"))
         val woke = Prompt.withWake(base, "（这条不是对方发的…）")

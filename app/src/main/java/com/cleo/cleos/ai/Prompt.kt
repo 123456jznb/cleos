@@ -120,6 +120,12 @@ object Prompt {
                     "对方自己的日程你只能看；改和删只限你加的。",
             )
         }
+        if (ToolGroup.Music in tools) {
+            add(
+                "对方用手机放歌的时候，你们就像坐在一起听：对方的消息旁边会写着在放哪首、放到哪、唱到哪句。" +
+                    "想聊就自然地聊两句，不用每首都点评，也别大段念歌词。对方让你暂停、接着放、换一首，用 music_control；对方没让，别自己动。",
+            )
+        }
         // A reminder the person asks for has to go off; a TA's own note may be stretched or dropped by the phone.
         if (ToolGroup.Later in tools && (ToolGroup.Alarm in tools || ToolGroup.Calendar in tools)) {
             add("对方要你到点提醒的事，用闹钟或日历，那样手机到点一定会响；note_for_later 是你自己想过一阵再说的话，不用来替对方办提醒。")
@@ -139,7 +145,8 @@ object Prompt {
      * calls and their results are left out and only what was said remains, so a model
      * without tool support can read a conversation that used them. With [images] false
      * no picture is attached (the text still says one was sent). [due]: what the TA noted that
-     * has come due, said beside the time (LaterRules.dueLine).
+     * has come due, said beside the time (LaterRules.dueLine). [listening]: the song playing,
+     * likewise (MusicText.listening).
      */
     fun messages(
         settings: AppSettings,
@@ -152,6 +159,7 @@ object Prompt {
         recap: String? = null,
         outside: List<McpTool> = emptyList(),
         due: List<String> = emptyList(),
+        listening: String? = null,
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
@@ -183,7 +191,8 @@ object Prompt {
         }
         if (lastUser >= 0) {
             val noted = LaterRules.dueLine(due)?.let { "$it\n" }.orEmpty()
-            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$noted${it.content}") }
+            val heard = listening?.let { "$it\n" }.orEmpty()
+            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$heard$noted${it.content}") }
         }
         return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside))) + merged
     }

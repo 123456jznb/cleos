@@ -10,6 +10,7 @@ import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MemoryDao
 import com.cleo.cleos.data.db.TodoDao
 import com.cleo.cleos.data.db.TodoEntity
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -39,7 +40,7 @@ import java.util.Locale
  * switch is on (CompanionEntity.proactive), and it is never stored with the others. [Alarm] is
  * the phone's clock app; [Calendar] the phone's calendar.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar, Music }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -390,6 +391,18 @@ object ToolSpecs {
         ),
     )
 
+    val musicControl = ToolSpec(
+        name = "music_control",
+        groups = setOf(ToolGroup.Music),
+        action = "切歌",
+        description = "控制对方手机上正在放的音乐（网易云、QQ 音乐这些都行）：暂停、接着放、下一首、上一首。" +
+            "对方让你停一下、接着放、换一首的时候用；结果里有现在放的是哪首。",
+        parameters = schema(
+            required = listOf("action"),
+            "action" to prop("string", "pause 暂停，play 接着放，next 下一首，previous 上一首"),
+        ),
+    )
+
     val all = listOf(
         sendMessage,
         sendVoice,
@@ -412,6 +425,7 @@ object ToolSpecs {
         addEvent,
         updateEvent,
         deleteEvent,
+        musicControl,
     )
     val byName = all.associateBy { it.name }
 
@@ -485,6 +499,8 @@ class ToolBox(
     private val alarms: AlarmSource? = null,
     /** The phone's calendar. */
     private val calendar: CalendarSource? = null,
+    /** Whatever the phone is playing, for music_control. */
+    private val music: MusicSource? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -534,11 +550,36 @@ class ToolBox(
                 ToolSpecs.addEvent.name -> addEvent(args, today)
                 ToolSpecs.updateEvent.name -> updateEvent(args, today)
                 ToolSpecs.deleteEvent.name -> deleteEvent(args, today)
+                ToolSpecs.musicControl.name -> musicControl(args)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
             failed(f.result, f.note)
         }
+    }
+
+    private suspend fun musicControl(a: JsonObject): ToolOutcome {
+        val phone = music ?: throw ToolFailure("这里控制不了音乐。", "这里控制不了")
+        if (!phone.allowed()) {
+            throw ToolFailure("对方还没给 Cleos 开「通知使用权」，看不到也控制不了在放的音乐；要的话，请对方在设置「一起听歌」里打开。", "没开通知使用权")
+        }
+        val action = MusicText.action(ToolArgs.text(a, "action"))
+            ?: throw ToolFailure("action 只能是 pause、play、next、previous 里的一个。", "没说要怎么切")
+        val before = phone.now() ?: throw ToolFailure("对方手机上现在没有在放的音乐。", "没在放歌")
+        phone.control(action)
+        val after = settled(phone, before, action)
+        return ToolOutcome(MusicText.done(action, before, after), MusicText.note(action, before, after))
+    }
+
+    /** What plays once the player has done it: another song takes a moment to show. */
+    private suspend fun settled(phone: MusicSource, before: NowPlaying, action: MusicAction): NowPlaying? {
+        val changesSong = action == MusicAction.Next || action == MusicAction.Previous
+        repeat(if (changesSong) SONG_CHANGE_LOOKS else 1) {
+            delay(SONG_CHANGE_STEP_MS)
+            val now = phone.now()
+            if (!changesSong || (now != null && now.song != before.song)) return now
+        }
+        return phone.now()
     }
 
     private fun setAlarm(a: JsonObject): ToolOutcome {
@@ -921,6 +962,8 @@ class ToolBox(
         const val LATER_WHAT_MAX = 200
         const val LATER_WHY_MAX = 200
         const val ALARM_LABEL_MAX = 60
+        const val SONG_CHANGE_LOOKS = 12
+        const val SONG_CHANGE_STEP_MS = 150L
         const val TIMER_MAX = 24 * 3600
         const val CALENDAR_DAYS_MAX = 31
         const val CALENDAR_LIST_MAX = 60

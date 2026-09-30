@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -64,9 +65,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.ai.Mcp
 import com.cleo.cleos.ai.PhoneCalendar
+import com.cleo.cleos.ai.PhoneMusic
 import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.SpeechEngine
@@ -132,6 +136,15 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
         } else {
             calendarHint = "没给日历权限，TA 看不了也加不了日程。"
         }
+    }
+    // Notification access for 一起听歌 is a switch in the system settings, not a dialog: whether it
+    // got turned on is only known on coming back.
+    var musicAllowed by remember { mutableStateOf(PhoneMusic.allowed(appContext)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { musicAllowed = PhoneMusic.allowed(appContext) }
+    fun openMusicAccess() {
+        // Some phones have no page for one app's switch; their list has it too.
+        runCatching { appContext.startActivity(PhoneMusic.accessIntent(appContext)) }
+            .onFailure { runCatching { appContext.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
     }
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -336,6 +349,37 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     Text("还没给日历权限，TA 看不了：把开关关掉再打开，会重新问你。", color = palette.error, fontSize = 12.sp)
                 }
                 calendarHint?.let { Text(it, color = palette.contentSecondary, fontSize = 12.sp) }
+                ToolSwitch(
+                    "一起听歌",
+                    "你用手机上的音乐 App 放歌时（网易云、QQ 音乐、酷狗都行），TA 知道在放哪首、唱到哪句，像在旁边一起听；" +
+                        "聊天页顶上会有一条小播放条。你让 TA 停一下、换一首，它也能帮你切。" +
+                        "要开一次「通知使用权」：只用来看在放什么歌，不读你的通知。",
+                    ToolGroup.Music in settings.tools,
+                ) { on ->
+                    vm.setTool(ToolGroup.Music, on)
+                    if (on && !PhoneMusic.allowed(appContext)) openMusicAccess()
+                }
+                if (ToolGroup.Music in settings.tools && !musicAllowed) {
+                    // Android 13 on greys the switch out for apps installed from a downloaded apk
+                    // (how most get Cleos) until "restricted settings" are allowed in the app's info.
+                    Text(
+                        "还没开「通知使用权」，TA 听不到：点「去开」，把 Cleos 的开关打开。" +
+                            "开关是灰的、点不动的话，先点「应用信息」，在右上角 ⋮ 里选「允许受限制的设置」，再回来开。",
+                        color = palette.error,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("去开", selected = false) { openMusicAccess() }
+                        Chip("应用信息", selected = false) {
+                            runCatching {
+                                appContext.startActivity(
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", appContext.packageName, null)),
+                                )
+                            }
+                        }
+                    }
+                }
                 ToolSwitch("查天气", "用 open-meteo 查，不需要 Key", ToolGroup.Weather in settings.tools) {
                     vm.setTool(ToolGroup.Weather, it)
                 }

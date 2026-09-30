@@ -11,10 +11,13 @@ import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Glance
 import com.cleo.cleos.ai.Later
 import com.cleo.cleos.ai.Letters
+import com.cleo.cleos.ai.Listening
+import com.cleo.cleos.ai.Lyrics
 import com.cleo.cleos.ai.PersonaMemory
 import com.cleo.cleos.ai.PhoneCalendar
 import com.cleo.cleos.ai.PhoneClock
 import com.cleo.cleos.ai.PhoneLocation
+import com.cleo.cleos.ai.PhoneMusic
 import com.cleo.cleos.ai.McpClient
 import com.cleo.cleos.ai.McpHub
 import com.cleo.cleos.ai.Recaps
@@ -74,9 +77,15 @@ class AppContainer(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"
+
     val companions = Companions(db, settings, secrets, images)
     val chatClient = ChatClient(http)
     private val calendar = PhoneCalendar(context)
+
+    /** What the phone is playing, and its words: the chat's 一起听 bar, a reply's line about it, music_control. */
+    val music = PhoneMusic(context)
+    val lyrics = Lyrics(http, "Cleos/$version (https://wwbnf.lanzouc.com/b01gicbubg)")
     // Typed: its note_for_later reaches [later], which is made further down from what uses this.
     val tools: ToolBox = ToolBox(
         db.todos(),
@@ -90,11 +99,12 @@ class AppContainer(context: Context) {
         later = { later },
         alarms = PhoneClock(context) { visible },
         calendar = calendar,
+        music = music,
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(
         McpServers(secrets),
-        McpClient(http, runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"),
+        McpClient(http, version),
     )
     val transcriber = Transcriber(http, secrets)
     val speaker = Speaker(images, http, secrets, mcp)
@@ -102,6 +112,7 @@ class AppContainer(context: Context) {
         db, settings, secrets, chatClient, tools, images, companions, recaps, mcp, transcriber, speaker, appScope,
         // A reply finished where the person isn't looking (they left, or went to another page): as a notification.
         replied = { ta, conversationId, said -> if (!(visible && chatOnScreen == conversationId)) notifier.messages(ta, conversationId, said) },
+        listening = { Listening(music, lyrics).line() },
     )
     val backup = BackupService(context, db, settings, images)
     val imports = ForeignImport(context, db, companions)
