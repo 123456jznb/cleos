@@ -3,8 +3,8 @@ package com.cleo.cleos.ui.chat
 import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,8 +69,8 @@ internal val ListeningBarSpace = 58.dp
 internal const val PAUSED_SHOWN_MS = 10 * 60_000L
 
 /**
- * What is playing, at the top of the chat while 一起听歌 is on: the cover turning like a record,
- * the song, the line being sung, and pause and next without leaving. Tapping the rest opens the
+ * What is playing, at the top of the chat while 一起听歌 is on: the cover as a record, the song,
+ * the line being sung, and pause and next without leaving. Tapping the rest opens the
  * player itself. The line moves on by the clock, from where the player last said it was; no one
  * is asked every second.
  */
@@ -93,7 +94,11 @@ internal fun ListeningBar(
             now = SystemClock.elapsedRealtime()
         }
     }
-    val line = words?.let { w -> w.getOrNull(Lrc.at(w, np.position(now)))?.text?.takeIf { it.isNotBlank() } }
+    val position = np.position(now)
+    val index = words?.let { Lrc.at(it, position) } ?: -1
+    val line = words?.getOrNull(index)?.text?.takeIf { it.isNotBlank() }
+    // What moves the record on: the next line sung, or, for a song without words, every few seconds of it.
+    val step = if (!words.isNullOrEmpty()) index else (position / STEP_MS).toInt()
     Row(
         modifier
             .widthIn(max = 460.dp)
@@ -103,7 +108,7 @@ internal fun ListeningBar(
             .padding(start = 7.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Record(np.art, spinning = np.playing)
+        Record(np.art, step)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -125,22 +130,25 @@ internal fun ListeningBar(
     }
 }
 
-/** The cover as a record, turning while the song plays and resting where it stopped when paused. */
+/**
+ * The cover as a record, turning a little each time the song moves on ([step]: a new line, or a
+ * few seconds without words) and still while it is paused. It used to spin all the time, and
+ * anything moving on glass redraws the screen every frame: the phone drew 90 frames a second
+ * for as long as music played with the chat open, for a disc turning slowly. Now it draws for
+ * the moment of each turn, and the rest of the time nothing.
+ */
 @Composable
-private fun Record(art: Bitmap?, spinning: Boolean) {
+private fun Record(art: Bitmap?, step: Int) {
     val palette = LocalGlassPalette.current
-    val angle = remember { Animatable(0f) }
-    LaunchedEffect(spinning) {
-        while (spinning) {
-            angle.animateTo(angle.value + 360f, tween(TURN_MS, easing = LinearEasing))
-            angle.snapTo(angle.value % 360f)
-        }
-    }
+    // Always forward: a new song starts its lines from the top again, the record doesn't turn back.
+    var turns by remember { mutableIntStateOf(0) }
+    LaunchedEffect(step) { turns++ }
+    val angle by animateFloatAsState(turns * TURN_DEGREES, tween(TURN_MS, easing = FastOutSlowInEasing), label = "record")
     val image = remember(art) { art?.asImageBitmap() }
     Box(
         Modifier
             .size(40.dp)
-            .graphicsLayer { rotationZ = angle.value }
+            .graphicsLayer { rotationZ = angle }
             .clip(CircleShape)
             .background(palette.content.copy(alpha = 0.12f)),
         contentAlignment = Alignment.Center,
@@ -176,4 +184,6 @@ private fun Control(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 private const val TICK_MS = 400L
-private const val TURN_MS = 14_000
+private const val TURN_MS = 700
+private const val TURN_DEGREES = 30f
+private const val STEP_MS = 5_000L
