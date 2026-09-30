@@ -26,7 +26,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * What is playing on the phone, as its player tells the system (the same thing the lock screen
  * shows). [positionMs] was where it was at [at], an elapsedRealtime; [position] works out now.
- * [art] is for the screen only.
+ * [art] is for the screen only. [words] are the player's own lyrics when it hands them over
+ * (PlayerLyrics), empty when it says the song has none; null when it says nothing, and LRCLIB is asked.
  */
 data class NowPlaying(
     val player: String,
@@ -39,6 +40,7 @@ data class NowPlaying(
     val playing: Boolean,
     val speed: Float = 1f,
     val art: Bitmap? = null,
+    val words: List<LyricLine>? = null,
 ) {
     fun position(now: Long): Long {
         val p = if (playing) positionMs + ((now - at) * speed).toLong() else positionMs
@@ -246,24 +248,34 @@ class PhoneMusic(private val context: Context) : MusicSource {
 
     private fun describe(seen: Seen): NowPlaying? {
         val m = seen.metadata ?: return null
-        val title = (m.getString(MediaMetadata.METADATA_KEY_TITLE) ?: m.description.title?.toString()).orEmpty().trim()
+        // The player's own account first: with car or Bluetooth lyrics on, QQ 音乐 puts the line being
+        // sung in the title and "歌名-歌手" in the artist (the phone showed "I don't wanna slow dance"
+        // by "SLOW DANCING IN THE DARK (Explicit)-Joji"), and the song's name is only right in here.
+        val own = PlayerLyrics.parse(m.getString(PlayerLyrics.KEY))
+        val title = (own?.song ?: m.getString(MediaMetadata.METADATA_KEY_TITLE) ?: m.description.title?.toString()).orEmpty().trim()
         if (title.isEmpty()) return null
-        val artist = (m.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: m.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+        val artist = (own?.artist ?: m.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: m.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: m.description.subtitle?.toString()).orEmpty().trim()
         val state = seen.state
         // What each player tells, for when a song's words or length come out wrong on some phone:
-        // the names of what it sets, never what it sets them to.
+        // the names of what it sets, never what it sets them to; and whether it gave its own lyrics.
         val song = "${seen.controller.packageName}|$title|$artist"
         if (song != logged) {
             logged = song
+            val words = when {
+                own == null -> "none of its own"
+                own.words != null -> "${own.words.size} lines of its own"
+                own.noWords -> "says there are none"
+                else -> "lyricInfo without lines"
+            }
             Log.i(TAG, "${seen.controller.packageName}: ${m.keySet().sorted().joinToString(",") { it.substringAfterLast('.') }}; " +
-                "length ${m.getLong(MediaMetadata.METADATA_KEY_DURATION) / 1000} s")
+                "length ${m.getLong(MediaMetadata.METADATA_KEY_DURATION) / 1000} s; words: $words")
         }
         return NowPlaying(
             player = seen.controller.packageName,
             title = title,
             artist = artist,
-            album = m.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty().trim(),
+            album = (own?.album ?: m.getString(MediaMetadata.METADATA_KEY_ALBUM)).orEmpty().trim(),
             durationMs = m.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0),
             positionMs = state?.position?.coerceAtLeast(0) ?: 0,
             at = state?.lastPositionUpdateTime?.takeIf { it > 0 } ?: SystemClock.elapsedRealtime(),
@@ -271,6 +283,7 @@ class PhoneMusic(private val context: Context) : MusicSource {
             speed = state?.playbackSpeed?.takeIf { it > 0f } ?: 1f,
             art = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) ?: m.getBitmap(MediaMetadata.METADATA_KEY_ART)
                 ?: m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON),
+            words = own?.words ?: if (own?.noWords == true) emptyList() else null,
         )
     }
 
@@ -300,7 +313,7 @@ class Listening(private val music: MusicSource, private val lyrics: Lyrics) {
         val np = music.now()?.takeIf { it.playing } ?: return null
         // Usually known already (the chat's bar asked when the song began). Not worth holding a reply up
         // long for; a lookup not done by then goes on, for the next message.
-        val words = withTimeoutOrNull(WORDS_WAIT_MS) { lyrics.of(np.title, np.artist, np.durationMs) }
+        val words = np.words ?: withTimeoutOrNull(WORDS_WAIT_MS) { lyrics.of(np.title, np.artist, np.durationMs) }
         return MusicText.listening(np, words, np.position(SystemClock.elapsedRealtime()))
     }
 

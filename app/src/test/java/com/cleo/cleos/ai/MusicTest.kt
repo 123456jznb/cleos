@@ -85,6 +85,28 @@ class MusicTest {
     }
 
     @Test
+    fun aPlayersOwnLyricInfoGivesTheRealSongAndItsWords() {
+        // As ColorOS reads it (ColorOS-Live-Lyrics-Bridge's example), and QQ 音乐 publishes it.
+        val own = PlayerLyrics.parse(
+            """{"songName":"示例歌曲","artist":"示例歌手","songId":"track-42","lyricType":0,""" +
+                """"lyric":"[00:10.000]第一句\n[00:14.500]第二句\n","rawLyric":"[00:10.000]<00:10.000>第一<00:10.700>句","noLyric":false,"trackKey":"x"}""",
+        )!!
+        assertEquals("示例歌曲", own.song)
+        assertEquals("示例歌手", own.artist)
+        assertEquals(listOf(LyricLine(10_000, "第一句"), LyricLine(14_500, "第二句")), own.words)
+        assertFalse(own.noWords)
+        // Saying there are none is an answer; saying nothing, or something unreadable, is not.
+        val none = PlayerLyrics.parse("""{"songName":"纯音乐","lyric":"","noLyric":true}""")!!
+        assertNull(none.words)
+        assertTrue(none.noWords)
+        assertNull(PlayerLyrics.parse(null))
+        assertNull(PlayerLyrics.parse("not json"))
+        assertNull(PlayerLyrics.parse("[1,2]"))
+        // Line times may be written in angle brackets too.
+        assertEquals(listOf(LyricLine(3_000, "开头")), Lrc.parse("<00:03.000>开头"))
+    }
+
+    @Test
     fun theTaIsToldWhatPlaysHowFarInAndTheLineBeingSung() {
         val words = Lrc.parse(lrc)
         assertEquals(

@@ -321,11 +321,13 @@ fun ChatTab(
             barShown = false
         }
     }
-    val words by produceState<List<LyricLine>?>(null, barSong?.song, barShown) {
+    // The player's own lyrics when it gives them (they can come a moment after the song does); LRCLIB's otherwise.
+    val fetched by produceState<List<LyricLine>?>(null, barSong?.song, barShown) {
         value = null
         val np = barSong
-        if (np != null && barShown) value = c.lyrics.of(np.title, np.artist, np.durationMs)
+        if (np != null && barShown && np.words == null) value = c.lyrics.of(np.title, np.artist, np.durationMs)
     }
+    val words = barSong?.words ?: fetched
     var switching by remember { mutableStateOf(false) }
     var readingRecap by remember { mutableStateOf(false) }
     val context = LocalContext.current

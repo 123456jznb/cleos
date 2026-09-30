@@ -27,7 +27,7 @@ data class LyricLine(val atMs: Long, val text: String)
  * some files open with. Shown as "唱到哪句" during the intro, they would read as the words.
  */
 object Lrc {
-    private val tag = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
+    private val tag = Regex("""[\[<](\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?[\]>]""")
     private val credit = Regex(
         """^(作词|作曲|编曲|词|曲|制作人?|音乐制作|监制|混音|混缩|母带|和声|配唱|录音|吉他|贝斯|鼓|键盘|弦乐|出品|发行|企划|统筹|OP|SP|""" +
             """Lyrics?|Lyricist|Written|Composer|Composed|Producer|Produced|Arranger|Arranged|Mix(?:ed|ing)?|Master(?:ed|ing)?)""" +
@@ -73,6 +73,33 @@ object Lrc {
     }
 
     private const val TITLE_WITHIN_MS = 1_500L
+}
+
+/**
+ * What a player says of its own song in MediaMetadata["lyricInfo"], a JSON string: the payload
+ * ColorOS's lock-screen lyrics read, which QQ 音乐, 网易云, 酷狗 and 酷我 publish there themselves
+ * (the format as ColorOS-Live-Lyrics-Bridge documents it). [song] and [artist] are the real ones
+ * even when the player has put the line being sung in the title for car and Bluetooth displays,
+ * as QQ 音乐 does on ColorOS; [words] are the player's own, timed to the song it plays.
+ */
+data class PlayerLyrics(val song: String?, val artist: String?, val album: String?, val words: List<LyricLine>?, val noWords: Boolean) {
+    companion object {
+        const val KEY = "lyricInfo"
+        private val json = Json { ignoreUnknownKeys = true }
+
+        fun parse(text: String?): PlayerLyrics? {
+            if (text.isNullOrBlank()) return null
+            val o = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: return null
+            fun field(name: String) = (o[name] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
+            return PlayerLyrics(
+                song = field("songName"),
+                artist = field("artist"),
+                album = field("album"),
+                words = field("lyric")?.let(Lrc::parse)?.takeIf { it.isNotEmpty() },
+                noWords = (o["noLyric"] as? JsonPrimitive)?.booleanOrNull == true,
+            )
+        }
+    }
 }
 
 /** A song as LRCLIB has it: [synced] is its LRC, null when only plain words (or none) are known. */
@@ -136,6 +163,10 @@ class Lyrics(http: OkHttpClient, private val agent: String, private val scope: C
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<LyricLine>>?) = size > KEPT
     }
     private val asking = HashMap<String, Deferred<List<LyricLine>?>>()
+
+    /** When a lookup last failed. For a while after, none is tried: LRCLIB answered 503 to one every few seconds. */
+    @Volatile
+    private var failedAt = 0L
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Empty when there are no words to be had (or none sung); null when LRCLIB couldn't be reached. */
@@ -145,6 +176,7 @@ class Lyrics(http: OkHttpClient, private val agent: String, private val scope: C
         // The chat's bar and a reply asking for the same song wait on the same lookup.
         val lookup = synchronized(this) {
             found[key]?.let { return it }
+            if (System.currentTimeMillis() - failedAt < RESTING_MS) return null
             asking.getOrPut(key) {
                 scope.async(Dispatchers.IO) {
                     val lines = fetch(title, artist, durationMs)
@@ -181,6 +213,7 @@ class Lyrics(http: OkHttpClient, private val agent: String, private val scope: C
             if (convert) lines.map { it.copy(text = simplified(it.text)) } else lines
         } catch (e: Exception) {
             Log.w(TAG, "unreachable after ${System.currentTimeMillis() - started} ms: ${e.javaClass.simpleName} ${e.message}")
+            failedAt = System.currentTimeMillis()
             null
         }
     }
@@ -217,5 +250,6 @@ class Lyrics(http: OkHttpClient, private val agent: String, private val scope: C
         const val TAG = "Lyrics"
         const val HOST = "lrclib.net"
         const val KEPT = 60
+        const val RESTING_MS = 60_000L
     }
 }
