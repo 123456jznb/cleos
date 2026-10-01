@@ -107,18 +107,33 @@ data class LegacyTa(
     val knownSince: Long?,
 )
 
-data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String)
+/** [models]: for a service whose API lists none, the ones it is known to have, to pick from. */
+data class ApiPreset(val name: String, val baseUrl: String, val defaultModel: String, val models: List<String> = emptyList())
 
 /** Starting points only; the settings screen can list what an endpoint really serves. */
 object ApiPresets {
     val DeepSeek = ApiPreset("DeepSeek", "https://api.deepseek.com", "deepseek-v4-flash")
     val all = listOf(
         DeepSeek,
+        // GLM-5.3-Flash: cheap (a tenth of GLM-5.3), and it sees pictures, which the chat sends.
+        // Its API has no list of models; these are the chat ones its docs name (2026-10).
+        ApiPreset(
+            "智谱",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+            models = listOf(
+                "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1", "glm-5", "glm-5-turbo",
+                "glm-4.7", "glm-4.7-flashx", "glm-4.7-flash", "glm-4.6", "glm-4.6v", "glm-4.6v-flash", "glm-4.5-air", "glm-4.5-flash",
+            ),
+        ),
         ApiPreset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
         ApiPreset("硅基流动", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3"),
         ApiPreset("Kimi", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
         ApiPreset("OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
     )
+
+    /** The preset whose address [baseUrl] is, if any. */
+    fun at(baseUrl: String): ApiPreset? = all.firstOrNull { it.baseUrl == baseUrl.trim().trimEnd('/') }
 }
 
 private val Context.settingsStore by preferencesDataStore(name = "settings")

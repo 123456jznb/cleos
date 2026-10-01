@@ -230,6 +230,11 @@ class RequestBodyTest {
         val disabled = Json.parseToJsonElement(requestBody("deepseek-v4-flash", messages, emptyList(), thinking = false).toString()).jsonObject
         assertEquals("disabled", disabled["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(disabled["messages"]!!.jsonArray.none { "reasoning_content" in it.jsonObject })
+        // One that always thinks, told to think little: no switch, and its reasoning goes back as without one.
+        val little = Json.parseToJsonElement(requestBody("glm-5.3-flash", messages, emptyList(), effort = Thinking.LITTLE).toString()).jsonObject
+        assertFalse("thinking" in little)
+        assertEquals("low", little["reasoning_effort"]!!.jsonPrimitive.content)
+        assertEquals("想了想", little["messages"]!!.jsonArray[4].jsonObject["reasoning_content"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -241,6 +246,13 @@ class RequestBodyTest {
         assertFalse(Thinking.canSwitchOff("deepseek-chat"))
         assertFalse(Thinking.canSwitchOff("gpt-4o-mini"))
         assertFalse(Thinking.canSwitchOff("glm-4-flash"))
+        assertTrue(Thinking.canSwitchOff("glm-5.2"))
+        assertTrue(Thinking.canSwitchOff("glm-4.7-flash"))
+        // From GLM-5.3 on thinking can't be switched off; they are told to think little instead.
+        assertFalse(Thinking.canSwitchOff("glm-5.3-flash"))
+        assertTrue(Thinking.thinksAlways("glm-5.3"))
+        assertTrue(Thinking.thinksAlways("zai/glm-5.3-flashx"))
+        assertFalse(Thinking.thinksAlways("glm-5.2"))
         assertFalse(Thinking.canSwitchOff("mock"))
     }
 }

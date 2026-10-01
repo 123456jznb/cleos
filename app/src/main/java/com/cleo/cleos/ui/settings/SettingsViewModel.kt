@@ -17,6 +17,7 @@ import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.Habits
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
+import com.cleo.cleos.data.ApiPresets
 import android.media.MediaPlayer
 import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.SpeechException
@@ -505,7 +506,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun applyPreset(p: ApiPreset) {
         baseUrl = p.baseUrl
         model = p.defaultModel
-        models = null
+        // A service that lists no models: the ones it is known to have, to pick from at once.
+        models = p.models.ifEmpty { null }
         checkResult = null
     }
 
@@ -538,7 +540,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 models = list
                 if (list.isEmpty()) "连上了，但这个地址没有列出模型" else "连上了，有 ${list.size} 个模型可选"
             } catch (e: ChatException) {
-                e.message
+                // No such page, past the key's check (a wrong key is a 401): connected, to a service
+                // that lists no models (智谱). Its known ones instead.
+                val known = ApiPresets.at(baseUrl)?.models.orEmpty()
+                if (e.status in NO_LIST && known.isNotEmpty()) {
+                    models = known
+                    "连上了。这家不列出模型，下面是它常用的几个"
+                } else {
+                    e.message
+                }
             } catch (e: Exception) {
                 "出错了：${e.message ?: e.javaClass.simpleName}"
             }
@@ -713,3 +723,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 }
+
+/** How an address answers being asked for its models when it keeps no list: no such page, or not asked that way. */
+private val NO_LIST = setOf(404, 405)

@@ -243,6 +243,7 @@ object PhoneAssistantBackup {
             "openai" in k -> "OpenAI"
             "silicon" in k -> "硅基流动"
             "moonshot" in k || "kimi" in k -> "Kimi"
+            "zhipu" in k || "bigmodel" in k || "glm" in k -> "智谱"
             else -> return null
         }
         return ApiPresets.all.firstOrNull { it.name == name }

@@ -215,7 +215,8 @@ internal fun BehaviorPage(vm: SettingsViewModel) {
         ExplainedSwitch(
             "深度思考",
             "回答前先想一想，更连贯，但更慢更费 token",
-            "回答前先想一想：前后更连贯，推理也更好；每次要多等几秒，也多花一点 token。DeepSeek、智谱这类模型认这个开关，不认的会自动照常回复。",
+            "回答前先想一想：前后更连贯，推理也更好；每次要多等几秒，也多花一点 token。DeepSeek、智谱这类模型认这个开关，不认的会自动照常回复。" +
+                "智谱 GLM-5.3 起的模型关不掉思考，关着时让它少想一点。",
             vm.deepThinking,
         ) { vm.setThinking(it) }
         RowDivider(inset = 0.dp)

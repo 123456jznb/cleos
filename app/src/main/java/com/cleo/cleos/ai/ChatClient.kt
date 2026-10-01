@@ -93,7 +93,8 @@ class ChatClient(private val http: OkHttpClient) {
     /**
      * [thinking]: ask the model to think first (see [requestBody]). Without it, a model that thinks
      * unless told otherwise ([Thinking.canSwitchOff]) is told not to: the wait and the tokens are
-     * for nothing then. One that turns that down is asked again plainly, at once.
+     * for nothing then. One that can't stop thinking ([Thinking.thinksAlways]) is told to think
+     * little. One that turns either down is asked again plainly, at once.
      */
     fun stream(
         endpoint: ApiEndpoint,
@@ -102,15 +103,24 @@ class ChatClient(private val http: OkHttpClient) {
         thinking: Boolean = false,
     ): Flow<ChatEvent> = callbackFlow {
         val key = endpoint.chatUrl + "|" + endpoint.model
+        val always = Thinking.thinksAlways(endpoint.model)
         fun request(off: Boolean) = http.newCall(
             Request.Builder()
                 .url(endpoint.chatUrl)
                 .header("Authorization", "Bearer ${endpoint.apiKey}")
                 .header("Accept", "text/event-stream")
-                .post(requestBody(endpoint.model, messages, tools, if (thinking) true else if (off) false else null).toString().toRequestBody(JSON_TYPE))
+                .post(
+                    requestBody(
+                        endpoint.model,
+                        messages,
+                        tools,
+                        thinking = if (thinking) true else if (off && !always) false else null,
+                        effort = if (off && always) Thinking.LITTLE else null,
+                    ).toString().toRequestBody(JSON_TYPE),
+                )
                 .build(),
         )
-        val off = !thinking && Thinking.canSwitchOff(endpoint.model) && key !in refusesOff
+        val off = !thinking && (always || Thinking.canSwitchOff(endpoint.model)) && key !in refusesOff
         var call = request(off)
 
         launch(Dispatchers.IO) {
@@ -212,11 +222,22 @@ class ChatClient(private val http: OkHttpClient) {
 object Thinking {
     private val SWITCHABLE = listOf("deepseek-v4", "glm-4.5", "glm-4.6", "glm-4.7", "glm-5")
 
+    /**
+     * Models that always think: told not to, they fail the request (GLM from 5.3 on: its docs say
+     * thinking.type only takes enabled). Asked plainly they think as hard as they can, which is
+     * the longest wait there is; they take being asked to think little ([LITTLE]).
+     */
+    private val ALWAYS = listOf("glm-5.3")
+
+    /** reasoning_effort for a model that can't stop thinking, when the TA isn't to think. */
+    const val LITTLE = "low"
+
     /** By the model's own name, also behind a relay's prefix (deepseek/deepseek-v4-flash). */
-    fun canSwitchOff(model: String): Boolean {
-        val name = model.trim().substringAfterLast('/').lowercase()
-        return SWITCHABLE.any { name.startsWith(it) }
-    }
+    fun canSwitchOff(model: String): Boolean = !thinksAlways(model) && SWITCHABLE.any { name(model).startsWith(it) }
+
+    fun thinksAlways(model: String): Boolean = ALWAYS.any { name(model).startsWith(it) }
+
+    private fun name(model: String) = model.trim().substringAfterLast('/').lowercase()
 }
 
 /**
@@ -228,12 +249,20 @@ object Thinking {
  * [thinking] is the switch DeepSeek and GLM take for thinking before answering: true turns it
  * on, false off, null leaves it out. On, DeepSeek wants every earlier reply to carry its
  * reasoning too: the turn under way sends its own back, earlier turns an empty one. Off, no
- * reasoning goes back at all (as DeepSeek's own plugin does it).
+ * reasoning goes back at all (as DeepSeek's own plugin does it). [effort]: how hard a model that
+ * always thinks should (reasoning_effort); its reasoning goes back as with the switch left out.
  */
-internal fun requestBody(model: String, messages: List<ApiMessage>, tools: List<ToolSpec>, thinking: Boolean? = null): JsonObject = buildJsonObject {
+internal fun requestBody(
+    model: String,
+    messages: List<ApiMessage>,
+    tools: List<ToolSpec>,
+    thinking: Boolean? = null,
+    effort: String? = null,
+): JsonObject = buildJsonObject {
     put("model", model)
     put("stream", true)
     if (thinking != null) putJsonObject("thinking") { put("type", if (thinking) "enabled" else "disabled") }
+    if (effort != null) put("reasoning_effort", effort)
     putJsonArray("messages") {
         for (m in messages) {
             addJsonObject {

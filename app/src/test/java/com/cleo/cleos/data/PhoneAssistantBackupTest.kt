@@ -309,7 +309,12 @@ class PhoneAssistantBackupTest {
             ApiPresets.DeepSeek.baseUrl to "deepseek-v4-pro",
             service("api_active_provider" to "deepseek", "api_model_deepseek" to "deepseek-v4-pro"),
         )
-        assertEquals(null to null, service("api_active_provider" to "zhipu", "api_model_zhipu" to "glm-4.7"))
+        assertEquals(
+            "https://open.bigmodel.cn/api/paas/v4" to "glm-4.7",
+            service("api_active_provider" to "zhipu", "api_model_zhipu" to "glm-4.7"),
+        )
+        // A provider without a preset, and without its address: nothing to go on.
+        assertEquals(null to null, service("api_active_provider" to "baichuan", "api_model_baichuan" to "baichuan4"))
         assertNull(service("api_active_provider" to "claude", "api_endpoint_claude" to "https://api.anthropic.com").first)
         assertEquals(null to null, service())
     }
