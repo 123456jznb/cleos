@@ -50,6 +50,8 @@ class CleosApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Before anything that could fail: a crash while the rest is set up is kept too.
+        CrashLog.install(this)
         container = AppContainer(this)
         container.notifier.channels()
     }

@@ -180,10 +180,12 @@ class PhoneMusic(private val context: Context) : MusicSource {
             .filter { counts(it.packageName) }
     }
 
-    override fun now(): NowPlaying? = pick(controllers().map { Seen(it) })?.let(::describe)
+    private fun seen(): List<Seen> = controllers().mapNotNull { runCatching { Seen(it) }.getOrNull() }
+
+    override fun now(): NowPlaying? = pick(seen())?.let(::describe)
 
     override fun control(action: MusicAction) {
-        val c = pick(controllers().map { Seen(it) })?.controller ?: throw ToolFailure("对方手机上现在没有在放的音乐。", "没在放歌")
+        val c = pick(seen())?.controller ?: throw ToolFailure("对方手机上现在没有在放的音乐。", "没在放歌")
         val t = c.transportControls
         when (action) {
             MusicAction.Pause -> t.pause()
@@ -199,7 +201,7 @@ class PhoneMusic(private val context: Context) : MusicSource {
      * a screen (Cleos is in front then), or nothing opens.
      */
     fun open(): Boolean {
-        val intent = pick(controllers().map { Seen(it) })?.controller?.sessionActivity ?: return false
+        val intent = pick(seen())?.controller?.sessionActivity ?: return false
         val options = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
                 ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
@@ -226,28 +228,31 @@ class PhoneMusic(private val context: Context) : MusicSource {
             trySend(pick(watched)?.let(::describe))
         }
         fun follow(list: List<MediaController>) {
-            watched.forEach { it.controller.unregisterCallback(it.callback) }
-            watched = list.filter { counts(it.packageName) }.map { c ->
-                Seen(c).also { seen ->
-                    seen.callback = object : MediaController.Callback() {
-                        override fun onMetadataChanged(metadata: MediaMetadata?) {
-                            seen.metadata = metadata
-                            update()
-                        }
+            watched.forEach { runCatching { it.controller.unregisterCallback(it.callback) } }
+            // One player that can't be followed is left out, not the rest with it (see describe).
+            watched = list.filter { counts(it.packageName) }.mapNotNull { c ->
+                runCatching {
+                    Seen(c).also { seen ->
+                        seen.callback = object : MediaController.Callback() {
+                            override fun onMetadataChanged(metadata: MediaMetadata?) {
+                                seen.metadata = metadata
+                                update()
+                            }
 
-                        override fun onPlaybackStateChanged(state: PlaybackState?) {
-                            seen.state = state
-                            update()
-                        }
+                            override fun onPlaybackStateChanged(state: PlaybackState?) {
+                                seen.state = state
+                                update()
+                            }
 
-                        override fun onSessionDestroyed() {
-                            seen.metadata = null
-                            seen.state = null
-                            update()
+                            override fun onSessionDestroyed() {
+                                seen.metadata = null
+                                seen.state = null
+                                update()
+                            }
                         }
+                        c.registerCallback(seen.callback, handler)
                     }
-                    c.registerCallback(seen.callback, handler)
-                }
+                }.onFailure { Log.w(TAG, "can't follow ${c.packageName}", it) }.getOrNull()
             }
             update()
         }
@@ -256,13 +261,15 @@ class PhoneMusic(private val context: Context) : MusicSource {
         try {
             m.addOnActiveSessionsChangedListener(sessions, listener, handler)
             follow(m.getActiveSessions(listener))
-        } catch (_: SecurityException) {
-            // Notification access not given (or taken back): nothing to show.
+        } catch (e: Exception) {
+            // Notification access not given (or taken back), or the phone's media service failing to
+            // say: nothing to show, rather than a crash.
+            if (e !is SecurityException) Log.w(TAG, "can't watch the players", e)
             trySend(null)
         }
         awaitClose {
             runCatching { m.removeOnActiveSessionsChangedListener(sessions) }
-            watched.forEach { it.controller.unregisterCallback(it.callback) }
+            watched.forEach { runCatching { it.controller.unregisterCallback(it.callback) } }
         }
     }.distinctUntilChanged()
 
@@ -281,7 +288,28 @@ class PhoneMusic(private val context: Context) : MusicSource {
     @Volatile
     private var logged: String? = null
 
-    private fun describe(seen: Seen): NowPlaying? {
+    /** What went wrong reading a player last, logged once rather than at every one of its callbacks. */
+    @Volatile
+    private var failed: String? = null
+
+    /**
+     * What [seen] says is playing; null when it says nothing, or what it says can't be read. Another
+     * app's data, read on the main thread from its callbacks: anything in it that throws would take
+     * Cleos down with it, at every start while that player is up (a report: with QQ 音乐 in the
+     * background, Cleos closed itself as it opened). Not knowing the song is the most that can come of it.
+     */
+    private fun describe(seen: Seen): NowPlaying? = try {
+        read(seen)
+    } catch (e: Exception) {
+        val what = "${seen.controller.packageName}: ${e.javaClass.name}: ${e.message}"
+        if (what != failed) {
+            failed = what
+            Log.w(TAG, "can't read what $what", e)
+        }
+        null
+    }
+
+    private fun read(seen: Seen): NowPlaying? {
         val m = seen.metadata ?: return null
         // The player's own account first: with car or Bluetooth lyrics on, QQ 音乐 puts the line being
         // sung in the title and "歌名-歌手" in the artist (the phone showed "I don't wanna slow dance"

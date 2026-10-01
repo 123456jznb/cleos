@@ -10,6 +10,8 @@ import android.service.notification.NotificationListenerService
  */
 class NowPlayingListener : NotificationListenerService() {
     override fun onListenerConnected() {
-        requestUnbind()
+        // The system refuses it (SecurityException, "unknown listener") when the connection has already
+        // gone again by the time this runs; staying connected costs nothing, crashing Cleos would.
+        runCatching { requestUnbind() }
     }
 }

@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.cleo.cleos.CrashLog
 import com.cleo.cleos.ai.Mcp
 import com.cleo.cleos.ai.PhoneCalendar
 import com.cleo.cleos.ai.PhoneMusic
@@ -588,6 +589,30 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
                     }
                 }
                 releasesHint?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+                // The last crash, to send to whoever makes the app (CrashLog): there only after one.
+                var crash by remember { mutableStateOf(CrashLog.read(context)) }
+                var crashHint by remember { mutableStateOf<String?>(null) }
+                crash?.let { text ->
+                    Text(
+                        "Cleos 上次闪退了（${text.lineSequence().first().substringAfter("，").substringBefore(" 闪退")}）。" +
+                            "复制下来发给做 App 的人，就能知道是哪里出的错；里面是出错的位置，不是聊天内容，发之前也可以先看一眼。",
+                        color = palette.content,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("复制闪退记录", selected = false) {
+                            context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Cleos 闪退记录", text))
+                            crashHint = "复制好了。"
+                        }
+                        Chip("清掉", selected = false) {
+                            CrashLog.clear(context)
+                            crash = null
+                            crashHint = null
+                        }
+                    }
+                    crashHint?.let { Text(it, color = palette.contentSecondary, fontSize = 12.sp) }
+                }
                 Text(
                     "聊天、日记和待办都只存在这台手机上。API Key 用系统密钥库加密。",
                     color = palette.contentSecondary,

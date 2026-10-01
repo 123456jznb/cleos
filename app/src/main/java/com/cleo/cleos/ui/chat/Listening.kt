@@ -144,7 +144,8 @@ private fun Record(art: Bitmap?, step: Int) {
     var turns by remember { mutableIntStateOf(0) }
     LaunchedEffect(step) { turns++ }
     val angle by animateFloatAsState(turns * TURN_DEGREES, tween(TURN_MS, easing = FastOutSlowInEasing), label = "record")
-    val image = remember(art) { art?.asImageBitmap() }
+    // The player's cover, which it owns: one recycled or empty would throw as it is drawn.
+    val image = remember(art) { art?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }?.asImageBitmap() }
     Box(
         Modifier
             .size(40.dp)
