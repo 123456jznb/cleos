@@ -1,6 +1,8 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.CallRecord
+import com.cleo.cleos.data.CallRecords
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
@@ -70,6 +72,22 @@ object Prompt {
     private const val STICKER_RULE =
         "你可以发表情包：单独写一行 [[sticker:名字]]，对方看到的就是那张图。名字照下面的一字不差地写，别编没有的；" +
             "一次最多发一张，不用每次都发，想发的时候再发。对方发来的表情包也是这样写的。你的表情包（名字：图里是什么）："
+
+    /**
+     * On the phone (ai/Call.kt), at the end of the person's last turn: what the TA writes is read out
+     * in its voice, so it should talk the way people do on the phone. What the person said comes
+     * through a transcription, which mishears; asking beats answering something never said.
+     */
+    const val CALL_RULE =
+        "（你们正在打电话，你说的每个字都会用你的声音念给对方听。像打电话那样说话：口语，短，一次一两句；" +
+            "不发表情包，不用括号写动作，不列条目。对方的话是从语音转成的文字，听着不通顺多半是转错了，没听懂就问一句。）"
+
+    /** Where a call begins, on the person's side: they rang. */
+    const val CALL_BEGAN = "（对方给你打来电话，你接了）"
+
+    /** Where a call ended, after the last thing said in it. */
+    fun callEnded(talkedMs: Long?): String =
+        if (talkedMs == null) "（电话挂了）" else "（电话挂了，打了${CallRecords.spoken(talkedMs)}）"
 
     /**
      * What changes as the conversation goes on comes last: the [stickers] the TA may send, which
@@ -167,6 +185,11 @@ object Prompt {
      * has come due, said beside the time (LaterRules.dueLine). [listening]: the song playing,
      * likewise (MusicText.listening). [stickers]: the collection; the TA is offered it with
      * [sendStickers] (its switch), and without, the person's stickers are told in words.
+     *
+     * A phone call is in the conversation like the rest of it, between a line where it began and
+     * one where it ended. [call]: the call on right now, if any (its "call" row's id): it hasn't
+     * ended, and the TA is told it is on the phone (CALL_RULE). [calls]: the calls whose row is
+     * out of [history] while what was said in them is not, so their end can still say how long.
      */
     fun messages(
         settings: AppSettings,
@@ -182,12 +205,30 @@ object Prompt {
         listening: String? = null,
         stickers: StickerBook = StickerBook.EMPTY,
         sendStickers: Boolean = false,
+        call: Long? = null,
+        calls: Map<Long, CallRecord> = emptyMap(),
     ): List<ApiMessage> {
         val withTools = tools.isNotEmpty() || outside.isNotEmpty()
         val attached = if (images) attachedPictures(history) else emptySet()
         val words: (String) -> String = if (sendStickers) { text -> text } else { text -> StickerText.described(text, stickers) }
         val reacted = reactions(history)
-        val converted = history.mapNotNull { m -> m.toApi(withTools, images, attached, words, reacted)?.let { m.id to it } }
+        // Each call's last row here, and how long the calls whose row is here went on.
+        val lastInCall = HashMap<Long, Long>()
+        for (m in history) m.call?.let { lastInCall[it] = m.id }
+        val records = calls + history.filter { it.role == "call" }.mapNotNull { m -> CallRecords.decode(m.content)?.let { m.id to it } }
+        val converted = ArrayList<Pair<Long, ApiMessage>>(history.size)
+        for (m in history) {
+            if (m.role == "call") {
+                // One where nothing was said (hung up while it rang) is left out.
+                if (m.id == call || m.id in lastInCall) converted += m.id to ApiMessage("user", CALL_BEGAN)
+                continue
+            }
+            m.toApi(withTools, images, attached, words, reacted)?.let { converted += m.id to it }
+            val inCall = m.call
+            if (inCall != null && inCall != call && lastInCall[inCall] == m.id) {
+                converted += m.id to ApiMessage("user", callEnded(records[inCall]?.talkedMs))
+            }
+        }
         val sendable = asSentMessages(converted, texts = ToolGroup.Messages in tools, voices = ToolGroup.Speak in tools)
         val paired = if (withTools) pairCalls(sendable) else sendable
         // The window can start mid-exchange; begin at a user turn, which every endpoint accepts.
@@ -216,7 +257,8 @@ object Prompt {
         if (lastUser >= 0) {
             val noted = LaterRules.dueLine(due)?.let { "$it\n" }.orEmpty()
             val heard = listening?.let { "$it\n" }.orEmpty()
-            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$heard$noted${it.content}") }
+            val phone = if (call != null) "\n$CALL_RULE" else ""
+            merged[lastUser] = merged[lastUser].let { it.copy(content = "（${timeLine(now)}）\n$heard$noted${it.content}$phone") }
         }
         val offered = if (sendStickers) stickers.all else emptyList()
         return listOf(ApiMessage("system", system(settings, ta, tools, memories, now.zone, recap, outside, offered))) + merged

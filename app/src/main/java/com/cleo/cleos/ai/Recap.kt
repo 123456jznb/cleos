@@ -1,6 +1,7 @@
 package com.cleo.cleos.ai
 
 import android.util.Log
+import com.cleo.cleos.data.CallRecords
 import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.SecretStore
@@ -122,8 +123,12 @@ object Recap {
 
     private fun lineOf(m: MessageEntity): String? {
         fun said(text: String) = StickerText.plain(text).trim().replace('\n', ' ').take(LINE_MAX)
+        // Said on the phone: marked on each line, since a fold can start in the middle of a call.
+        val phone = if (m.call != null) "（电话里）" else ""
         return when {
             m.error != null -> null
+            // A call: where it began, and how long it went on. One where nothing was said is nothing.
+            m.role == "call" -> CallRecords.decode(m.content)?.talkedMs?.let { "（对方打来电话，打了${CallRecords.spoken(it)}）" }
             // The person's answer to a request for a secret: the line the chat shows, not the entry.
             m.role == "user" && m.note != null -> "（${m.note}）"
             m.role == "user" -> {
@@ -132,9 +137,9 @@ object Recap {
                 listOfNotNull(words, if (pictures > 0) "[发了${pictures}张图]" else null)
                     .joinToString(" ")
                     .ifEmpty { null }
-                    ?.let { "对方：${answering(m)}$it" }
+                    ?.let { "对方$phone：${answering(m)}$it" }
             }
-            m.role == "assistant" && m.content.isNotBlank() -> "我：${answering(m)}${said(m.content)}"
+            m.role == "assistant" && m.content.isNotBlank() -> "我$phone：${answering(m)}${said(m.content)}"
             else -> null
         }
     }

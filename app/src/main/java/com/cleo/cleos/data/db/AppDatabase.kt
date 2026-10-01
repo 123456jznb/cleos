@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WakeEntity::class,
         StickerEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -56,6 +56,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 12, to = 13),
         // 13 -> 14: the sticker collection (a table), and the emoji stuck on messages (a nullable column).
         AutoMigration(from = 13, to = 14),
+        // 14 -> 15: which phone call a message was said in (a nullable column).
+        AutoMigration(from = 14, to = 15),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {

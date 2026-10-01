@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
@@ -51,6 +52,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -59,6 +61,7 @@ import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EmojiEmotions
@@ -140,6 +143,7 @@ import com.cleo.cleos.ai.NowPlaying
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.ui.LocalPageShown
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.CallRecords
 import com.cleo.cleos.ai.McpAsk
 import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.Recap
@@ -231,11 +235,11 @@ private sealed interface ChatRow {
 
 /**
  * Rows with nothing to draw: an assistant turn that only called tools, without a thought to
- * show (the results have their own lines), and a tool result without a line (a request
- * shows its card instead).
+ * show (the results have their own lines), a tool result without a line (a request shows its
+ * card instead), and what was said or done in a phone call (the call's card stands for it).
  */
 private fun MessageEntity.silent() =
-    (thoughtOnly() && thought == null) || (role == "tool" && note.isNullOrBlank())
+    (thoughtOnly() && thought == null) || (role == "tool" && note.isNullOrBlank()) || call != null
 
 /** An assistant turn that only called tools: at most its thinking is drawn, on a line of its own. */
 private fun MessageEntity.thoughtOnly() = role == "assistant" && content.isEmpty() && error == null
@@ -362,6 +366,12 @@ fun ChatTab(
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         voiceHint = if (granted) "可以了，再按住说话" else "要给 Cleos 用话筒的权限，才能发语音"
     }
+    // Calls: the settings page that has what is missing before one can begin, and the call whose words are open.
+    var askCallSetup by remember { mutableStateOf<SettingsPage?>(null) }
+    var readingCall by remember { mutableStateOf<Long?>(null) }
+    val askMicForCall = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.call() else voiceHint = "要给 Cleos 用话筒的权限，才能打电话"
+    }
 
     // A TA's voice message being made ready for the ear (EarVoice) before it plays.
     val preparing = remember { arrayOfNulls<Job>(1) }
@@ -403,6 +413,21 @@ fun ChatTab(
                 p.release()
                 playing = null
                 voiceHint = "这段语音放不了"
+            }
+        }
+    }
+
+    /** A call needs the model, ears (voice to text) and a voice (TA 的声音); what is missing is asked for first. */
+    fun startCall() {
+        when {
+            !state.hasApiKey -> onOpenSettingsPage(SettingsPage.Model)
+            !state.voiceReady -> askCallSetup = SettingsPage.VoiceInput
+            !state.speechReady -> askCallSetup = SettingsPage.Voice
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
+                askMicForCall.launch(Manifest.permission.RECORD_AUDIO)
+            else -> {
+                stopPlaying()
+                vm.call()
             }
         }
     }
@@ -496,6 +521,8 @@ fun ChatTab(
     val rows = remember(state.messages, state.recapUntil, state.avatarEachMessage) {
         buildRows(state.messages, state.recapUntil, eachFace = state.avatarEachMessage)
     }
+    // The calls something was said in: only those have words to open.
+    val callsSaid = remember(state.messages) { state.messages.mapNotNullTo(HashSet()) { it.call } }
     val faces = if (!state.chatAvatars) {
         null
     } else {
@@ -542,9 +569,17 @@ fun ChatTab(
         return "$who：${q.text}"
     }
 
+    /** Where message [id] is drawn: its own row, or the card of the call it was said in. */
+    fun rowOf(id: Long): Int {
+        val own = rows.indexOfFirst { it is ChatRow.Message && it.message.id == id }
+        if (own >= 0) return own
+        val call = state.messages.firstOrNull { it.id == id }?.call ?: return -1
+        return rows.indexOfFirst { it is ChatRow.Message && it.message.id == call }
+    }
+
     /** Scrolls to the message a quote is of; one no longer in the chat is said to be gone. */
     fun jumpTo(id: Long) {
-        val index = rows.indexOfFirst { it is ChatRow.Message && it.message.id == id }
+        val index = rowOf(id)
         if (index < 0) {
             voiceHint = "原消息已经不在了"
             return
@@ -561,12 +596,14 @@ fun ChatTab(
     LaunchedEffect(focus, rows, state.conversationId) {
         val f = focus ?: return@LaunchedEffect
         if (state.conversationId != f.conversationId) return@LaunchedEffect
-        val index = rows.indexOfFirst { it is ChatRow.Message && it.message.id == f.messageId }
+        val index = rowOf(f.messageId)
         if (index < 0) {
             voiceHint = "那条消息已经不在了"
         } else {
             listState.scrollToItem(index + if (state.streaming != null) 1 else 0)
             flashed = f.messageId
+            // Said on the phone: what was said in that call, opened.
+            state.messages.firstOrNull { it.id == f.messageId }?.call?.let { readingCall = it }
         }
         c.chat.shown()
     }
@@ -580,6 +617,7 @@ fun ChatTab(
                 backdrop = page,
                 leading = { GlassIconButton(Icons.Rounded.Forum, "对话记录", onOpenConversations, page) },
                 trailing = {
+                    GlassIconButton(Icons.Rounded.Call, "打电话", { startCall() }, page)
                     GlassIconButton(Icons.Rounded.AddComment, "新对话", vm::newConversation, page)
                     GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page)
                 },
@@ -722,6 +760,7 @@ fun ChatTab(
                             val m = row.message
                             val note = m.note
                             when {
+                                m.role == "call" -> CallNote(m, said = m.id in callsSaid) { readingCall = m.id }
                                 m.role == "tool" || m.role == "note" ->
                                     ToolNote(note.orEmpty(), if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome)
                                 m.role == "request" -> RequestCard(m, state.aiName, enabled = !state.replying) { grant ->
@@ -795,6 +834,46 @@ fun ChatTab(
             },
             dismissButton = { TextButton(onClick = { askVoiceSetup = false }) { Text("算了") } },
         )
+    }
+
+    askCallSetup?.let { page ->
+        val ai = state.aiName.ifBlank { "TA" }
+        AlertDialog(
+            onDismissRequest = { askCallSetup = null },
+            title = { Text(if (page == SettingsPage.VoiceInput) "先接一个转文字的服务" else "先给${ai}选一个声音") },
+            text = {
+                Text(
+                    if (page == SettingsPage.VoiceInput) {
+                        "电话里你说的话要先转成文字，${ai}才听得懂。在设置「发语音」里选一个服务、填上 Key 就能用。"
+                    } else {
+                        "电话里${ai}要用声音回你。在设置「TA 的声音」里选一个服务和音色就能用。"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    askCallSetup = null
+                    onOpenSettingsPage(page)
+                }) { Text("去设置") }
+            },
+            dismissButton = { TextButton(onClick = { askCallSetup = null }) { Text("算了") } },
+        )
+    }
+
+    readingCall?.let { id ->
+        state.messages.firstOrNull { it.id == id && it.role == "call" }?.let { record ->
+            CallTranscript(
+                record = record,
+                lines = state.messages.filter { it.call == id },
+                aiName = state.aiName.ifBlank { "TA" },
+                userName = state.userName.ifBlank { "我" },
+                onDelete = {
+                    readingCall = null
+                    vm.delete(id)
+                },
+                onDismiss = { readingCall = null },
+            )
+        }
     }
 
     if (readingRecap) {
@@ -1463,6 +1542,113 @@ private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, 
             }
         }
     }
+}
+
+/**
+ * A phone call in the chat: one line where it began, saying how long it went on, in place of
+ * everything said in it. Tapped, what was said ([said]: anything was), and a way to delete it.
+ */
+@Composable
+private fun CallNote(message: MessageEntity, said: Boolean, onOpen: () -> Unit) {
+    val palette = LocalGlassPalette.current
+    val record = remember(message.content) { CallRecords.decode(message.content) } ?: return
+    val talked = record.talkedMs
+    val text = when {
+        record.endedAt == null -> "通话中"
+        talked == null -> "已取消"
+        else -> "语音通话 ${CallRecords.clock(talked)}"
+    }
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        GlassSurface(
+            modifier = Modifier.clickable(interactionSource = null, indication = null, onClick = onOpen),
+            style = palette.notice,
+            shape = GlassShape.Capsule,
+            contentPadding = PaddingValues(start = 12.dp, end = 14.dp, top = 7.dp, bottom = 7.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Call, contentDescription = null, tint = palette.accentContent, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(text, color = palette.contentSecondary, fontSize = 13.sp)
+                if (talked != null && said) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("看说了什么", color = palette.accentContent, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+/** What was said in a call, in order, with a way to delete the call and all of it. */
+@Composable
+private fun CallTranscript(
+    record: MessageEntity,
+    lines: List<MessageEntity>,
+    aiName: String,
+    userName: String,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val palette = LocalGlassPalette.current
+    var deleting by remember { mutableStateOf(false) }
+    val talked = remember(record.content) { CallRecords.decode(record.content)?.talkedMs }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (deleting) "删除这通电话？" else "电话里说的") },
+        text = {
+            if (deleting) {
+                Text("电话里说的话会一起删掉，${aiName}也就不记得这通电话了。")
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        Dates.chatStamp(record.createdAt) + (talked?.let { " · 通话 ${CallRecords.clock(it)}" } ?: ""),
+                        color = palette.contentSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    var any = false
+                    for (m in lines) {
+                        val note = m.note
+                        when {
+                            (m.role == "user" || m.role == "assistant") && m.content.isNotBlank() -> {
+                                any = true
+                                Text(
+                                    if (m.role == "user") userName else aiName,
+                                    color = palette.accentContent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(m.content, fontSize = 15.sp, lineHeight = 22.sp)
+                                Spacer(Modifier.height(10.dp))
+                            }
+                            m.role == "tool" && !note.isNullOrBlank() -> {
+                                Text("（$note）", color = palette.contentSecondary, fontSize = 12.sp)
+                                Spacer(Modifier.height(10.dp))
+                            }
+                        }
+                    }
+                    if (!any) Text("这通电话里没说上话。")
+                }
+            }
+        },
+        confirmButton = {
+            if (deleting) {
+                TextButton(onClick = onDelete) { Text("删除", color = palette.error) }
+            } else {
+                TextButton(onClick = onDismiss) { Text("关上") }
+            }
+        },
+        dismissButton = {
+            if (deleting) {
+                TextButton(onClick = { deleting = false }) { Text("算了") }
+            } else {
+                TextButton(onClick = { deleting = true }) { Text("删除") }
+            }
+        },
+    )
 }
 
 /**

@@ -12,6 +12,7 @@ import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.ai.Prompt
+import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageQuote
@@ -59,6 +60,8 @@ data class ChatUiState(
     val transcribing: Set<Long> = emptySet(),
     /** A transcription service is set up, so the microphone can be used. */
     val voiceReady: Boolean = false,
+    /** The TA has a voice (TA 的声音), so it can talk on the phone. */
+    val speechReady: Boolean = false,
     val loaded: Boolean = false,
 )
 
@@ -132,6 +135,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },
                 transcribing = transcribing,
                 voiceReady = s.voiceBaseUrl.isNotBlank() && s.voiceModel.isNotBlank(),
+                speechReady = Speech.ready(s),
                 loaded = true,
             )
         }
@@ -276,6 +280,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.chat.sendVoice(id, clip, quoting)
         quoting = null
         return true
+    }
+
+    /** Rings the TA of this conversation; its screen comes up by itself (CleosNavHost). */
+    fun call() {
+        state.value.conversationId?.let { c.calls.start(it) }
     }
 
     fun retryVoice(messageId: Long) {

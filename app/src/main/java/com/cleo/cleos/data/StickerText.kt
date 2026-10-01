@@ -140,6 +140,10 @@ object StickerText {
     /** The name, when [text] is one sticker and nothing else. */
     fun only(text: String): String? = TOKEN.matchEntire(text.trim())?.groupValues?.get(1)?.trim()
 
+    /** [text] with every sticker taken out, written either way: what is read aloud, where no picture can go. */
+    fun without(text: String): String =
+        if ('[' !in text && '【' !in text) text else LOOSE.replace(TOKEN.replace(text, ""), "")
+
     /**
      * A reply still coming in, without a token that has only begun ("[[stic"): it would show as
      * words for a moment and then turn into a picture.

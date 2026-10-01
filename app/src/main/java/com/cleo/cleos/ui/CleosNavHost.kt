@@ -8,12 +8,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.cleo.cleos.Opening
+import com.cleo.cleos.ui.call.CallScreen
 import com.cleo.cleos.ui.chat.ConversationsScreen
 import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.chat.SearchScreen
@@ -76,6 +79,10 @@ data class McpEditRoute(val id: String)
 @Serializable
 data class PersonaRoute(val companionId: Long)
 
+/** A call with a TA: up for as long as one is on, over whatever else was open. */
+@Serializable
+object CallRoute
+
 /**
  * Screens cross-fade rather than slide. Glass samples what is behind it at the position
  * it was last laid out at; a screen sliding in via a transform moves without being laid
@@ -97,6 +104,20 @@ fun CleosNavHost() {
                 c.opening.value = null
             }
             null -> Unit
+        }
+    }
+    // A call on: its screen, whatever was open (a notification tapped meanwhile, the app opened again
+    // from the launcher). Over: back to where the person was.
+    val call by c.calls.state.collectAsStateWithLifecycle()
+    val calling = call != null
+    val entry by nav.currentBackStackEntryAsState()
+    LaunchedEffect(calling, entry) {
+        val here = entry ?: return@LaunchedEffect
+        val onCall = here.destination.hasRoute<CallRoute>()
+        if (calling && !onCall) {
+            nav.navigate(CallRoute) { launchSingleTop = true }
+        } else if (!calling && onCall) {
+            nav.popBackStack()
         }
     }
     NavHost(
@@ -147,6 +168,7 @@ fun CleosNavHost() {
             )
         }
         composable<ImageRoute> { entry -> ImageViewerScreen(entry.toRoute<ImageRoute>().file, onBack = nav::back) }
+        composable<CallRoute> { CallScreen() }
     }
 }
 

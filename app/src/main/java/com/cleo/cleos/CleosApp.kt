@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.PowerManager
 import androidx.room.Room
 import com.cleo.cleos.ai.AiSelfAvatar
+import com.cleo.cleos.ai.Calls
 import com.cleo.cleos.ai.ChatClient
 import com.cleo.cleos.ai.ChatRepository
 import com.cleo.cleos.ai.EarVoice
@@ -126,6 +127,9 @@ class AppContainer(context: Context) {
     val imports = ForeignImport(context, db, companions)
     val notifier = Notifier(context, images)
 
+    /** Phone calls with a TA. */
+    val calls = Calls(context, db, chat, companions, settings, transcriber, speaker, appScope)
+
     /** Whether the app is on screen (MainActivity, between onStart and onStop). */
     @Volatile
     var visible = false
@@ -178,6 +182,8 @@ class AppContainer(context: Context) {
             companions.ensure()
             // What a TA brought from another app used to sit in their persona; it moves into their memory, once.
             PersonaMemory.migrate(db, System.currentTimeMillis())
+            // A call the app was stopped in the middle of ended there.
+            chat.closeOpenCalls()
         }
         // Notes still waiting and letters on their way get their background work back, if it was lost.
         later.reconcile()

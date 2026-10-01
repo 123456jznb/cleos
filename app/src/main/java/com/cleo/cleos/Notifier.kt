@@ -47,7 +47,43 @@ class Notifier(private val context: Context, private val images: ImageStore) {
                 setShowBadge(false)
             },
         )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_CALLS, "通话", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "和 TA 打电话时一直在，能从这里挂断；挂了就消失"
+                setShowBadge(false)
+            },
+        )
     }
+
+    /**
+     * What CallService shows while a call is on: who it is with, how long it has gone on once the
+     * TA picked up ([since]; null while it rings), and a button that hangs up.
+     */
+    fun calling(name: String, since: Long?, hangUp: PendingIntent): android.app.Notification =
+        NotificationCompat.Builder(context, CHANNEL_CALLS)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(if (since == null) "正在呼叫$name…" else "和${name}通话中")
+            .setContentText("点这里回到电话")
+            .setOngoing(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .apply {
+                if (since != null) {
+                    setWhen(since)
+                    setShowWhen(true)
+                    setUsesChronometer(true)
+                }
+            }
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    1,
+                    Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                    PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .addAction(0, "挂断", hangUp)
+            .build()
 
     /** False when notifications are off for the app, or (Android 13 on) not allowed yet. */
     fun allowed(): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()
@@ -151,6 +187,7 @@ class Notifier(private val context: Context, private val images: ImageStore) {
         const val CHANNEL_MESSAGES = "ta_messages"
         const val CHANNEL_LETTERS = "letters"
         const val CHANNEL_WORKING = "replying"
+        const val CHANNEL_CALLS = "calls"
         const val EXTRA_CONVERSATION = "conversation"
         const val EXTRA_LETTER = "letter"
         private const val TAG_CONVERSATION = "conversation"

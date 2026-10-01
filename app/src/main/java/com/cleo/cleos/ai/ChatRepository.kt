@@ -1,6 +1,8 @@
 package com.cleo.cleos.ai
 
 import com.cleo.cleos.data.AppSettings
+import com.cleo.cleos.data.CallRecord
+import com.cleo.cleos.data.CallRecords
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.ImageStore
 import com.cleo.cleos.data.MessageAudio
@@ -142,8 +144,12 @@ class ChatRepository(
     /** Calls waiting on the person, by conversation. */
     private val asks = ConcurrentHashMap<Long, CompletableDeferred<Answer>>()
 
-    /** Whether a reply is waiting or under way in [conversationId], including while its tools run. */
-    fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true
+    /** The conversation a phone call is on in (ai/Call.kt), if any. */
+    @Volatile
+    private var calling: Long? = null
+
+    /** Whether a reply is waiting or under way in [conversationId], including while its tools run, or a call is on there. */
+    fun busy(conversationId: Long): Boolean = jobs[conversationId]?.isActive == true || calling == conversationId
 
     /** Guards starting and ending a conversation's job, which messages sent from anywhere can race. */
     private val lock = Any()
@@ -441,13 +447,196 @@ class ChatRepository(
     /** Before a restore replaces every conversation. */
     suspend fun stopAll() = stopReplies(jobs.keys.toList())
 
-    /** The row and the pictures sent with it: nothing else points at those files. */
+    /** The row and the pictures sent with it: nothing else points at those files. A call goes with all that was said in it. */
     fun deleteMessage(id: Long) {
         scope.launch {
             val m = db.messages().get(id)
+            if (m?.role == "call") {
+                db.messages().deleteCall(id)
+                return@launch
+            }
             db.messages().delete(id)
             images.delete(MessageImages.decode(m?.images).map { it.file } + listOfNotNull(MessageAudios.decode(m?.audio)?.file))
         }
+    }
+
+    // Phone calls (ai/Call.kt). What the two say goes into the conversation as messages marked as
+    // the call's, so the TA remembers it like anything typed. While a call is on, replies and wakes
+    // there wait (busy): nothing comes between what the two say.
+
+    /**
+     * A call begins in [conversationId]: a reply still under way there stops, since the person has
+     * moved on to calling, and the call's row goes in. Returns its id.
+     */
+    suspend fun beginCall(conversationId: Long): Long {
+        calling = conversationId
+        stopReplies(listOf(conversationId))
+        val at = stamp()
+        val id = db.messages().insert(
+            MessageEntity(conversationId = conversationId, role = "call", content = CallRecords.encode(CallRecord()), createdAt = at),
+        )
+        db.conversations().touch(conversationId, at)
+        return id
+    }
+
+    /** The TA picked up, [at] then: the call's length counts from here. */
+    suspend fun callAnswered(callId: Long, at: Long) = changeCall(callId) { it.copy(answeredAt = at) }
+
+    /** Something said in the call, by the person ("user") or the TA ("assistant"). */
+    suspend fun callLine(conversationId: Long, callId: Long, role: String, text: String) {
+        withContext(NonCancellable) {
+            val at = stamp()
+            db.messages().insert(MessageEntity(conversationId = conversationId, role = role, content = text, createdAt = at, call = callId))
+            db.conversations().touch(conversationId, at)
+        }
+    }
+
+    /** The call is over: its row says when, replies there can come again, and the recap catches up with it. */
+    suspend fun endCall(conversationId: Long, callId: Long) {
+        withContext(NonCancellable) {
+            changeCall(callId) { it.copy(endedAt = System.currentTimeMillis()) }
+            db.conversations().touch(conversationId, stamp())
+            if (calling == conversationId) calling = null
+            recaps.foldLater(conversationId)
+        }
+    }
+
+    /** Calls left open by the app stopping mid-call (killed, crashed): ended where the last thing was said in them. */
+    suspend fun closeOpenCalls() {
+        for (row in db.messages().calls()) {
+            val record = CallRecords.decode(row.content) ?: continue
+            if (record.endedAt != null || row.conversationId == calling) continue
+            val last = db.messages().lastInCall(row.id) ?: record.answeredAt ?: row.createdAt
+            db.messages().setContent(row.id, CallRecords.encode(record.copy(endedAt = maxOf(last, record.answeredAt ?: last))))
+        }
+    }
+
+    /** The calls [history] has lines of but not the row of (the window begins mid-call): how long each went on is in the row. */
+    private suspend fun callsOutside(history: List<MessageEntity>): Map<Long, CallRecord> {
+        val missing = history.mapNotNullTo(HashSet()) { it.call } - history.filter { it.role == "call" }.map { it.id }.toSet()
+        if (missing.isEmpty()) return emptyMap()
+        return db.messages().byIds(missing).mapNotNull { m -> CallRecords.decode(m.content)?.let { m.id to it } }.toMap()
+    }
+
+    private suspend fun changeCall(callId: Long, change: (CallRecord) -> CallRecord) {
+        withContext(NonCancellable) {
+            val row = db.messages().get(callId) ?: return@withContext
+            db.messages().setContent(callId, CallRecords.encode(change(CallRecords.decode(row.content) ?: CallRecord())))
+        }
+    }
+
+    /**
+     * The TA's turn in a call: its words go to [say] as they are written, for the call to speak
+     * sentence by sentence. Tools as in a reply, those that make sense on the phone (CALL_TOOLS),
+     * their calls and results stored as the call's, since they happened. The words aren't stored
+     * here: the call stores what of them was heard (callLine). No thinking: on the phone a silence
+     * that long is a dropped line. Returns all it said; throws ChatException when there is no answer.
+     */
+    suspend fun callReply(conversationId: Long, callId: Long, say: (String) -> Unit): String {
+        val s = settings.current()
+        val ta = taOf(conversationId)
+        val key = secrets.key(ta.apiBaseUrl)?.takeIf { it.isNotBlank() } ?: throw ChatException("还没有填 API Key")
+        val conversation = db.conversations().get(conversationId) ?: throw ChatException("这段对话已经删了")
+        val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
+        val endpointKey = endpoint.chatUrl + "|" + endpoint.model
+        val history = Recap.sent(recaps.live(conversation), s.historySize)
+        var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta) intersect CALL_TOOLS
+        val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
+        // The person's stickers in what came before, told in words: none are sent on the phone.
+        val stickers = StickerBook(db.stickers().all())
+        val calls = callsOutside(history)
+        fun build() = Prompt.messages(
+            s, ta, history, ZonedDateTime.now(), groups, false, memories, conversation.recap, stickers = stickers, call = callId, calls = calls,
+        )
+        var messages = build()
+        val said = StringBuilder()
+        var rounds = 0
+        while (true) {
+            val step = callStep(conversationId, callId, endpoint, messages, tools.specs(groups), mayRefuse = rounds == 0 && groups.isNotEmpty()) {
+                said.append(it)
+                say(it)
+            }
+            when (step) {
+                Step.Refused -> {
+                    groups = emptySet()
+                    messages = build()
+                }
+                is Step.Called -> {
+                    if (rounds == MAX_TOOL_ROUNDS) return said.toString()
+                    val results = runTools(conversationId, step, s.copy(tools = groups), ta.id, emptyList(), ta.name, inCall = callId)
+                    messages = messages + step.message + results
+                    rounds++
+                }
+                else -> return said.toString()
+            }
+        }
+    }
+
+    /**
+     * One request in a call: the words to [say] as they come, nothing shown in the chat. Calls are
+     * stored at once (they are about to be acted on); an answer without calls comes back as
+     * [Step.Said], unstored. A failure is thrown, unless it is the refusal [mayRefuse] allows for.
+     */
+    private suspend fun callStep(
+        conversationId: Long,
+        callId: Long,
+        endpoint: ApiEndpoint,
+        messages: List<ApiMessage>,
+        specs: List<ToolSpec>,
+        mayRefuse: Boolean,
+        say: (String) -> Unit,
+    ): Step {
+        val text = StringBuilder()
+        val reasoning = StringBuilder()
+        var calls = emptyList<ToolCall>()
+        try {
+            client.stream(endpoint, messages, specs).collect { event ->
+                when (event) {
+                    is ChatEvent.Delta -> {
+                        text.append(event.text)
+                        say(event.text)
+                    }
+                    is ChatEvent.Reasoning -> if (event.sendBack) reasoning.append(event.text)
+                    is ChatEvent.ToolCalls -> {
+                        // Sending messages isn't offered on the phone. A model used to it may send one
+                        // all the same: what it meant to send is said instead.
+                        val (sends, others) = event.calls.partition { it.name in ToolSpecs.speaking }
+                        for (send in sends) {
+                            val words = ToolArgs.parse(send.arguments)?.let { ToolArgs.text(it, "text") }?.trim().orEmpty()
+                            if (words.isNotEmpty()) {
+                                val line = if (text.isEmpty()) words else "\n$words"
+                                text.append(line)
+                                say(line)
+                            }
+                        }
+                        calls = others
+                    }
+                }
+            }
+        } catch (e: ChatException) {
+            if (mayRefuse && text.isEmpty() && e.status in REFUSED_STATUSES) return Step.Refused
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ChatException("出错了：${e.message ?: e.javaClass.simpleName}")
+        }
+        if (calls.isEmpty()) return Step.Said(text.toString(), null, null)
+        val sentBack = reasoning.toString().ifEmpty { null }
+        val id = withContext(NonCancellable) {
+            db.messages().insert(
+                MessageEntity(
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = "",
+                    createdAt = stamp(),
+                    toolCalls = ToolCallCodec.encode(calls),
+                    reasoning = sentBack,
+                    call = callId,
+                ),
+            )
+        }
+        return Step.Called(ApiMessage("assistant", text.toString(), calls, reasoning = sentBack), savedId = id)
     }
 
     /** A conversation, its pictures and recordings: the rows go by cascade, the files would stay behind. */
@@ -565,8 +754,9 @@ class ChatRepository(
         var thinking = ta.deepThinking && endpointKey !in refusesThinking
         val memories = if (ToolGroup.Memory in s.tools) db.memories().allFor(ta.id) else emptyList()
         val (stickers, sendStickers) = stickersFor(s)
+        val calls = callsOutside(history)
         fun build() = Prompt.withWake(
-            Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap, stickers = stickers, sendStickers = sendStickers),
+            Prompt.messages(s, ta, history, now, groups, false, memories, conversation.recap, stickers = stickers, sendStickers = sendStickers, calls = calls),
             instruction,
         )
         var messages = build()
@@ -682,8 +872,9 @@ class ChatRepository(
             // takes no tools: it is something to know, not something to do.
             val heard = if (ToolGroup.Music in s.tools) runCatching { listening() }.getOrNull() else null
             val (stickers, sendStickers) = stickersFor(s)
+            val calls = callsOutside(history)
             fun build() = Prompt.messages(
-                s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what }, heard, stickers, sendStickers,
+                s, ta, history, now, groups, withImages, memories, recap, outside, due.map { it.what }, heard, stickers, sendStickers, calls = calls,
             )
             var messages = prepare(build())
             var rounds = 0
@@ -922,7 +1113,8 @@ class ChatRepository(
      * Runs the calls, storing each result with its line for the chat. Sent messages come
      * first: each is the TA speaking and becomes a bubble, a moment after the one before, the
      * way messages arrive when someone types them one by one. Then the other calls, in order.
-     * The results go back in the order of the calls. [wake]: as in [step].
+     * The results go back in the order of the calls. [wake]: as in [step]. [inCall]: the phone call
+     * this is in (callReply): nothing shows in the chat, and every row is marked as the call's.
      */
     private suspend fun runTools(
         conversationId: Long,
@@ -932,7 +1124,9 @@ class ChatRepository(
         outside: List<McpTool>,
         ai: String,
         wake: Boolean = false,
+        inCall: Long? = null,
     ): List<ApiMessage> {
+        val quiet = wake || inCall != null
         val said = step.message.content
         val (sends, others) = step.message.toolCalls.partition { it.name in ToolSpecs.speaking }
         val results = HashMap<String, ApiMessage>()
@@ -959,7 +1153,7 @@ class ChatRepository(
                 else -> {
                     previous?.let {
                         // Typing the next one: the dots, for a moment that grows a little with what was just said.
-                        if (!wake) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
+                        if (!quiet) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }))
                         delay((400L + it.length * 25L).coerceAtMost(1500L))
                     }
                     // A voice message is made first (a voice service can take a few seconds). One that
@@ -967,7 +1161,7 @@ class ChatRepository(
                     var voice: MessageAudio? = null
                     var why: String? = null
                     if (call.name == ToolSpecs.sendVoice.name) {
-                        if (!wake) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }, activity = "在录语音"))
+                        if (!quiet) show(StreamingReply(conversationId, said, thinking = false, savedId = step.savedId.takeIf { said.isNotEmpty() }, activity = "在录语音"))
                         try {
                             voice = speaker.speak(s, words)
                         } catch (e: CancellationException) {
@@ -990,6 +1184,7 @@ class ChatRepository(
                                 thought = thought,
                                 quote = quote?.let(MessageQuotes::encode),
                                 proactive = wake,
+                                call = inCall,
                             ),
                         )
                         db.conversations().touch(conversationId, at)
@@ -1017,6 +1212,7 @@ class ChatRepository(
                         // Only if no message went out to carry it.
                         thought = thought,
                         proactive = wake,
+                        call = inCall,
                     ),
                 )
             }
@@ -1032,7 +1228,7 @@ class ChatRepository(
                 savedId = step.savedId.takeIf { said.isNotEmpty() },
                 activity = outer?.let { "在用${it.serverName}" } ?: tools.activity(call.name),
             )
-            if (!wake) show(live)
+            if (!quiet) show(live)
             val outcome = try {
                 if (outer != null) runOutside(conversationId, outer, call, live, ai) else tools.run(call, s, conversationId, companionId)
             } catch (e: CancellationException) {
@@ -1053,11 +1249,12 @@ class ChatRepository(
                         toolCallId = call.id,
                         note = outcome.note,
                         proactive = wake,
+                        call = inCall,
                     ),
                 )
                 outcome.request?.let {
                     db.messages().insert(
-                        MessageEntity(conversationId = conversationId, role = "request", content = SecretRequests.encode(it), createdAt = at),
+                        MessageEntity(conversationId = conversationId, role = "request", content = SecretRequests.encode(it), createdAt = at, call = inCall),
                     )
                 }
             }
@@ -1189,6 +1386,15 @@ class ChatRepository(
          * vLLM), 404 (OpenRouter finds no endpoint for it), 422 (strict validators).
          */
         private val REFUSED_STATUSES = setOf(400, 404, 422)
+
+        /**
+         * What a TA can do on the phone: what needs no picture, card or message of its own in the
+         * chat, and leaves the sound alone (music_control would talk over the call).
+         */
+        private val CALL_TOOLS = setOf(
+            ToolGroup.Todos, ToolGroup.Diary, ToolGroup.AiDiary, ToolGroup.Memory, ToolGroup.Letters, ToolGroup.Weather,
+            ToolGroup.Location, ToolGroup.Later, ToolGroup.Alarm, ToolGroup.Calendar,
+        )
         private const val TOOLS_REFUSED = "这个模型不接受工具调用，这次没带工具。想让 TA 记待办、查天气，换一个支持工具的模型。"
         private const val IMAGES_REFUSED = "这个模型看不了图片，这次只发了文字。想让 TA 看图，换一个能看图的模型。"
         private const val THINKING_REFUSED = "这个模型不认深度思考的开关，这次照常回复了，之后也不再带这个开关。"

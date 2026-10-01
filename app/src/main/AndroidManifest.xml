@@ -17,6 +17,8 @@
     <!-- ReplyKeeper: a reply the person left before it came is finished instead of frozen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- CallService: a call with a TA goes on with the screen off. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:name=".CleosApp"
@@ -43,6 +45,11 @@
             android:name=".ReplyKeeper"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- 一起听歌: notification access is what lets Cleos see what the phone is playing. -->
         <service

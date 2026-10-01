@@ -226,6 +226,22 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun delete(id: Long)
 
+    /** A phone call's row and everything said and done in it. */
+    @Query("DELETE FROM messages WHERE id = :id OR call = :id")
+    suspend fun deleteCall(id: Long)
+
+    /** Every phone call's row: the ones left open by the app stopping mid-call are closed with these. */
+    @Query("SELECT * FROM messages WHERE role = 'call'")
+    suspend fun calls(): List<MessageEntity>
+
+    /** These rows, those still there. */
+    @Query("SELECT * FROM messages WHERE id IN (:ids)")
+    suspend fun byIds(ids: Collection<Long>): List<MessageEntity>
+
+    /** When the last thing in a call was said; null when nothing was. */
+    @Query("SELECT MAX(createdAt) FROM messages WHERE call = :callId")
+    suspend fun lastInCall(callId: Long): Long?
+
     @Query("SELECT * FROM messages")
     suspend fun all(): List<MessageEntity>
 

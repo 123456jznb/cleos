@@ -193,9 +193,11 @@ data class MessageEntity(
     val conversationId: Long,
     /**
      * "user", "assistant", "tool" (what a tool call returned, answering [toolCallId]),
-     * "note" (a line shown in the chat that is never sent to the model) or "request" (the
+     * "note" (a line shown in the chat that is never sent to the model), "request" (the
      * model asking to see a little secret; [content] is a SecretRequest as JSON, and the
-     * card is for the person only).
+     * card is for the person only) or "call" (a phone call with the TA, where it began;
+     * [content] is a CallRecord as JSON, and what was said in it are the rows whose [call] is
+     * this row's id).
      */
     val role: String,
     /** For "tool": the result exactly as the model saw it. */
@@ -237,6 +239,11 @@ data class MessageEntity(
     val proactive: Boolean = false,
     /** "assistant": the emoji the person stuck on it from the long-press menu (MessageReaction list as JSON). */
     val reactions: String? = null,
+    /**
+     * Said in a phone call (or done in one: a tool's call and result): the id of the call's "call"
+     * row. The chat shows the call as that one row; what was said is read from it.
+     */
+    val call: Long? = null,
 )
 
 /**

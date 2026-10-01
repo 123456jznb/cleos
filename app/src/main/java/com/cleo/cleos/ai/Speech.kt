@@ -295,8 +295,29 @@ class Speaker(
 ) {
     private val http = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
 
-    /** [text] spoken; throws [SpeechException] with what went wrong, worded for the person. */
+    /** [text] spoken, into a voice message; throws [SpeechException] with what went wrong, worded for the person. */
     suspend fun speak(s: AppSettings, text: String): MessageAudio {
+        val words = text.trim().take(Speech.MAX_CHARS)
+        val (bytes, mime) = sound(s, words)
+        return withContext(Dispatchers.IO) {
+            val file = images.file("voice_${System.currentTimeMillis()}_${(1000..9999).random()}.${Speech.extension(mime)}")
+            file.writeBytes(bytes)
+            val ms = runCatching {
+                MediaMetadataRetriever().use { r ->
+                    r.setDataSource(file.path)
+                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                }
+            }.getOrNull()
+            // Some files don't say how long they are: about four characters a second, then.
+            MessageAudio(file.name, ms ?: (words.length * 250L).coerceAtLeast(1000))
+        }
+    }
+
+    /**
+     * [text] spoken, as the service sent it: the bytes and their type (MP3 mostly). Kept nowhere: a
+     * phone call plays it and lets it go. Throws [SpeechException].
+     */
+    suspend fun sound(s: AppSettings, text: String): Pair<ByteArray, String?> {
         val words = text.trim().take(Speech.MAX_CHARS)
         if (words.isEmpty()) throw SpeechException("没有要说的话")
         val service = Speech.service(s) ?: throw SpeechException("还没选 TA 的声音：在设置「TA 的声音」里选一个")
@@ -328,18 +349,7 @@ class Speaker(
             }
         }
         if (bytes.size < 64) throw SpeechException("回来的声音是空的")
-        return withContext(Dispatchers.IO) {
-            val file = images.file("voice_${System.currentTimeMillis()}_${(1000..9999).random()}.${Speech.extension(mime)}")
-            file.writeBytes(bytes)
-            val ms = runCatching {
-                MediaMetadataRetriever().use { r ->
-                    r.setDataSource(file.path)
-                    r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-                }
-            }.getOrNull()
-            // Some files don't say how long they are: about four characters a second, then.
-            MessageAudio(file.name, ms ?: (words.length * 250L).coerceAtLeast(1000))
-        }
+        return bytes to mime
     }
 
     /**
