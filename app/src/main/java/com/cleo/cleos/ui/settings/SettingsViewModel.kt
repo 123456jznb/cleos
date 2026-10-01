@@ -1,5 +1,6 @@
 package com.cleo.cleos.ui.settings
 
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -167,6 +168,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val mcpServers: StateFlow<List<McpServer>> = c.mcp.servers.all.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /** Every TA: the one being edited is shown with its picture, and another can be picked. */
+    val companions: StateFlow<List<CompanionEntity>> = c.companions.all.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     init {
         viewModelScope.launch {
             c.companions.all.collect { all ->
@@ -242,6 +246,42 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.settings.update {
             speech(it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM))
         }
+    }
+
+    /**
+     * The settings of another TA, who also becomes the one being talked to (as picking them on the
+     * home page does). What was typed for this one is saved first, a key left unsaved included.
+     */
+    fun switchCompanion(id: Long) {
+        if (id == companionId) return
+        val pendingKey = keyInput.trim()
+        val address = baseUrl
+        viewModelScope.launch {
+            persist()
+            if (pendingKey.isNotEmpty()) c.secrets.setKey(address, pendingKey)
+            c.companions.select(id)
+            load(c.companions.current())
+        }
+    }
+
+    /** A picture cropped on the profile page; it replaces an emoji the TA picked for itself. */
+    fun setAvatar(picture: Bitmap) {
+        val id = companionId
+        c.appScope.launch { c.companions.setAvatar(id, c.images.save(picture, prefix = "avatar-"), emoji = null) }
+    }
+
+    /** Back to the first letter of the name. */
+    fun clearAvatar() {
+        val id = companionId
+        c.appScope.launch { c.companions.setAvatar(id, null, emoji = null) }
+    }
+
+    fun setChatAvatars(on: Boolean) {
+        viewModelScope.launch { c.settings.update { it.copy(chatAvatars = on) } }
+    }
+
+    fun setAvatarEachMessage(on: Boolean) {
+        viewModelScope.launch { c.settings.update { it.copy(avatarEachMessage = on) } }
     }
 
     /** Removes this TA with their conversations and diary; [then] leaves the screen. */
@@ -629,8 +669,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                     append("导入好了：新的 TA「$shown」，${plan.conversations.size} 段对话（${plan.messageCount} 条消息）、")
                     append("${plan.diary.size} 篇日记")
                     if (plan.memories.isNotEmpty()) append("，它记得关于你的 ${plan.memories.size} 件事")
-                    append("。这一页上面现在设置的就是$shown")
-                    if (!keyed) append("；它用的接口还没有 Key，填在最上面")
+                    append("。设置里现在改的就是$shown")
+                    if (!keyed) append("；它用的接口还没有 Key，在「模型」里填")
                     append("。")
                 }
             } catch (e: Exception) {

@@ -62,6 +62,7 @@ import com.cleo.cleos.ui.chat.ChatTab
 import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.diary.DiaryTab
 import com.cleo.cleos.ui.home.HomeTab
+import com.cleo.cleos.ui.settings.SettingsPage
 import com.cleo.cleos.ui.todo.TodoTab
 
 /**
@@ -83,6 +84,7 @@ private const val WARM_UP_MS = 600L
 @Composable
 fun MainScreen(
     onOpenSettings: () -> Unit,
+    onOpenSettingsPage: (SettingsPage) -> Unit,
     onOpenConversations: () -> Unit,
     onOpenDiaryEntry: (id: Long, secret: Boolean) -> Unit,
     onOpenImage: (String) -> Unit,
@@ -192,7 +194,7 @@ fun MainScreen(
                 ) {
                     holder.SaveableStateProvider(index) {
                         when (index) {
-                            0 -> ChatTab(bottomInset, onOpenSettings, onOpenConversations, onOpenImage)
+                            0 -> ChatTab(bottomInset, onOpenSettings, onOpenSettingsPage, onOpenConversations, onOpenImage)
                             1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
                             2 -> TodoTab(bottomInset, onOpenSettings)
                             else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters, onOpenMemory)

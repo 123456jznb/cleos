@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -43,8 +42,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SelectableDates
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -56,8 +53,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -235,23 +230,6 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
 
             LetterCard(ai, letters, now, onOpenLetters)
             MemoryCard(ai, remembered.size, onOpenMemory)
-
-            GlassSurface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = GlassShape.Rounded(24.dp),
-                contentPadding = PaddingValues(16.dp),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    AvatarSwitch("聊天里显示头像", "消息旁边放上各自的头像", s.chatAvatars) { on ->
-                        c.appScope.launch { c.settings.update { it.copy(chatAvatars = on) } }
-                    }
-                    if (s.chatAvatars) {
-                        AvatarSwitch("每条都显示", "像微信那样每条消息都带头像；关着时，连着的几条只在最后一条旁边放一个", s.avatarEachMessage) { on ->
-                            c.appScope.launch { c.settings.update { it.copy(avatarEachMessage = on) } }
-                        }
-                    }
-                }
-            }
         }
 
         cropping?.let { (who, uri) ->
@@ -316,36 +294,6 @@ fun HomeTab(bottomInset: Dp, onOpenSettings: () -> Unit, onOpenLetters: () -> Un
 }
 
 /** What this TA keeps in mind, in one line; the page behind it lists and edits it. */
-/** One of the avatar switches: a whole row to tap, title and a line under it. */
-@Composable
-private fun AvatarSwitch(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val palette = LocalGlassPalette.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .toggleable(value = checked, interactionSource = null, indication = null, role = Role.Switch, onValueChange = onChange),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(hint, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 17.sp)
-        }
-        Spacer(Modifier.width(12.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = null,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = palette.accent,
-                checkedBorderColor = palette.accent,
-                uncheckedThumbColor = palette.contentSecondary,
-                uncheckedTrackColor = palette.content.copy(alpha = 0.07f),
-                uncheckedBorderColor = palette.contentSecondary.copy(alpha = 0.6f),
-            ),
-        )
-    }
-}
-
 @Composable
 private fun MemoryCard(ai: String, count: Int, onOpen: () -> Unit) {
     val palette = LocalGlassPalette.current

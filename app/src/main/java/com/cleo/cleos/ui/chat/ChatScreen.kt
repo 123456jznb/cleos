@@ -175,6 +175,7 @@ import com.cleo.cleos.ui.common.appContainer
 import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
+import com.cleo.cleos.ui.settings.SettingsPage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
@@ -293,6 +294,7 @@ private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long
 fun ChatTab(
     bottomInset: Dp,
     onOpenSettings: () -> Unit,
+    onOpenSettingsPage: (SettingsPage) -> Unit,
     onOpenConversations: () -> Unit,
     onOpenImage: (String) -> Unit,
 ) {
@@ -763,7 +765,7 @@ fun ChatTab(
         }
 
         if (state.loaded && !state.hasApiKey && state.messages.isEmpty()) {
-            NoKeyCard(onOpenSettings, Modifier.align(Alignment.Center).padding(horizontal = 28.dp))
+            NoKeyCard({ onOpenSettingsPage(SettingsPage.Model) }, Modifier.align(Alignment.Center).padding(horizontal = 28.dp))
         } else if (state.loaded && state.messages.isEmpty() && state.streaming == null) {
             GlassSurface(
                 modifier = Modifier.align(Alignment.Center),
@@ -788,7 +790,7 @@ fun ChatTab(
             confirmButton = {
                 TextButton(onClick = {
                     askVoiceSetup = false
-                    onOpenSettings()
+                    onOpenSettingsPage(SettingsPage.VoiceInput)
                 }) { Text("去设置") }
             },
             dismissButton = { TextButton(onClick = { askVoiceSetup = false }) { Text("算了") } },

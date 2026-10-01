@@ -26,14 +26,16 @@ import com.cleo.cleos.ui.memory.MemoryEditScreen
 import com.cleo.cleos.ui.memory.MemoryScreen
 import com.cleo.cleos.ui.settings.McpEditScreen
 import com.cleo.cleos.ui.settings.PersonaScreen
+import com.cleo.cleos.ui.settings.SettingsPage
 import com.cleo.cleos.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
 @Serializable
 object MainRoute
 
+/** [page]: a SettingsPage's name to open straight on, null for the list of them. */
 @Serializable
-object SettingsRoute
+data class SettingsRoute(val page: String? = null)
 
 @Serializable
 object LabRoute
@@ -107,7 +109,8 @@ fun CleosNavHost() {
     ) {
         composable<MainRoute> {
             MainScreen(
-                onOpenSettings = { nav.go(SettingsRoute) },
+                onOpenSettings = { nav.go(SettingsRoute()) },
+                onOpenSettingsPage = { nav.go(SettingsRoute(it.name)) },
                 onOpenConversations = { nav.go(ConversationsRoute) },
                 onOpenDiaryEntry = { id, secret -> nav.go(DiaryRoute(id, secret)) },
                 onOpenImage = { nav.go(ImageRoute(it)) },
@@ -119,8 +122,9 @@ fun CleosNavHost() {
         composable<LetterRoute> { entry -> LetterScreen(entry.toRoute<LetterRoute>().id, onBack = nav::back) }
         composable<MemoryRoute> { MemoryScreen(onBack = nav::back, onOpen = { nav.go(MemoryEditRoute(it)) }) }
         composable<MemoryEditRoute> { entry -> MemoryEditScreen(entry.toRoute<MemoryEditRoute>().id, onBack = nav::back) }
-        composable<SettingsRoute> {
+        composable<SettingsRoute> { entry ->
             SettingsScreen(
+                start = SettingsPage.of(entry.toRoute<SettingsRoute>().page),
                 onBack = nav::back,
                 onOpenLab = { nav.go(LabRoute) },
                 onOpenMcp = { nav.go(McpEditRoute(it)) },
