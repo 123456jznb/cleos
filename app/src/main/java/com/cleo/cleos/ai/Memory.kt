@@ -53,20 +53,35 @@ object MemoryKinds {
 
     fun order(key: String): Int = all.indexOfFirst { it.key == key }.let { if (it < 0) all.size else it }
 
-    /** Topics per kind. Few on purpose: a full kind makes the TA merge or drop instead of piling up. */
-    const val PER_KIND = 5
+    /**
+     * Topics per kind. Bounded on purpose: a full kind makes the TA merge or drop instead of piling
+     * up. It was 5, until more room was asked for along with a longer persona; every topic's line
+     * goes with every message, so 10 and not more: 50 lines, a few thousand characters.
+     */
+    const val PER_KIND = 10
 
-    /** Details per topic: past this, opening one is a burden of its own. */
-    const val DETAILS = 12
+    /**
+     * Details per topic. They stay out of the chat until the topic is opened, so more cost nothing
+     * per message; past this, opening one is a burden of its own. A letter takes them along, within
+     * [MemoryDigest.LETTER_DETAILS].
+     */
+    const val DETAILS = 30
 }
 
 /**
  * What a TA is told about what they remember. In a chat, every topic's one line, with its
  * number and how many details it has; the details stay out until opened, so remembering
  * more costs almost nothing per message. In a letter there are no tools to open anything,
- * so the details come along.
+ * so the details come along, as many as [LETTER_DETAILS] holds.
  */
 object MemoryDigest {
+    /**
+     * How many characters of details a letter takes along. Everything, while it fits; a full
+     * memory (50 topics of 30 details) could run to hundreds of thousands. Past it, each topic
+     * keeps its newest in an equal share, and what a topic with little doesn't use goes to the rest.
+     */
+    const val LETTER_DETAILS = 16_000
+
     private fun sorted(memories: List<MemoryEntity>) =
         memories.sortedWith(compareBy<MemoryEntity> { MemoryKinds.order(it.kind) }.thenBy { it.createdAt }.thenBy { it.id })
 
@@ -99,18 +114,50 @@ object MemoryDigest {
 
     fun forLetter(memories: List<MemoryEntity>, zone: ZoneId): String? {
         if (memories.isEmpty()) return null
+        val topics = sorted(memories)
+        val details = topics.map { MemoryDetails.decode(it.details) }
+        val rooms = rooms(details.map { list -> list.sumOf { it.length } }, LETTER_DETAILS)
         return buildString {
             append("你长期记着的事：")
             var kind: String? = null
-            for (m in sorted(memories)) {
+            topics.forEachIndexed { i, m ->
                 if (m.kind != kind) {
                     append('\n').append(MemoryKinds.of(m.kind)?.heading ?: m.kind).append('：')
                     kind = m.kind
                 }
                 append("\n- ").append(line(m, zone))
-                for (d in MemoryDetails.decode(m.details)) append("\n  · ").append(d)
+                for (d in newest(details[i], rooms[i])) append("\n  · ").append(d)
             }
         }
+    }
+
+    /**
+     * How many characters each topic's details may take, of [budget]: all they have while
+     * everything fits; else, from the topic with least, each gets what it has or an equal share
+     * of what is left, whichever is less.
+     */
+    private fun rooms(sizes: List<Int>, budget: Int): List<Int> {
+        if (sizes.sum() <= budget) return sizes
+        val out = IntArray(sizes.size)
+        var left = budget
+        var count = sizes.size
+        for (i in sizes.indices.sortedBy { sizes[it] }) {
+            out[i] = minOf(sizes[i], left / count)
+            left -= out[i]
+            count--
+        }
+        return out.toList()
+    }
+
+    /** The newest of [details] that fit in [room] characters, in the order they were written; the newest one always. */
+    private fun newest(details: List<String>, room: Int): List<String> {
+        var left = room
+        var from = details.size
+        while (from > 0 && (from == details.size || details[from - 1].length <= left)) {
+            left -= details[from - 1].length
+            from--
+        }
+        return details.subList(from, details.size)
     }
 
     /** When and how to write, as the person's earlier app worded it after much use. */

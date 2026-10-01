@@ -25,6 +25,7 @@ import com.cleo.cleos.ui.letters.LettersScreen
 import com.cleo.cleos.ui.memory.MemoryEditScreen
 import com.cleo.cleos.ui.memory.MemoryScreen
 import com.cleo.cleos.ui.settings.McpEditScreen
+import com.cleo.cleos.ui.settings.PersonaScreen
 import com.cleo.cleos.ui.settings.SettingsScreen
 import kotlinx.serialization.Serializable
 
@@ -68,6 +69,10 @@ data class MemoryEditRoute(val id: Long)
 /** An MCP service to edit; an empty id adds one. */
 @Serializable
 data class McpEditRoute(val id: String)
+
+/** A TA's persona, written on a page of its own. */
+@Serializable
+data class PersonaRoute(val companionId: Long)
 
 /**
  * Screens cross-fade rather than slide. Glass samples what is behind it at the position
@@ -115,8 +120,14 @@ fun CleosNavHost() {
         composable<MemoryRoute> { MemoryScreen(onBack = nav::back, onOpen = { nav.go(MemoryEditRoute(it)) }) }
         composable<MemoryEditRoute> { entry -> MemoryEditScreen(entry.toRoute<MemoryEditRoute>().id, onBack = nav::back) }
         composable<SettingsRoute> {
-            SettingsScreen(onBack = nav::back, onOpenLab = { nav.go(LabRoute) }, onOpenMcp = { nav.go(McpEditRoute(it)) })
+            SettingsScreen(
+                onBack = nav::back,
+                onOpenLab = { nav.go(LabRoute) },
+                onOpenMcp = { nav.go(McpEditRoute(it)) },
+                onOpenPersona = { nav.go(PersonaRoute(it)) },
+            )
         }
+        composable<PersonaRoute> { entry -> PersonaScreen(entry.toRoute<PersonaRoute>().companionId, onBack = nav::back) }
         composable<LabRoute> { GlassLabScreen(onBack = nav::back) }
         composable<McpEditRoute> { entry -> McpEditScreen(entry.toRoute<McpEditRoute>().id, onBack = nav::back) }
         composable<ConversationsRoute> { ConversationsScreen(onBack = nav::back, onSearch = { nav.go(SearchRoute) }) }

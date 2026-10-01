@@ -120,10 +120,13 @@ class Companions(
         const val FIRST = 1L
 
         /**
-         * How long a persona can be. Room for a persona and, next to it, what a TA brought
-         * from another app had noted about the person (see PhoneAssistantBackup); 2000 was
-         * too tight for both. It all goes out with every message, so it stays bounded.
+         * How long a persona can be. It was 4000, until someone wrote theirs at 20,000 characters
+         * and found no room for it. It all goes out with every message, so it stays bounded; but it
+         * is near the start of the system prompt and rarely changes (Prompt.system), so a provider
+         * that caches a repeated prefix charges the cached rate for it after the first message.
+         * 30,000 Chinese characters are about 18k tokens as DeepSeek counts them (0.6 a character),
+         * leaving most of a 128k context for the rest.
          */
-        const val PERSONA_LIMIT = 4000
+        const val PERSONA_LIMIT = 30_000
     }
 }

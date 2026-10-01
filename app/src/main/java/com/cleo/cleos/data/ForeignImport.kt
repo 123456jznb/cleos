@@ -3,6 +3,7 @@ package com.cleo.cleos.data
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
+import com.cleo.cleos.ai.MemoryKinds
 import com.cleo.cleos.data.db.AppDatabase
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
@@ -360,7 +361,7 @@ class ForeignImport(
                     continue
                 }
                 val old = MemoryDetails.decode(same.details)
-                val merged = (old + m.details.filter { it !in old }).take(MEMORY_DETAILS)
+                val merged = (old + m.details.filter { it !in old }).take(MemoryKinds.DETAILS)
                 if (merged.size > old.size) {
                     // Filling in isn't news: the topic keeps the date it was last noted.
                     db.memories().update(same.copy(details = MemoryDetails.encode(merged), updatedAt = maxOf(same.updatedAt, m.updatedAt)))
@@ -376,7 +377,7 @@ class ForeignImport(
         kind = kind,
         name = name,
         summary = summary,
-        details = MemoryDetails.encode(details.take(MEMORY_DETAILS)),
+        details = MemoryDetails.encode(details.take(MemoryKinds.DETAILS)),
         pinned = pinned,
         source = MemoryEntity.SOURCE_IMPORT,
         createdAt = createdAt.takeIf { it > 0 } ?: now,
@@ -401,8 +402,5 @@ class ForeignImport(
         // Text only, even years of chat stay far below this. Old exports with pictures inside
         // ran to hundreds of MB, more than a phone can hold as one JSON tree.
         private const val MAX_BYTES = 32 * 1024 * 1024
-
-        /** The same as a TA's own topics (MemoryKinds.DETAILS), and as that app's. */
-        private const val MEMORY_DETAILS = 12
     }
 }

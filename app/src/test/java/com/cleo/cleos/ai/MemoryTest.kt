@@ -113,6 +113,28 @@ class MemoryTest {
     }
 
     @Test
+    fun aLetterTakesTheNewestDetailsWhenThereAreTooMany() {
+        fun topic(id: Long, name: String, details: List<String>) = MemoryEntity(
+            id = id, companionId = 1, kind = "interest", name = name, summary = name,
+            details = MemoryDetails.encode(details), createdAt = id, updatedAt = id,
+        )
+        fun full(tag: String) = (1..MemoryKinds.DETAILS).map { "$tag$it".padEnd(300, '。') }
+        // Two full topics of long details, together past the budget, and one with a single short one.
+        val m = listOf(topic(1, "书", full("书")), topic(2, "歌", full("歌")), topic(3, "茶", listOf("只喝绿茶")))
+        val letter = MemoryDigest.forLetter(m, zone)!!
+        val kept = letter.lines().filter { it.startsWith("  · ") }
+        assertTrue("within the budget", kept.sumOf { it.length - 4 } <= MemoryDigest.LETTER_DETAILS)
+        assertTrue("the one with little keeps all of it", letter.contains("- 茶：茶\n  · 只喝绿茶"))
+        // What is left is shared evenly, the newest kept, in the order they were written.
+        val books = kept.filter { it.startsWith("  · 书") }
+        assertEquals(books.size, kept.count { it.startsWith("  · 歌") })
+        assertTrue(books.size in 2 until MemoryKinds.DETAILS)
+        assertTrue(books.last().startsWith("  · 书${MemoryKinds.DETAILS}。"))
+        assertFalse(letter.contains("  · 书1。"))
+        assertEquals(books.sortedBy { it.removePrefix("  · 书").takeWhile(Char::isDigit).toInt() }, books)
+    }
+
+    @Test
     fun theSystemPromptEndsWithTheMemories() {
         val ta = CompanionEntity(id = 1, name = "沐", apiBaseUrl = "", apiModel = "", createdAt = 0)
         val m = listOf(MemoryEntity(id = 1, companionId = 1, kind = "profile", name = "称呼", summary = "小名", createdAt = 1, updatedAt = 1))

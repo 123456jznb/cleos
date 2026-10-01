@@ -55,8 +55,9 @@ const val PERSONA_LIMIT = Companions.PERSONA_LIMIT
  * on leaving), so typing does not hit the disk on every keystroke. The API key is the
  * exception: it is only ever written, encrypted, and never read back into a field.
  *
- * The model, the TA's name and persona belong to the TA that was current when the screen
- * opened (or the one just imported); the rest is the person's and the app's.
+ * The model and the TA's name belong to the TA that was current when the screen opened (or
+ * the one just imported); the rest is the person's and the app's. The persona is shown here
+ * but written on its own page (PersonaScreen), which saves it.
  */
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var companionId by mutableLongStateOf(0L)
@@ -68,7 +69,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var model by mutableStateOf("")
     var aiName by mutableStateOf("")
     var userName by mutableStateOf("")
+
+    /** The TA's persona as saved, kept up to date: PersonaScreen writes it, never this. */
     var persona by mutableStateOf("")
+        private set
     var deepThinking by mutableStateOf(false)
         private set
     var proactive by mutableStateOf(true)
@@ -164,7 +168,12 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     val mcpServers: StateFlow<List<McpServer>> = c.mcp.servers.all.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
-        viewModelScope.launch { c.companions.all.collect { companionCount = it.size } }
+        viewModelScope.launch {
+            c.companions.all.collect { all ->
+                companionCount = all.size
+                all.firstOrNull { it.id == companionId }?.let { persona = it.persona }
+            }
+        }
         viewModelScope.launch { habits = c.later.habits() }
         viewModelScope.launch {
             val s = c.settings.current()
@@ -191,7 +200,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     private suspend fun watch() {
         snapshotFlow {
             listOf(
-                baseUrl, model, aiName, userName, persona, historySize, weatherCity, voiceBaseUrl, voiceModel,
+                baseUrl, model, aiName, userName, historySize, weatherCity, voiceBaseUrl, voiceModel,
                 voiceService, speechVoices.toMap(), minimaxGlobal, speechBaseUrl, speechModel, speechVoice, elevenVoice, elevenModel,
             )
         }
@@ -222,13 +231,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val url = baseUrl.trim()
         val m = model.trim()
         val name = aiName.trim()
-        val p = persona.take(PERSONA_LIMIT)
         val user = userName.trim()
         val history = historySize
         val city = weatherCity.trim()
         val voiceUrl = voiceBaseUrl.trim()
         val voiceM = voiceModel.trim()
-        c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name, persona = p) }
+        // Not the persona: written on its own page, it must not be put back as it was when this one opened.
+        c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name) }
         val speech = speechSettings()
         c.settings.update {
             speech(it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM))

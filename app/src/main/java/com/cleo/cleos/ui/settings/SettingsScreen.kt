@@ -94,7 +94,7 @@ import com.cleo.cleos.ui.common.fadeUnderTopBar
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String) -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String) -> Unit, onOpenPersona: (Long) -> Unit) {
     val vm = appViewModel { SettingsViewModel(it) }
     val mcpServers by vm.mcpServers.collectAsStateWithLifecycle()
     val hasVoiceKey by vm.hasVoiceKey.collectAsStateWithLifecycle()
@@ -229,16 +229,31 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
             Section("称呼") {
                 Field("TA 的名字", vm.aiName, { vm.aiName = it })
                 Field("你的名字", vm.userName, { vm.userName = it })
-                OutlinedTextField(
-                    value = vm.persona,
-                    onValueChange = { if (it.length <= PERSONA_LIMIT) vm.persona = it },
-                    label = { Text("TA 的性格") },
-                    placeholder = { Text("想让 TA 怎样说话、记得什么，都写在这里。可以不写。") },
-                    minLines = 4,
-                    maxLines = 10,
-                    supportingText = { Text("${vm.persona.length} / $PERSONA_LIMIT") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // Its start, and a page of its own to write it on (PersonaScreen): it can run to tens of
+                // thousands of characters, too much for a box in the middle of this page.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp)
+                        .clickable(interactionSource = null, indication = null, enabled = vm.loaded) { onOpenPersona(vm.companionId) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("TA 的性格", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            vm.persona.take(PERSONA_PREVIEW).replace('\n', ' ').trim().ifEmpty { "想让 TA 怎样说话、记得什么，都写在这里。可以不写。" },
+                            color = palette.contentSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (vm.persona.isNotEmpty()) {
+                            Text("${vm.persona.length} / $PERSONA_LIMIT 字", color = palette.contentSecondary, fontSize = 12.sp)
+                        }
+                    }
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = palette.contentSecondary)
+                }
                 Text(
                     "每次原样带上最近 ${vm.historySize} 条消息",
                     color = palette.content,
@@ -1030,3 +1045,6 @@ private const val RELEASES_URL = "https://wwbnf.lanzouc.com/b01gicbubg"
 /** What 「看许可全文」 shows: where the ear's data comes from, and the licence of the code it was ported from. */
 private val NOTICES = listOf("hrir/README.txt", "licenses/binaural-voice.txt")
 private const val RELEASES_CODE = "5y4u"
+
+/** How much of the persona the settings page shows: three short lines' worth, never all of it. */
+private const val PERSONA_PREVIEW = 160
