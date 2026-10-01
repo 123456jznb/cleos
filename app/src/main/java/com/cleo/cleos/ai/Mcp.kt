@@ -254,8 +254,8 @@ class McpClient(http: OkHttpClient, private val version: String) {
     /** Calls [name] with [arguments]; the result as text for the model. */
     suspend fun callTool(server: McpServer, name: String, arguments: JsonObject): String = Mcp.text(callToolRaw(server, name, arguments))
 
-    /** Calls [name] with [arguments]; the result as the service sent it (the voice looks in it for audio). */
-    suspend fun callToolRaw(server: McpServer, name: String, arguments: JsonObject): JsonObject = withSession(server) { s ->
+    /** Calls [name] with [arguments]; the result as the service sent it. */
+    private suspend fun callToolRaw(server: McpServer, name: String, arguments: JsonObject): JsonObject = withSession(server) { s ->
         send(server, s, "tools/call", buildJsonObject {
             put("name", name)
             put("arguments", arguments)
@@ -402,8 +402,6 @@ class McpHub(
             .onFailure { if (it is CancellationException) throw it }
 
     suspend fun call(server: McpServer, tool: McpTool, arguments: JsonObject): String = client.callTool(server, tool.name, arguments)
-
-    suspend fun callRaw(server: McpServer, tool: String, arguments: JsonObject): JsonObject = client.callToolRaw(server, tool, arguments)
 
     private companion object {
         const val TAG = "McpHub"

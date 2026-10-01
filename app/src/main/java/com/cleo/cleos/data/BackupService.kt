@@ -8,6 +8,7 @@ import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.ConversationEntity
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.ai.ReplyWhen
+import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.data.db.LetterEntity
 import com.cleo.cleos.data.db.MemoryEntity
 import com.cleo.cleos.data.db.MessageEntity
@@ -64,16 +65,15 @@ data class BackupSettings(
     val letterEveryDays: Int = 5,
     val voiceBaseUrl: String = "",
     val voiceModel: String = "",
-    val speechEngine: String = "api",
+    /** "api" for any OpenAI-shaped service in backups from before each had its own place (Speech.migrate). */
+    val speechEngine: String = "",
+    val speechVoices: Map<String, String> = emptyMap(),
+    val minimaxGlobal: Boolean = false,
     val speechBaseUrl: String = "",
     val speechModel: String = "",
     val speechVoice: String = "",
     val elevenVoice: String = "",
     val elevenModel: String = "",
-    val speechMcpServer: String = "",
-    val speechMcpTool: String = "",
-    val speechMcpTextParam: String = "text",
-    val speechMcpArgs: String = "",
     val earVoice: Boolean = true,
 )
 
@@ -209,15 +209,13 @@ class BackupService(
                 voiceBaseUrl = s.voiceBaseUrl,
                 voiceModel = s.voiceModel,
                 speechEngine = s.speechEngine,
+                speechVoices = s.speechVoices,
+                minimaxGlobal = s.minimaxGlobal,
                 speechBaseUrl = s.speechBaseUrl,
                 speechModel = s.speechModel,
                 speechVoice = s.speechVoice,
                 elevenVoice = s.elevenVoice,
                 elevenModel = s.elevenModel,
-                speechMcpServer = s.speechMcpServer,
-                speechMcpTool = s.speechMcpTool,
-                speechMcpTextParam = s.speechMcpTextParam,
-                speechMcpArgs = s.speechMcpArgs,
                 earVoice = s.earVoice,
                 knownSince = lead?.knownSince,
             ),
@@ -350,6 +348,8 @@ class BackupService(
                 db.memories().insertAll(d.memories)
                 db.stickers().insertAll(stickers)
             }
+            // A backup from before each voice service had its own place says "api" for all of them.
+            val (speechEngine, speechVoices) = Speech.migrate(bs.speechEngine, bs.speechBaseUrl, bs.speechVoice, bs.speechVoices)
             settings.update {
                 it.copy(
                     userName = bs.userName,
@@ -372,16 +372,14 @@ class BackupService(
                     letterEveryDays = bs.letterEveryDays,
                     voiceBaseUrl = bs.voiceBaseUrl,
                     voiceModel = bs.voiceModel,
-                    speechEngine = bs.speechEngine,
+                    speechEngine = speechEngine,
+                    speechVoices = speechVoices,
+                    minimaxGlobal = bs.minimaxGlobal,
                     speechBaseUrl = bs.speechBaseUrl,
                     speechModel = bs.speechModel,
                     speechVoice = bs.speechVoice,
                     elevenVoice = bs.elevenVoice,
                     elevenModel = bs.elevenModel,
-                    speechMcpServer = bs.speechMcpServer,
-                    speechMcpTool = bs.speechMcpTool,
-                    speechMcpTextParam = bs.speechMcpTextParam,
-                    speechMcpArgs = bs.speechMcpArgs,
                     earVoice = bs.earVoice,
                 )
             }

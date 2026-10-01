@@ -5,8 +5,9 @@ import com.cleo.cleos.data.MessageAudio
 import com.cleo.cleos.data.MessageAudios
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.MessageEntity
+import com.cleo.cleos.data.decodeVoices
+import com.cleo.cleos.data.encodeVoices
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
@@ -18,70 +19,106 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.util.Base64
 
 class SpeechTest {
     private fun obj(text: String) = Json.parseToJsonElement(text).jsonObject
 
     @Test
-    fun audioIsFoundWhereverATtsToolPutsIt() {
-        val bytes = byteArrayOf(1, 2, 3, 4)
-        val b64 = Base64.getEncoder().encodeToString(bytes)
-        val part = Speech.audioIn(obj("""{"content":[{"type":"text","text":"好了"},{"type":"audio","data":"$b64","mimeType":"audio/wav"}]}"""))
-        assertTrue(part is Speech.Found.Bytes)
-        assertArrayEquals(bytes, (part as Speech.Found.Bytes).data)
-        assertEquals("audio/wav", part.mime)
-        // A MiniMax-style answer: the file is a link in the text.
+    fun settingsFromBeforeFindTheirService() {
+        // "api" was every OpenAI-shaped service; the address says which it was, and its voice comes along.
         assertEquals(
-            Speech.Found.Link("https://cdn.example.com/a/b.mp3?sig=1"),
-            Speech.audioIn(obj("""{"content":[{"type":"text","text":"Success. Audio URL: https://cdn.example.com/a/b.mp3?sig=1"}]}""")),
+            "siliconflow" to mapOf("siliconflow" to "FunAudioLLM/CosyVoice2-0.5B:claire"),
+            Speech.migrate("api", "https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B:claire", emptyMap()),
         )
-        assertEquals(
-            Speech.Found.Link("https://x.example/voice"),
-            Speech.audioIn(obj("""{"content":[{"type":"resource_link","uri":"https://x.example/voice","name":"v"}]}""")),
-        )
-        // The only link there is, even without an audio file's ending; none, and nothing is found.
-        assertEquals(Speech.Found.Link("https://x.example/get?id=7"), Speech.audioIn(obj("""{"content":[{"type":"text","text":"链接：https://x.example/get?id=7。"}]}""")))
-        assertNull(Speech.audioIn(obj("""{"content":[{"type":"text","text":"余额不足"}]}""")))
-        assertNull(Speech.audioIn(obj("""{"content":[{"type":"text","text":"see https://a.example/x and https://b.example/y"}]}""")))
+        assertEquals("mossland", Speech.migrate("api", "https://api.mosi.cn/v1/", "abc", emptyMap()).first)
+        assertEquals("openai", Speech.migrate("api", "https://api.openai.com/v1", "", emptyMap()).first)
+        assertEquals("a relay stays as it was", "api" to emptyMap<String, String>(), Speech.migrate("api", "https://relay.example.com/v1", "x", emptyMap()))
+        assertEquals("never set up", "", Speech.migrate("api", "", "", emptyMap()).first)
+        assertEquals("the MCP tool is gone", "", Speech.migrate("mcp", "", "", emptyMap()).first)
+        assertEquals("elevenlabs", Speech.migrate("elevenlabs", "", "", emptyMap()).first)
+        // Already moved: a voice picked since isn't overwritten by the old field.
+        assertEquals(mapOf("siliconflow" to "new"), Speech.migrate("api", "https://api.siliconflow.cn/v1", "old", mapOf("siliconflow" to "new")).second)
+        assertEquals(mapOf("minimax" to "female-yujie"), decodeVoices(encodeVoices(mapOf("minimax" to "female-yujie"))))
+        assertEquals(emptyMap<String, String>(), decodeVoices("not json"))
+    }
+
+    @Test
+    fun eachServiceIsReadyWithWhatItNeeds() {
+        assertFalse(Speech.ready(AppSettings()))
+        assertTrue(Speech.ready(AppSettings(speechEngine = "siliconflow")))
+        assertTrue(Speech.ready(AppSettings(speechEngine = "minimax")))
+        assertFalse(Speech.ready(AppSettings(speechEngine = "api", speechBaseUrl = "https://relay.example.com/v1")))
+        assertTrue(Speech.ready(AppSettings(speechEngine = "api", speechBaseUrl = "https://relay.example.com/v1", speechModel = "tts-1")))
+        assertFalse(Speech.ready(AppSettings(speechEngine = "elevenlabs")))
+        assertTrue(Speech.ready(AppSettings(speechEngine = "elevenlabs", elevenVoice = "abc")))
+        // A voice not picked is the service's first; one picked is that one.
+        assertEquals("female-shaonv", Speech.voice(AppSettings(), VoiceService.MiniMax))
+        assertEquals("female-yujie", Speech.voice(AppSettings(speechVoices = mapOf("minimax" to "female-yujie")), VoiceService.MiniMax))
+        assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", Speech.voice(AppSettings(), VoiceService.SiliconFlow))
+        // MiniMax's keys go by site: the mainland's and the international one's are different keys.
+        assertEquals(Speech.MINIMAX_CN, Speech.keyAddress(AppSettings(), VoiceService.MiniMax))
+        assertEquals(Speech.MINIMAX_GLOBAL, Speech.keyAddress(AppSettings(minimaxGlobal = true), VoiceService.MiniMax))
+        assertEquals("https://relay.example.com/v1", Speech.keyAddress(AppSettings(speechBaseUrl = " https://relay.example.com/v1 "), VoiceService.Other))
     }
 
     @Test
     fun theRequestsAreTheServicesShapes() {
-        val api = obj(Speech.apiBody("https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna", "晚安"))
+        val api = obj(Speech.openAiBody("FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna", "晚安"))
         assertEquals("晚安", api["input"]!!.jsonPrimitive.content)
         assertEquals("FunAudioLLM/CosyVoice2-0.5B:anna", api["voice"]!!.jsonPrimitive.content)
         assertEquals("mp3", api["response_format"]!!.jsonPrimitive.content)
-        assertFalse("voice" in obj(Speech.apiBody("https://api.example.com/v1", "m", "", "x")))
         // Mossland wants the voice as voice_id, and nothing under voice.
-        val moss = obj(Speech.apiBody("https://api.mosi.cn/v1/", "moss-tts-1.5-flash", "806c9695-6160-404e-8722-4f788d935af3", "晚安"))
+        val moss = obj(Speech.openAiBody(Speech.MOSSLAND_MODEL, "806c9695-6160-404e-8722-4f788d935af3", "晚安", voiceField = "voice_id"))
         assertEquals("806c9695-6160-404e-8722-4f788d935af3", moss["voice_id"]!!.jsonPrimitive.content)
         assertFalse("voice" in moss)
-        assertTrue(Speech.isMoss(" https://API.mosi.cn/v1"))
-        assertFalse(Speech.isMoss("https://mosi.cn.example.com/v1"))
-        assertFalse(Speech.isMoss("https://notmosi.cn/v1"))
+        val mm = obj(Speech.miniMaxBody("female-shaonv", "晚安"))
+        assertEquals(Speech.MINIMAX_MODEL, mm["model"]!!.jsonPrimitive.content)
+        assertEquals("晚安", mm["text"]!!.jsonPrimitive.content)
+        assertEquals("female-shaonv", mm["voice_setting"]!!.jsonObject["voice_id"]!!.jsonPrimitive.content)
+        assertEquals("mp3", mm["audio_setting"]!!.jsonObject["format"]!!.jsonPrimitive.content)
+        assertEquals("hex", mm["output_format"]!!.jsonPrimitive.content)
         assertEquals(Speech.ELEVENLABS_MODEL, obj(Speech.elevenLabsBody("", "晚安"))["model_id"]!!.jsonPrimitive.content)
-        assertEquals("https://api.example.com/v1/audio/speech", Speech.url("https://api.example.com/v1/"))
-        assertEquals("https://api.example.com/v1/audio/speech", Speech.url("https://api.example.com/v1/chat/completions"))
-        // An MCP tool gets the person's fixed arguments and the words.
-        val args = Speech.mcpArguments("""{"voice_id":"female-shaonv","speed":1}""", "text", "晚安")
-        assertEquals("female-shaonv", args["voice_id"]!!.jsonPrimitive.content)
-        assertEquals("晚安", args["text"]!!.jsonPrimitive.content)
-        assertEquals(JsonObject(mapOf("input" to kotlinx.serialization.json.JsonPrimitive("晚安"))), Speech.mcpArguments(" ", "input", "晚安"))
-        assertThrows(SpeechException::class.java) { Speech.mcpArguments("not json", "text", "x") }
-        assertEquals("text", Speech.textParam(obj("""{"type":"object","properties":{"voice_id":{"type":"string"},"text":{"type":"string"}}}""")))
-        assertEquals("words", Speech.textParam(obj("""{"type":"object","properties":{"speed":{"type":"number"},"words":{"type":"string"}}}""")))
+        assertEquals("https://api.example.com/v1/audio/speech", Speech.speechUrl("https://api.example.com/v1/"))
+        assertEquals("https://api.example.com/v1/audio/speech", Speech.speechUrl("https://api.example.com/v1/chat/completions"))
         assertEquals("wav", Speech.extension("audio/wav; charset=binary"))
         assertEquals("mp3", Speech.extension(null))
     }
 
     @Test
-    fun theVoiceIsOfferedOnceThereIsOne() {
-        assertFalse(Speech.ready(AppSettings()))
-        assertTrue(Speech.ready(AppSettings(speechBaseUrl = "https://api.example.com/v1", speechModel = "m")))
-        assertTrue(Speech.ready(AppSettings(speechEngine = SpeechEngine.ElevenLabs.key, elevenVoice = "abc")))
-        assertFalse(Speech.ready(AppSettings(speechEngine = SpeechEngine.Mcp.key, speechMcpServer = "s")))
-        assertTrue(Speech.ready(AppSettings(speechEngine = SpeechEngine.Mcp.key, speechMcpServer = "s", speechMcpTool = "t")))
+    fun miniMaxAnswersInHexAndRefusesInBaseResp() {
+        assertArrayEquals(
+            byteArrayOf(0x49, 0x44, 0x33, -1),
+            Speech.miniMaxAudio("""{"data":{"audio":"494433ff","status":2},"base_resp":{"status_code":0,"status_msg":"success"}}"""),
+        )
+        // HTTP 200 with the refusal inside: the wrong site's key is the one people hit.
+        val wrongKey = assertThrows(SpeechException::class.java) {
+            Speech.miniMaxAudio("""{"base_resp":{"status_code":1004,"status_msg":"login fail"}}""")
+        }
+        assertTrue(wrongKey.message!!.contains("国内版和国际版"))
+        assertTrue(assertThrows(SpeechException::class.java) {
+            Speech.miniMaxAudio("""{"base_resp":{"status_code":2038,"status_msg":"x"}}""")
+        }.message!!.contains("实名认证"))
+        assertThrows(SpeechException::class.java) { Speech.miniMaxAudio("""{"data":{"audio":"49x"},"base_resp":{"status_code":0}}""") }
+        assertThrows(SpeechException::class.java) { Speech.miniMaxAudio("""{"data":{},"base_resp":{"status_code":0}}""") }
+        assertNull(Speech.miniMaxProblem(obj("""{"base_resp":{"status_code":0}}""")))
+    }
+
+    @Test
+    fun eachServicesListOfVoicesIsRead() {
+        val mm = Speech.miniMaxVoiceList(
+            """{"system_voice":[{"voice_id":"female-shaonv","voice_name":"少女音色","description":["清脆"]}],""" +
+                """"voice_cloning":[{"voice_id":"my-voice-1","description":[]}],"base_resp":{"status_code":0}}""",
+        )
+        assertEquals(listOf(VoiceOption("my-voice-1", "我的音色"), VoiceOption("female-shaonv", "少女音色")), mm)
+        assertEquals(
+            listOf(VoiceOption("806c9695", "轻快灵动女声"), VoiceOption("abc", "abc")),
+            Speech.mosslandVoiceList("""{"object":"list","data":[{"id":"806c9695","name":"轻快灵动女声"},{"id":"abc","name":""}],"has_more":false}"""),
+        )
+        assertEquals(
+            listOf(VoiceOption("21m00Tcm4TlvDq8ikWAM", "Rachel")),
+            Speech.elevenLabsVoiceList("""{"voices":[{"voice_id":"21m00Tcm4TlvDq8ikWAM","name":"Rachel","category":"premade"}]}"""),
+        )
+        assertThrows(SpeechException::class.java) { Speech.miniMaxVoiceList("""{"base_resp":{"status_code":1004,"status_msg":"login fail"}}""") }
     }
 
     @Test

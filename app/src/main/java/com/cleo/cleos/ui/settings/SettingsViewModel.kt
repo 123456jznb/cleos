@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -16,11 +17,11 @@ import com.cleo.cleos.ai.Habits
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPreset
 import android.media.MediaPlayer
-import com.cleo.cleos.ai.McpTool
 import com.cleo.cleos.ai.Speech
-import com.cleo.cleos.ai.SpeechEngine
-import com.cleo.cleos.ai.SpeechPreset
+import com.cleo.cleos.ai.SpeechException
 import com.cleo.cleos.ai.Voice
+import com.cleo.cleos.ai.VoiceOption
+import com.cleo.cleos.ai.VoiceService
 import kotlinx.coroutines.CancellationException
 import java.io.File
 import com.cleo.cleos.ai.VoicePreset
@@ -85,20 +86,26 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var voiceResult by mutableStateOf<String?>(null)
         private set
-    var speechEngine by mutableStateOf(SpeechEngine.Api)
+    /** The service the TA's voice comes from; null while none is picked. */
+    var voiceService by mutableStateOf<VoiceService?>(null)
+        private set
+
+    /** The voice picked on each service with a list, by VoiceService key. */
+    val speechVoices = mutableStateMapOf<String, String>()
+    var minimaxGlobal by mutableStateOf(false)
     var speechBaseUrl by mutableStateOf("")
     var speechModel by mutableStateOf("")
     var speechVoice by mutableStateOf("")
     var elevenVoice by mutableStateOf("")
     var elevenModel by mutableStateOf("")
-    var speechMcpServer by mutableStateOf("")
-        private set
-    var speechMcpTool by mutableStateOf("")
-        private set
-    var speechMcpTextParam by mutableStateOf("text")
-    var speechMcpArgs by mutableStateOf("")
     var speechKeyInput by mutableStateOf("")
-    var speechTools by mutableStateOf<List<McpTool>?>(null)
+
+    /** Every voice the picked service has for this account, while the list of them is open. */
+    var listedVoices by mutableStateOf<List<VoiceOption>?>(null)
+        private set
+    var listingVoices by mutableStateOf(false)
+        private set
+    var listProblem by mutableStateOf<String?>(null)
         private set
     var speechBusy by mutableStateOf(false)
         private set
@@ -138,8 +145,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .flatMapLatest { c.db.later().observeFor(it) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    /** The address the voice engine's key is filed under: ElevenLabs' own, or the voice service's. */
-    private fun speechKeyAddress() = if (speechEngine == SpeechEngine.ElevenLabs) Speech.ELEVENLABS_BASE else speechBaseUrl
+    /** The address the voice service's key is filed under (Speech.keyAddress), as the fields stand. */
+    private fun speechKeyAddress(): String {
+        val service = voiceService ?: return ""
+        return Speech.keyAddress(AppSettings(minimaxGlobal = minimaxGlobal, speechBaseUrl = speechBaseUrl), service)
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val hasSpeechKey: StateFlow<Boolean> = snapshotFlow { speechKeyAddress() }
@@ -164,16 +174,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             weatherCity = s.weatherCity
             voiceBaseUrl = s.voiceBaseUrl
             voiceModel = s.voiceModel
-            speechEngine = SpeechEngine.of(s.speechEngine)
+            voiceService = VoiceService.of(s.speechEngine)
+            speechVoices.putAll(s.speechVoices)
+            minimaxGlobal = s.minimaxGlobal
             speechBaseUrl = s.speechBaseUrl
             speechModel = s.speechModel
             speechVoice = s.speechVoice
             elevenVoice = s.elevenVoice
             elevenModel = s.elevenModel
-            speechMcpServer = s.speechMcpServer
-            speechMcpTool = s.speechMcpTool
-            speechMcpTextParam = s.speechMcpTextParam
-            speechMcpArgs = s.speechMcpArgs
             loaded = true
             watch()
         }
@@ -184,8 +192,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         snapshotFlow {
             listOf(
                 baseUrl, model, aiName, userName, persona, historySize, weatherCity, voiceBaseUrl, voiceModel,
-                speechEngine, speechBaseUrl, speechModel, speechVoice, elevenVoice, elevenModel,
-                speechMcpServer, speechMcpTool, speechMcpTextParam, speechMcpArgs,
+                voiceService, speechVoices.toMap(), minimaxGlobal, speechBaseUrl, speechModel, speechVoice, elevenVoice, elevenModel,
             )
         }
             .drop(1)
@@ -241,37 +248,80 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /** The voice fields as they are now, to lay over settings (read before anything suspends). */
     private fun speechSettings(): (AppSettings) -> AppSettings {
-        val engine = speechEngine.key
+        val engine = voiceService?.key.orEmpty()
+        val voices = speechVoices.toMap().mapValues { it.value.trim() }.filterValues { it.isNotEmpty() }
+        val global = minimaxGlobal
         val url = speechBaseUrl.trim()
         val m = speechModel.trim()
         val voice = speechVoice.trim()
         val eVoice = elevenVoice.trim()
         val eModel = elevenModel.trim()
-        val server = speechMcpServer
-        val tool = speechMcpTool
-        val param = speechMcpTextParam.trim().ifEmpty { "text" }
-        val args = speechMcpArgs.trim()
         return {
             it.copy(
                 speechEngine = engine,
+                speechVoices = voices,
+                minimaxGlobal = global,
                 speechBaseUrl = url,
                 speechModel = m,
                 speechVoice = voice,
                 elevenVoice = eVoice,
                 elevenModel = eModel,
-                speechMcpServer = server,
-                speechMcpTool = tool,
-                speechMcpTextParam = param,
-                speechMcpArgs = args,
             )
         }
     }
 
-    fun applySpeechPreset(p: SpeechPreset) {
-        speechBaseUrl = p.baseUrl
-        speechModel = p.model
-        speechVoice = p.voice
+    fun pickService(service: VoiceService) {
+        voiceService = service
+        speechKeyInput = ""
         speechResult = null
+        listProblem = null
+    }
+
+    /** The voice [service] speaks in: ElevenLabs' and the hand-filled service's are fields of their own. */
+    fun voiceOf(service: VoiceService): String = when (service) {
+        VoiceService.ElevenLabs -> elevenVoice
+        VoiceService.Other -> speechVoice
+        else -> speechVoices[service.key] ?: Speech.builtIn(service).first().id
+    }
+
+    fun pickVoice(service: VoiceService, id: String) {
+        when (service) {
+            VoiceService.ElevenLabs -> elevenVoice = id
+            VoiceService.Other -> speechVoice = id
+            else -> speechVoices[service.key] = id
+        }
+        speechResult = null
+    }
+
+    fun setMinimaxSite(global: Boolean) {
+        minimaxGlobal = global
+        speechKeyInput = ""
+        speechResult = null
+    }
+
+    /** Asks the service for every voice it has for this account, and opens the list of them. */
+    fun listVoices() {
+        val service = voiceService ?: return
+        if (listingVoices) return
+        listingVoices = true
+        listProblem = null
+        val s = speechSettings()(settings.value)
+        viewModelScope.launch {
+            try {
+                val found = c.speaker.voices(s, service)
+                if (found.isEmpty()) listProblem = "没列出音色来" else listedVoices = found
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SpeechException) {
+                listProblem = e.message
+            } finally {
+                listingVoices = false
+            }
+        }
+    }
+
+    fun closeVoiceList() {
+        listedVoices = null
     }
 
     fun saveSpeechKey() {
@@ -282,18 +332,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.secrets.setKey(url, key)
             speechKeyInput = ""
         }
-    }
-
-    /** The tools of the MCP services switched on, to pick the voice from. */
-    fun loadSpeechTools() {
-        viewModelScope.launch { speechTools = c.mcp.tools() }
-    }
-
-    fun pickSpeechTool(t: McpTool) {
-        speechMcpServer = t.serverId
-        speechMcpTool = t.name
-        speechMcpTextParam = Speech.textParam(t.inputSchema)
-        speechResult = null
     }
 
     /** Says a sentence with the voice as set up on screen, saved or not, and plays it. */

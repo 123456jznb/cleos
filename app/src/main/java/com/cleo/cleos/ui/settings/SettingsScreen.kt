@@ -73,8 +73,9 @@ import com.cleo.cleos.ai.PhoneCalendar
 import com.cleo.cleos.ai.PhoneMusic
 import com.cleo.cleos.ai.PhoneLocation
 import com.cleo.cleos.ai.Speech
-import com.cleo.cleos.ai.SpeechEngine
 import com.cleo.cleos.ai.Voice
+import com.cleo.cleos.ai.VoiceOption
+import com.cleo.cleos.ai.VoiceService
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.data.ApiPresets
 import com.cleo.cleos.data.AppSettings
@@ -447,99 +448,22 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
 
             Section("TA 的声音") {
                 Text(
-                    "TA 发语音条时用的声音。合成交给你选的服务：MCP 工具（比如 MiniMax 的）、OpenAI 格式的语音接口" +
-                        "（硅基流动 CosyVoice、OpenAI、Mossland），或者 ElevenLabs。",
+                    "TA 发语音条时用的声音。选一个平台，填上它的 Key，挑一个音色就能用。",
                     color = palette.contentSecondary,
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
                 )
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SpeechEngine.entries.forEach { e -> Chip(e.label, selected = vm.speechEngine == e) { vm.speechEngine = e } }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    VoiceService.entries.forEach { v -> Chip(v.label, selected = vm.voiceService == v) { vm.pickService(v) } }
                 }
-                when (vm.speechEngine) {
-                    SpeechEngine.Api -> {
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Speech.presets.forEach { p ->
-                                Chip(p.name, selected = vm.speechBaseUrl.trimEnd('/') == p.baseUrl) { vm.applySpeechPreset(p) }
-                            }
-                        }
-                        Field("接口地址", vm.speechBaseUrl, { vm.speechBaseUrl = it }, keyboardType = KeyboardType.Uri)
-                        Field("模型", vm.speechModel, { vm.speechModel = it })
-                        val moss = Speech.isMoss(vm.speechBaseUrl)
-                        Field(if (moss) "音色 ID" else "声音", vm.speechVoice, { vm.speechVoice = it })
-                        if (moss) {
-                            Text(
-                                "换声音：在 Mossland 音色库里挑一个，点卡片上的复制图标，把音色 ID 粘到这里。" +
-                                    "Key 在 Moss 开放平台（platform.mosi.cn）的 API Keys 里建。",
-                                color = palette.contentSecondary,
-                                fontSize = 12.sp,
-                                lineHeight = 18.sp,
-                            )
-                        }
-                    }
-                    SpeechEngine.ElevenLabs -> {
-                        Field("Voice ID", vm.elevenVoice, { vm.elevenVoice = it })
-                        Field("模型（不填就是 ${Speech.ELEVENLABS_MODEL}）", vm.elevenModel, { vm.elevenModel = it })
-                    }
-                    SpeechEngine.Mcp -> {
-                        val picked = vm.speechTools?.firstOrNull { it.serverId == vm.speechMcpServer && it.name == vm.speechMcpTool }
-                        Text(
-                            when {
-                                vm.speechMcpTool.isBlank() -> "还没选工具。"
-                                picked != null -> "用的是：${picked.serverName} · ${picked.title}"
-                                else -> "用的是：${vm.speechMcpTool}"
-                            },
-                            color = palette.content,
-                            fontSize = 14.sp,
-                        )
-                        Chip(if (vm.speechTools == null) "列出 MCP 工具" else "重新列出", selected = false) { vm.loadSpeechTools() }
-                        vm.speechTools?.let { list ->
-                            if (list.isEmpty()) {
-                                Text("还没有开着的 MCP 服务，或者它们没有工具。先在下面「外部服务（MCP）」里加一个。", color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 18.sp)
-                            } else {
-                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    list.forEach { t ->
-                                        Chip("${t.serverName} · ${t.title}", selected = t.serverId == vm.speechMcpServer && t.name == vm.speechMcpTool) { vm.pickSpeechTool(t) }
-                                    }
-                                }
-                            }
-                        }
-                        Field("文字放在哪个参数", vm.speechMcpTextParam, { vm.speechMcpTextParam = it })
-                        OutlinedTextField(
-                            value = vm.speechMcpArgs,
-                            onValueChange = { vm.speechMcpArgs = it },
-                            label = { Text("其他参数（JSON，可不填）") },
-                            placeholder = { Text("比如 {\"voice_id\": \"female-shaonv\"}") },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            "工具回音频，或者回一个音频链接，都能变成语音条。用的是你自己配的工具，所以这里不再每次问你。",
-                            color = palette.contentSecondary,
-                            fontSize = 12.sp,
-                            lineHeight = 18.sp,
-                        )
-                    }
+                val service = vm.voiceService
+                if (service == null) {
+                    Text("还没选：选好之后 TA 才会发语音条。", color = palette.content, fontSize = 13.sp)
+                } else {
+                    VoicePanel(vm, service, hasSpeechKey)
+                    Chip(if (vm.speechBusy) "正在合成…" else "试听", selected = false) { vm.previewSpeech() }
+                    vm.speechResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
                 }
-                if (vm.speechEngine != SpeechEngine.Mcp) {
-                    OutlinedTextField(
-                        value = vm.speechKeyInput,
-                        onValueChange = { vm.speechKeyInput = it },
-                        label = { Text("API Key") },
-                        placeholder = { if (hasSpeechKey) Text("已保存（不再显示）；要换就重新填") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (vm.speechKeyInput.isNotBlank()) Chip("保存 Key", selected = true) { vm.saveSpeechKey() }
-                    Text(
-                        if (hasSpeechKey) "这个地址的 Key 已经有了。" else "Key 跟着地址存：和聊天、转文字用同一个地址的话，不用再填。",
-                        color = palette.contentSecondary,
-                        fontSize = 12.sp,
-                    )
-                }
-                Chip(if (vm.speechBusy) "正在合成…" else "试听", selected = false) { vm.previewSpeech() }
-                vm.speechResult?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
                 ToolSwitch(
                     "戴耳机时在耳边说",
                     "戴着耳机听 TA 的语音条，声音像贴在耳边说话，还会一边说一边慢慢挪：从一只耳朵绕到脑后、到另一只耳朵，或者从面前靠过来。" +
@@ -818,6 +742,120 @@ fun SettingsScreen(onBack: () -> Unit, onOpenLab: () -> Unit, onOpenMcp: (String
 }
 
 /** The title lives inside the card: above it, it would be bare text on the wallpaper. */
+/**
+ * One voice service: where its key comes from, its voices to tap, and the key. Each service has
+ * only what it needs, so there is nothing to work out: the general way through an MCP tool was
+ * dropped because nobody could tell how to fill it in.
+ */
+@Composable
+private fun VoicePanel(vm: SettingsViewModel, service: VoiceService, hasKey: Boolean) {
+    val palette = LocalGlassPalette.current
+    fun hint(text: String): @Composable () -> Unit = { Text(text, color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 18.sp) }
+    when (service) {
+        VoiceService.SiliconFlow -> hint("Key 在硅基流动控制台的「API 密钥」里建。聊天或转文字用的也是硅基流动的话，Key 已经有了。")()
+        VoiceService.MiniMax -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("国内版", selected = !vm.minimaxGlobal) { vm.setMinimaxSite(false) }
+                Chip("国际版", selected = vm.minimaxGlobal) { vm.setMinimaxSite(true) }
+            }
+            hint("国内版和国际版是两个网站，Key 不通用。Key 在 MiniMax 开放平台的「接口密钥」里建，账号要先实名认证。")()
+        }
+        VoiceService.Mossland -> hint("Key 在 Moss 开放平台（platform.mosi.cn）的 API Keys 里建。")()
+        VoiceService.ElevenLabs -> hint("Key 在 ElevenLabs 的 Profile → API Keys 里建。填好 Key 可以点「列出我的声音」挑，不用自己找 Voice ID。")()
+        VoiceService.OpenAI -> hint("国内网络连不上 OpenAI，要能访问它才行。")()
+        VoiceService.Other -> hint("别的平台只要兼容 OpenAI 的语音接口（/audio/speech）也能用，比如一些中转站：填地址、模型和声音。")()
+    }
+
+    // The voices: tap one; or, where the service can say, list all it has.
+    val builtIn = Speech.builtIn(service)
+    val current = vm.voiceOf(service)
+    if (builtIn.isNotEmpty()) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            builtIn.forEach { v -> Chip(v.label, selected = current == v.id) { vm.pickVoice(service, v.id) } }
+        }
+    }
+    if (service == VoiceService.MiniMax || service == VoiceService.Mossland || service == VoiceService.ElevenLabs) {
+        val what = if (service == VoiceService.ElevenLabs) "列出我的声音" else "列出全部音色"
+        Chip(if (vm.listingVoices) "正在列…" else what, selected = false) { vm.listVoices() }
+        vm.listProblem?.let { Text(it, color = palette.error, fontSize = 12.sp, lineHeight = 17.sp) }
+    }
+    when (service) {
+        VoiceService.SiliconFlow, VoiceService.MiniMax, VoiceService.Mossland -> {
+            Field("音色 ID（上面没有的、自己做的，粘到这里）", current, { vm.pickVoice(service, it.trim()) })
+        }
+        VoiceService.ElevenLabs -> {
+            Field("Voice ID", vm.elevenVoice, { vm.elevenVoice = it })
+            Field("模型（不填就是 ${Speech.ELEVENLABS_MODEL}）", vm.elevenModel, { vm.elevenModel = it })
+        }
+        VoiceService.Other -> {
+            Field("接口地址", vm.speechBaseUrl, { vm.speechBaseUrl = it }, keyboardType = KeyboardType.Uri)
+            Field("模型", vm.speechModel, { vm.speechModel = it })
+            Field("声音", vm.speechVoice, { vm.speechVoice = it })
+        }
+        VoiceService.OpenAI -> Unit
+    }
+
+    OutlinedTextField(
+        value = vm.speechKeyInput,
+        onValueChange = { vm.speechKeyInput = it },
+        // 「MiniMax 的 Key」, 「硅基流动的 Key」: a space only after a Latin name.
+        label = { Text(service.label + (if (service.label.last().code < 128) " 的 Key" else "的 Key")) },
+        placeholder = { if (hasKey) Text("已保存（不再显示）；要换就重新填") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (vm.speechKeyInput.isNotBlank()) Chip("保存 Key", selected = true) { vm.saveSpeechKey() }
+    if (hasKey) Text("Key 已经有了。", color = palette.contentSecondary, fontSize = 12.sp)
+
+    vm.listedVoices?.let { voices ->
+        VoiceListDialog(voices, current, onPick = {
+            vm.pickVoice(service, it.id)
+            vm.closeVoiceList()
+        }, onDismiss = vm::closeVoiceList)
+    }
+}
+
+/** Every voice a service has, to search by name and tap. */
+@Composable
+private fun VoiceListDialog(voices: List<VoiceOption>, current: String, onPick: (VoiceOption) -> Unit, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val shown = remember(voices, query) {
+        val q = query.trim()
+        if (q.isEmpty()) voices else voices.filter { it.label.contains(q, ignoreCase = true) || it.id.contains(q, ignoreCase = true) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选一个音色（${voices.size} 个）") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("搜名字，比如 温柔、少女、男") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                    items(shown, key = { it.id }) { v ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(v) }
+                                .padding(vertical = 8.dp),
+                        ) {
+                            Text(v.label, fontSize = 15.sp, fontWeight = if (v.id == current) FontWeight.SemiBold else FontWeight.Normal)
+                            if (v.label != v.id) Text(v.id, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关上") } },
+    )
+}
+
 @Composable
 private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
     val palette = LocalGlassPalette.current

@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
@@ -20,41 +21,97 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
-import java.util.Base64
 import java.util.concurrent.TimeUnit
 
-/** What makes the TA's voice messages. */
-enum class SpeechEngine(val key: String, val label: String) {
-    /** An OpenAI-shaped /audio/speech: SiliconFlow's CosyVoice, OpenAI's own, Mossland's. */
-    Api("api", "语音接口"),
+/**
+ * Where the TA's voice comes from. Each service is a choice of its own in settings with only what
+ * it needs: its key, and a voice from its own list. (There was a general way through an MCP tool;
+ * nobody could tell how to fill it in, and the services people use have their own APIs anyway.)
+ * [Other] is any service with OpenAI's /audio/speech, filled in by hand: relays mostly.
+ */
+enum class VoiceService(val key: String, val label: String) {
+    SiliconFlow("siliconflow", "硅基流动"),
+    MiniMax("minimax", "MiniMax"),
+    Mossland("mossland", "Mossland"),
     ElevenLabs("elevenlabs", "ElevenLabs"),
-
-    /** A tool of one of the person's MCP services: whatever voice service they found. */
-    Mcp("mcp", "MCP 工具"),
+    OpenAI("openai", "OpenAI"),
+    Other("api", "其他接口"),
     ;
 
     companion object {
-        fun of(key: String?): SpeechEngine = entries.firstOrNull { it.key == key } ?: Api
+        fun of(key: String?): VoiceService? = entries.firstOrNull { it.key == key }
     }
 }
 
-/** A voice service for the OpenAI-shaped /audio/speech, as the settings screen offers it. */
-data class SpeechPreset(val name: String, val baseUrl: String, val model: String, val voice: String)
+/** One voice a service offers: what goes in the request, and what the person reads. */
+data class VoiceOption(val id: String, val label: String)
 
 class SpeechException(message: String) : Exception(message)
 
-/** The TA's voice: requests, and finding the audio in what comes back. Nothing here touches the network. */
+/** The TA's voice: each service's request and answer. Nothing here touches the network. */
 object Speech {
-    val presets = listOf(
-        SpeechPreset("硅基流动", "https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B", "FunAudioLLM/CosyVoice2-0.5B:anna"),
-        SpeechPreset("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini-tts", "alloy"),
-        // Mossland's voices are ids from its voice library; this one is its 轻快灵动女声.
-        SpeechPreset("Mossland", "https://api.mosi.cn/v1", "moss-tts-1.5-flash", "806c9695-6160-404e-8722-4f788d935af3"),
-    )
-
-    /** ElevenLabs' key is filed under this address, like any other. */
+    const val SILICONFLOW_BASE = "https://api.siliconflow.cn/v1"
+    const val SILICONFLOW_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+    const val OPENAI_BASE = "https://api.openai.com/v1"
+    const val OPENAI_MODEL = "gpt-4o-mini-tts"
+    const val MOSSLAND_BASE = "https://api.mosi.cn/v1"
+    const val MOSSLAND_MODEL = "moss-tts-1.5-flash"
     const val ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
     const val ELEVENLABS_MODEL = "eleven_multilingual_v2"
+
+    /** MiniMax's two sites; a key from one doesn't work on the other. The mainland's moved here from api.minimaxi.com. */
+    const val MINIMAX_CN = "https://api.minimax.cn"
+    const val MINIMAX_GLOBAL = "https://api.minimax.io"
+    const val MINIMAX_MODEL = "speech-2.8-hd"
+
+    /** CosyVoice's own eight, as SiliconFlow names them. */
+    val siliconFlowVoices = listOf(
+        "anna" to "沉稳女声", "bella" to "激情女声", "claire" to "温柔女声", "diana" to "欢快女声",
+        "alex" to "沉稳男声", "benjamin" to "低沉男声", "charles" to "磁性男声", "david" to "欢快男声",
+    ).map { (id, label) -> VoiceOption("$SILICONFLOW_MODEL:$id", "$label $id") }
+
+    /** MiniMax's long-standing Chinese voices; the rest come from its list (Speaker.voices). */
+    val miniMaxVoices = listOf(
+        VoiceOption("female-shaonv", "少女"),
+        VoiceOption("female-yujie", "御姐"),
+        VoiceOption("female-chengshu", "成熟女性"),
+        VoiceOption("female-tianmei", "甜美女性"),
+        VoiceOption("male-qn-qingse", "青涩青年"),
+        VoiceOption("male-qn-jingying", "精英青年"),
+        VoiceOption("male-qn-badao", "霸道青年"),
+        VoiceOption("male-qn-daxuesheng", "青年大学生"),
+    )
+
+    /** Mossland's public voices (its docs, voices list); the library has more, by id. */
+    val mosslandVoices = listOf(
+        VoiceOption("806c9695-6160-404e-8722-4f788d935af3", "轻快灵动女声"),
+        VoiceOption("fe85a513-9bf3-4ef7-aa0b-8b2d11e4db93", "少年感人声（男）"),
+        VoiceOption("19411508-8731-4b68-901d-7e4b8a98e23f", "忧伤的秋"),
+        VoiceOption("faf7f550-0627-4fc6-8db0-d3bfdad49358", "经验女教师"),
+        VoiceOption("c6c0a40a-ea82-4468-9a21-333d3c4a76f6", "曼波有口音版"),
+        VoiceOption("26838557-6890-4505-bc7c-e8198443a141", "东北虎哥"),
+        VoiceOption("f80b6698-0066-430b-88a0-f0fb8796db34", "明太祖"),
+        VoiceOption("7662a8a1-700c-466a-b66b-57ece9e2e231", "李白"),
+        VoiceOption("0804710c-8e5e-4b67-acda-5785ef13c309", "历史解说男声"),
+        VoiceOption("2fdf194e-c16e-4587-9027-0d3464e09b4e", "诗词朗读"),
+        VoiceOption("133bd03b-d717-4a55-8974-7ffc9afc1b51", "故宫纪录片"),
+        VoiceOption("944eb93b-3820-49f3-b2c0-4e37a31d1161", "三农农业旁白"),
+        VoiceOption("9d1e88e9-3b9c-4992-a414-7a1cb3ff7ab5", "优雅英国女士"),
+        VoiceOption("f9a1416b-d006-4b77-9581-8f0e8ec1e401", "旁白 Jake"),
+        VoiceOption("ddc6e38b-6f55-4415-b21b-a88cad2cc1d9", "VOX AKUMA"),
+    )
+
+    val openAiVoices = listOf("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse")
+        .map { VoiceOption(it, it) }
+
+    /** The voices offered to pick from without asking the service; none for those where it is typed. */
+    fun builtIn(service: VoiceService): List<VoiceOption> = when (service) {
+        VoiceService.SiliconFlow -> siliconFlowVoices
+        VoiceService.MiniMax -> miniMaxVoices
+        VoiceService.Mossland -> mosslandVoices
+        VoiceService.OpenAI -> openAiVoices
+        VoiceService.ElevenLabs, VoiceService.Other -> emptyList()
+    }
 
     /** What the settings screen plays to try a voice. */
     const val SAMPLE = "你好呀，这是我的声音。"
@@ -63,29 +120,61 @@ object Speech {
     const val MAX_CHARS = 300
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val URL = Regex("""https?://[^\s"'<>）」]+""")
-    private val AUDIO_EXTENSIONS = setOf("mp3", "wav", "ogg", "opus", "m4a", "aac", "flac")
 
-    /** Whether the engine picked has what it needs, so send_voice can be offered. */
-    fun ready(s: AppSettings): Boolean = when (SpeechEngine.of(s.speechEngine)) {
-        SpeechEngine.Api -> s.speechBaseUrl.isNotBlank() && s.speechModel.isNotBlank()
-        SpeechEngine.ElevenLabs -> s.elevenVoice.isNotBlank()
-        SpeechEngine.Mcp -> s.speechMcpServer.isNotBlank() && s.speechMcpTool.isNotBlank()
+    fun service(s: AppSettings): VoiceService? = VoiceService.of(s.speechEngine)
+
+    /** The voice picked for [service], or its first. ElevenLabs' and the hand-filled one's are their own fields. */
+    fun voice(s: AppSettings, service: VoiceService): String = when (service) {
+        VoiceService.ElevenLabs -> s.elevenVoice.trim()
+        VoiceService.Other -> s.speechVoice.trim()
+        else -> s.speechVoices[service.key]?.trim()?.takeIf { it.isNotEmpty() } ?: builtIn(service).first().id
     }
 
-    fun url(baseUrl: String): String =
+    /** Where [service]'s key is filed (keys go by address): with the chat's and voice-to-text's, when they share one. */
+    fun keyAddress(s: AppSettings, service: VoiceService): String = when (service) {
+        VoiceService.SiliconFlow -> SILICONFLOW_BASE
+        VoiceService.MiniMax -> if (s.minimaxGlobal) MINIMAX_GLOBAL else MINIMAX_CN
+        VoiceService.Mossland -> MOSSLAND_BASE
+        VoiceService.ElevenLabs -> ELEVENLABS_BASE
+        VoiceService.OpenAI -> OPENAI_BASE
+        VoiceService.Other -> s.speechBaseUrl.trim()
+    }
+
+    /** Whether there is a voice to speak with, so send_voice can be offered. */
+    fun ready(s: AppSettings): Boolean = when (service(s)) {
+        null -> false
+        VoiceService.Other -> s.speechBaseUrl.isNotBlank() && s.speechModel.isNotBlank()
+        VoiceService.ElevenLabs -> s.elevenVoice.isNotBlank()
+        else -> true
+    }
+
+    /**
+     * The service as settings from before stored it: "api" was every OpenAI-shaped service, told
+     * apart by address, and "mcp" (an MCP tool) is gone. Returns the service key and the voices.
+     */
+    fun migrate(engine: String, baseUrl: String, voice: String, voices: Map<String, String>): Pair<String, Map<String, String>> {
+        if (engine == "mcp") return "" to voices
+        if (engine != VoiceService.Other.key) return engine to voices
+        val host = baseUrl.trim().substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+        if (host.isEmpty()) return "" to voices
+        val known = when {
+            host == "api.siliconflow.cn" -> VoiceService.SiliconFlow
+            host == "mosi.cn" || host.endsWith(".mosi.cn") -> VoiceService.Mossland
+            host == "api.openai.com" -> VoiceService.OpenAI
+            else -> return engine to voices
+        }
+        val kept = if (voice.isNotBlank() && known.key !in voices) voices + (known.key to voice.trim()) else voices
+        return known.key to kept
+    }
+
+    fun speechUrl(baseUrl: String): String =
         baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions").let { if (it.endsWith("/audio/speech")) it else "$it/audio/speech" }
 
-    /** Mossland's API (Moss, api.mosi.cn): the same /audio/speech, but the voice goes in voice_id. */
-    fun isMoss(baseUrl: String): Boolean {
-        val host = baseUrl.trim().substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
-        return host == "mosi.cn" || host.endsWith(".mosi.cn")
-    }
-
-    fun apiBody(baseUrl: String, model: String, voice: String, text: String): String = buildJsonObject {
+    /** OpenAI's /audio/speech, which SiliconFlow and Mossland take too: Mossland wants the voice as voice_id. */
+    fun openAiBody(model: String, voice: String, text: String, voiceField: String = "voice"): String = buildJsonObject {
         put("model", model.trim())
         put("input", text)
-        if (voice.isNotBlank()) put(if (isMoss(baseUrl)) "voice_id" else "voice", voice.trim())
+        if (voice.isNotBlank()) put(voiceField, voice.trim())
         put("response_format", "mp3")
     }.toString()
 
@@ -98,20 +187,89 @@ object Speech {
         }
     }.toString()
 
-    /** The arguments for an MCP tool: the person's fixed ones, with the words under [textParam]. */
-    fun mcpArguments(fixed: String, textParam: String, text: String): JsonObject {
-        val base = fixed.takeIf { it.isNotBlank() }
-            ?.let { runCatching { json.parseToJsonElement(it) as JsonObject }.getOrNull() ?: throw SpeechException("「其他参数」不是一个 JSON 对象") }
-            ?: JsonObject(emptyMap())
-        return JsonObject(base + (textParam.trim().ifEmpty { "text" } to JsonPrimitive(text)))
+    /** MiniMax's /v1/t2a_v2, as its own CLI and MCP server send it: the audio comes back hex in JSON. */
+    fun miniMaxBody(voice: String, text: String): String = buildJsonObject {
+        put("model", MINIMAX_MODEL)
+        put("text", text)
+        put("stream", false)
+        putJsonObject("voice_setting") {
+            put("voice_id", voice.trim())
+            put("speed", 1.0)
+            put("vol", 1.0)
+            put("pitch", 0)
+        }
+        putJsonObject("audio_setting") {
+            put("sample_rate", 32000)
+            put("bitrate", 128000)
+            put("format", "mp3")
+            put("channel", 1)
+        }
+        put("language_boost", "auto")
+        put("output_format", "hex")
+    }.toString()
+
+    private fun JsonObject.obj(key: String) = this[key] as? JsonObject
+
+    private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
+
+    /** MiniMax answers 200 even when it refuses; the refusal is in base_resp. Null when it didn't. */
+    fun miniMaxProblem(answer: JsonObject): String? {
+        val base = answer.obj("base_resp") ?: return null
+        val code = (base["status_code"] as? JsonPrimitive)?.intOrNull ?: return null
+        if (code == 0) return null
+        val said = base.str("status_msg").orEmpty().take(120)
+        return when (code) {
+            1004 -> "Key 不对：国内版和国际版的 Key 不通用，看看上面选对了没有（$said）"
+            1008 -> "MiniMax 账户余额不足"
+            2038 -> "要先在 MiniMax 开放平台完成实名认证"
+            1002, 1039 -> "请求太频繁，等一下再试"
+            else -> "MiniMax 说：$code $said"
+        }
     }
 
-    /** The parameter an MCP tool most likely takes the words in: text, input or content, else its first string one. */
-    fun textParam(schema: JsonObject): String {
-        val props = (schema["properties"] as? JsonObject).orEmpty()
-        return listOf("text", "input", "content", "prompt").firstOrNull { it in props }
-            ?: props.entries.firstOrNull { (_, p) -> ((p as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull == "string" }?.key
-            ?: "text"
+    /** The audio in MiniMax's answer, from hex. */
+    fun miniMaxAudio(body: String): ByteArray {
+        val answer = runCatching { json.parseToJsonElement(body) as JsonObject }.getOrNull()
+            ?: throw SpeechException("MiniMax 回的不是 JSON：${body.take(80)}")
+        miniMaxProblem(answer)?.let { throw SpeechException(it) }
+        val hex = answer.obj("data")?.str("audio")?.trim().orEmpty()
+        if (hex.isEmpty()) throw SpeechException("MiniMax 没回声音")
+        if (hex.length % 2 != 0 || hex.any { Character.digit(it, 16) < 0 }) throw SpeechException("MiniMax 回的声音读不出来")
+        return ByteArray(hex.length / 2) { i -> ((Character.digit(hex[2 * i], 16) shl 4) + Character.digit(hex[2 * i + 1], 16)).toByte() }
+    }
+
+    /** MiniMax's voices from /v1/get_voice: its own, then any cloned or designed on the account. */
+    fun miniMaxVoiceList(body: String): List<VoiceOption> {
+        val answer = runCatching { json.parseToJsonElement(body) as JsonObject }.getOrNull() ?: return emptyList()
+        miniMaxProblem(answer)?.let { throw SpeechException(it) }
+        return listOf("voice_cloning", "voice_generation", "system_voice").flatMap { group ->
+            (answer[group] as? JsonArray).orEmpty().mapNotNull { v ->
+                val o = v as? JsonObject ?: return@mapNotNull null
+                val id = o.str("voice_id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val name = o.str("voice_name")?.takeIf { it.isNotBlank() } ?: if (group == "system_voice") id else "我的音色"
+                VoiceOption(id, name)
+            }
+        }
+    }
+
+    /** Mossland's /v1/audio/voices: the public ones and the account's own. */
+    fun mosslandVoiceList(body: String): List<VoiceOption> {
+        val answer = runCatching { json.parseToJsonElement(body) as JsonObject }.getOrNull() ?: return emptyList()
+        return (answer["data"] as? JsonArray).orEmpty().mapNotNull { v ->
+            val o = v as? JsonObject ?: return@mapNotNull null
+            val id = o.str("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            VoiceOption(id, o.str("name")?.takeIf { it.isNotBlank() } ?: id)
+        }
+    }
+
+    /** ElevenLabs' /v1/voices: what the account has, its premade voices among them. */
+    fun elevenLabsVoiceList(body: String): List<VoiceOption> {
+        val answer = runCatching { json.parseToJsonElement(body) as JsonObject }.getOrNull() ?: return emptyList()
+        return (answer["voices"] as? JsonArray).orEmpty().mapNotNull { v ->
+            val o = v as? JsonObject ?: return@mapNotNull null
+            val id = o.str("voice_id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            VoiceOption(id, o.str("name")?.takeIf { it.isNotBlank() } ?: id)
+        }
     }
 
     /** A file extension for an audio type. */
@@ -123,45 +281,10 @@ object Speech {
         "audio/flac", "audio/x-flac" -> "flac"
         else -> "mp3"
     }
-
-    fun isAudioUrl(url: String): Boolean = url.substringBefore('?').substringAfterLast('.').lowercase() in AUDIO_EXTENSIONS
-
-    /** Where an MCP tool's result keeps the audio it made. */
-    sealed interface Found {
-        class Bytes(val data: ByteArray, val mime: String?) : Found
-
-        data class Link(val url: String) : Found
-    }
-
-    /**
-     * The audio in an MCP tool's result: an audio part, a resource holding it or linking to
-     * it, or a link in the text (the one that looks like an audio file, else the only one).
-     */
-    fun audioIn(result: JsonObject): Found? {
-        fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull?.trim()?.ifEmpty { null }
-        val parts = (result["content"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-        for (p in parts) {
-            when (p.str("type")) {
-                "audio" -> p.str("data")?.let { return Found.Bytes(Base64.getMimeDecoder().decode(it), p.str("mimeType")) }
-                "resource" -> {
-                    val r = p["resource"] as? JsonObject ?: continue
-                    val mime = r.str("mimeType")
-                    val blob = r.str("blob")
-                    if (blob != null && (mime == null || mime.startsWith("audio"))) return Found.Bytes(Base64.getMimeDecoder().decode(blob), mime)
-                    r.str("uri")?.takeIf { it.startsWith("http") && (isAudioUrl(it) || mime?.startsWith("audio") == true) }?.let { return Found.Link(it) }
-                }
-                "resource_link" -> p.str("uri")?.takeIf { it.startsWith("http") }?.let { return Found.Link(it) }
-            }
-        }
-        val links = parts.filter { it.str("type") == "text" }
-            .flatMap { part -> URL.findAll(part.str("text").orEmpty()).map { it.value.trimEnd('.', ',', ')', '。', '，') }.toList() }
-            .distinct()
-        return (links.firstOrNull(::isAudioUrl) ?: links.singleOrNull())?.let { Found.Link(it) }
-    }
 }
 
 /**
- * Makes the TA's voice messages with the engine the person picked: into a file among the
+ * Makes the TA's voice messages with the service the person picked: into a file among the
  * pictures (voice_…, so backups and deletes take it along, like the person's own), with how
  * long it plays.
  */
@@ -169,7 +292,6 @@ class Speaker(
     private val images: ImageStore,
     http: OkHttpClient,
     private val secrets: SecretStore,
-    private val mcp: McpHub,
 ) {
     private val http = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
 
@@ -177,10 +299,33 @@ class Speaker(
     suspend fun speak(s: AppSettings, text: String): MessageAudio {
         val words = text.trim().take(Speech.MAX_CHARS)
         if (words.isEmpty()) throw SpeechException("没有要说的话")
-        val (bytes, mime) = when (SpeechEngine.of(s.speechEngine)) {
-            SpeechEngine.Api -> api(s, words)
-            SpeechEngine.ElevenLabs -> elevenLabs(s, words)
-            SpeechEngine.Mcp -> fromMcp(s, words)
+        val service = Speech.service(s) ?: throw SpeechException("还没选 TA 的声音：在设置「TA 的声音」里选一个")
+        val key = secrets.key(Speech.keyAddress(s, service))?.takeIf { it.isNotBlank() }
+            ?: throw SpeechException("${service.label}还没填 Key")
+        val voice = Speech.voice(s, service)
+        val (bytes, mime) = when (service) {
+            VoiceService.SiliconFlow -> openAi(Speech.SILICONFLOW_BASE, key, Speech.openAiBody(Speech.SILICONFLOW_MODEL, voice, words))
+            VoiceService.OpenAI -> openAi(Speech.OPENAI_BASE, key, Speech.openAiBody(Speech.OPENAI_MODEL, voice, words))
+            VoiceService.Mossland -> openAi(Speech.MOSSLAND_BASE, key, Speech.openAiBody(Speech.MOSSLAND_MODEL, voice, words, voiceField = "voice_id"))
+            VoiceService.Other -> openAi(s.speechBaseUrl, key, Speech.openAiBody(s.speechModel, voice, words))
+            VoiceService.ElevenLabs -> fetch(
+                Request.Builder()
+                    .url("${Speech.ELEVENLABS_BASE}/text-to-speech/$voice")
+                    .header("xi-api-key", key)
+                    .header("Accept", "audio/mpeg")
+                    .post(Speech.elevenLabsBody(s.elevenModel, words).toRequestBody(JSON))
+                    .build(),
+            )
+            VoiceService.MiniMax -> {
+                val body = text(
+                    Request.Builder()
+                        .url("${Speech.keyAddress(s, service)}/v1/t2a_v2")
+                        .header("Authorization", "Bearer $key")
+                        .post(Speech.miniMaxBody(voice, words).toRequestBody(JSON))
+                        .build(),
+                )
+                Speech.miniMaxAudio(body) to "audio/mpeg"
+            }
         }
         if (bytes.size < 64) throw SpeechException("回来的声音是空的")
         return withContext(Dispatchers.IO) {
@@ -197,40 +342,40 @@ class Speaker(
         }
     }
 
-    private suspend fun api(s: AppSettings, text: String): Pair<ByteArray, String?> {
-        val key = secrets.key(s.speechBaseUrl)?.takeIf { it.isNotBlank() } ?: throw SpeechException("语音接口还没填 Key")
-        val request = Request.Builder()
-            .url(Speech.url(s.speechBaseUrl))
+    /**
+     * Every voice [service] has for this account, asked of it: MiniMax's few hundred, Mossland's
+     * public ones and the account's own, ElevenLabs' on the account. Empty for those that list none.
+     */
+    suspend fun voices(s: AppSettings, service: VoiceService): List<VoiceOption> {
+        val key = secrets.key(Speech.keyAddress(s, service))?.takeIf { it.isNotBlank() }
+            ?: throw SpeechException("先填 ${service.label} 的 Key，才能列出音色")
+        return when (service) {
+            VoiceService.MiniMax -> Speech.miniMaxVoiceList(
+                text(
+                    Request.Builder()
+                        .url("${Speech.keyAddress(s, service)}/v1/get_voice")
+                        .header("Authorization", "Bearer $key")
+                        .post("""{"voice_type":"all"}""".toRequestBody(JSON))
+                        .build(),
+                ),
+            )
+            VoiceService.Mossland -> Speech.mosslandVoiceList(
+                text(Request.Builder().url("${Speech.MOSSLAND_BASE}/audio/voices?limit=150").header("Authorization", "Bearer $key").build()),
+            )
+            VoiceService.ElevenLabs -> Speech.elevenLabsVoiceList(
+                text(Request.Builder().url("${Speech.ELEVENLABS_BASE}/voices").header("xi-api-key", key).build()),
+            )
+            else -> emptyList()
+        }
+    }
+
+    private suspend fun openAi(baseUrl: String, key: String, body: String): Pair<ByteArray, String?> = fetch(
+        Request.Builder()
+            .url(Speech.speechUrl(baseUrl))
             .header("Authorization", "Bearer $key")
-            .post(Speech.apiBody(s.speechBaseUrl, s.speechModel, s.speechVoice, text).toRequestBody(JSON))
-            .build()
-        return fetch(request)
-    }
-
-    private suspend fun elevenLabs(s: AppSettings, text: String): Pair<ByteArray, String?> {
-        val key = secrets.key(Speech.ELEVENLABS_BASE)?.takeIf { it.isNotBlank() } ?: throw SpeechException("ElevenLabs 还没填 Key")
-        val request = Request.Builder()
-            .url("${Speech.ELEVENLABS_BASE}/text-to-speech/${s.elevenVoice.trim()}")
-            .header("xi-api-key", key)
-            .header("Accept", "audio/mpeg")
-            .post(Speech.elevenLabsBody(s.elevenModel, text).toRequestBody(JSON))
-            .build()
-        return fetch(request)
-    }
-
-    private suspend fun fromMcp(s: AppSettings, text: String): Pair<ByteArray, String?> {
-        val server = mcp.servers.get(s.speechMcpServer)?.takeIf { it.enabled } ?: throw SpeechException("选的 MCP 服务不在了，或者关着")
-        val result = try {
-            mcp.callRaw(server, s.speechMcpTool, Speech.mcpArguments(s.speechMcpArgs, s.speechMcpTextParam, text))
-        } catch (e: McpException) {
-            throw SpeechException(e.message ?: "MCP 服务出错了")
-        }
-        if ((result["isError"] as? JsonPrimitive)?.contentOrNull == "true") throw SpeechException("工具说出错了：${Mcp.text(result).take(120)}")
-        return when (val found = Speech.audioIn(result) ?: throw SpeechException("这个工具没回音频：${Mcp.text(result).take(120)}")) {
-            is Speech.Found.Bytes -> found.data to found.mime
-            is Speech.Found.Link -> fetch(Request.Builder().url(found.url).build())
-        }
-    }
+            .post(body.toRequestBody(JSON))
+            .build(),
+    )
 
     /** One request whose answer is the audio; an answer that isn't says why, where it can. */
     private suspend fun fetch(request: Request): Pair<ByteArray, String?> = withContext(Dispatchers.IO) {
@@ -248,11 +393,24 @@ class Speaker(
         }
     }
 
+    /** One request whose answer is JSON, as text. */
+    private suspend fun text(request: Request): String = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(request).execute().use { r ->
+                val body = r.body.string()
+                if (!r.isSuccessful) throw SpeechException(describe(r.code, body))
+                body
+            }
+        } catch (e: IOException) {
+            throw SpeechException("网络出错：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
     private fun describe(code: Int, body: String): String {
         val hint = when (code) {
             401, 403 -> "Key 不对，或者已经失效了"
             402 -> "账户余额不足"
-            404 -> "地址、模型或声音不对（404）"
+            404 -> "地址、模型或音色不对（404）"
             429 -> "请求太频繁，或者额度用完了"
             in 500..599 -> "服务那边出错了（$code）"
             else -> "请求失败（$code）"

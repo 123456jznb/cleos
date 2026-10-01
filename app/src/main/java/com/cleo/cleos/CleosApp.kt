@@ -109,7 +109,7 @@ class AppContainer(context: Context) {
         McpClient(http, version),
     )
     val transcriber = Transcriber(http, secrets)
-    val speaker = Speaker(images, http, secrets, mcp)
+    val speaker = Speaker(images, http, secrets)
 
     /** The TA's voice messages beside the ear, on headphones. */
     val ear = EarVoice(context, images)

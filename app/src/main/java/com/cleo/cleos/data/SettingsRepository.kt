@@ -11,7 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.cleo.cleos.ai.Greeting
 import com.cleo.cleos.ai.ReplyWhen
-import com.cleo.cleos.ai.SpeechEngine
+import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.ToolGroup
 import com.cleo.cleos.glass.GlassPart
 import com.cleo.cleos.glass.GlassTuning
@@ -77,18 +77,18 @@ data class AppSettings(
     /** Where voice messages are turned into text (an OpenAI-shaped /audio/transcriptions), and with which model. */
     val voiceBaseUrl: String = "",
     val voiceModel: String = "",
-    /** The TA's voice messages: what makes them (a SpeechEngine key), and each engine's settings. */
-    val speechEngine: String = SpeechEngine.Api.key,
+    /** The TA's voice messages: which service makes them (a VoiceService key; empty for none yet). */
+    val speechEngine: String = "",
+    /** The voice picked on each service that has a list (VoiceService key to voice id); none picked is its first. */
+    val speechVoices: Map<String, String> = emptyMap(),
+    /** MiniMax's international site rather than the mainland's: each has its own keys. */
+    val minimaxGlobal: Boolean = false,
+    /** VoiceService.Other, any OpenAI-shaped /audio/speech: its address, model and voice. */
     val speechBaseUrl: String = "",
     val speechModel: String = "",
     val speechVoice: String = "",
     val elevenVoice: String = "",
     val elevenModel: String = "",
-    /** An MCP service's id and one of its tools; the words go under [speechMcpTextParam], with [speechMcpArgs] (JSON) beside them. */
-    val speechMcpServer: String = "",
-    val speechMcpTool: String = "",
-    val speechMcpTextParam: String = "text",
-    val speechMcpArgs: String = "",
     /** The TA's voice messages played beside the ear when headphones are on (EarVoice). */
     val earVoice: Boolean = true,
 )
@@ -161,10 +161,8 @@ class SettingsRepository(private val context: Context) {
         val speechVoice = stringPreferencesKey("speech_voice")
         val elevenVoice = stringPreferencesKey("eleven_voice")
         val elevenModel = stringPreferencesKey("eleven_model")
-        val speechMcpServer = stringPreferencesKey("speech_mcp_server")
-        val speechMcpTool = stringPreferencesKey("speech_mcp_tool")
-        val speechMcpTextParam = stringPreferencesKey("speech_mcp_text_param")
-        val speechMcpArgs = stringPreferencesKey("speech_mcp_args")
+        val speechVoices = stringPreferencesKey("speech_voices")
+        val minimaxGlobal = booleanPreferencesKey("minimax_global")
         val earVoice = booleanPreferencesKey("ear_voice")
         val currentConversation = stringPreferencesKey("current_conversation")
         val currentCompanion = longPreferencesKey("current_companion")
@@ -178,6 +176,13 @@ class SettingsRepository(private val context: Context) {
 
     private fun Preferences.toSettings(): AppSettings {
         val d = AppSettings()
+        // Before each voice service had its own place, "api" stood for all the OpenAI-shaped ones.
+        val (speechEngine, speechVoices) = Speech.migrate(
+            this[Keys.speechEngine] ?: d.speechEngine,
+            this[Keys.speechBaseUrl].orEmpty(),
+            this[Keys.speechVoice].orEmpty(),
+            decodeVoices(this[Keys.speechVoices]),
+        )
         return AppSettings(
             userName = this[Keys.userName] ?: d.userName,
             historySize = this[Keys.historySize] ?: d.historySize,
@@ -200,16 +205,14 @@ class SettingsRepository(private val context: Context) {
             letterEveryDays = this[Keys.letterEveryDays] ?: d.letterEveryDays,
             voiceBaseUrl = this[Keys.voiceBaseUrl] ?: d.voiceBaseUrl,
             voiceModel = this[Keys.voiceModel] ?: d.voiceModel,
-            speechEngine = this[Keys.speechEngine] ?: d.speechEngine,
+            speechEngine = speechEngine,
+            speechVoices = speechVoices,
+            minimaxGlobal = this[Keys.minimaxGlobal] ?: d.minimaxGlobal,
             speechBaseUrl = this[Keys.speechBaseUrl] ?: d.speechBaseUrl,
             speechModel = this[Keys.speechModel] ?: d.speechModel,
             speechVoice = this[Keys.speechVoice] ?: d.speechVoice,
             elevenVoice = this[Keys.elevenVoice] ?: d.elevenVoice,
             elevenModel = this[Keys.elevenModel] ?: d.elevenModel,
-            speechMcpServer = this[Keys.speechMcpServer] ?: d.speechMcpServer,
-            speechMcpTool = this[Keys.speechMcpTool] ?: d.speechMcpTool,
-            speechMcpTextParam = this[Keys.speechMcpTextParam] ?: d.speechMcpTextParam,
-            speechMcpArgs = this[Keys.speechMcpArgs] ?: d.speechMcpArgs,
             earVoice = this[Keys.earVoice] ?: d.earVoice,
         )
     }
@@ -240,16 +243,18 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.voiceBaseUrl] = next.voiceBaseUrl
             prefs[Keys.voiceModel] = next.voiceModel
             prefs[Keys.speechEngine] = next.speechEngine
+            prefs[Keys.speechVoices] = encodeVoices(next.speechVoices)
+            prefs[Keys.minimaxGlobal] = next.minimaxGlobal
             prefs[Keys.speechBaseUrl] = next.speechBaseUrl
             prefs[Keys.speechModel] = next.speechModel
             prefs[Keys.speechVoice] = next.speechVoice
             prefs[Keys.elevenVoice] = next.elevenVoice
             prefs[Keys.elevenModel] = next.elevenModel
-            prefs[Keys.speechMcpServer] = next.speechMcpServer
-            prefs[Keys.speechMcpTool] = next.speechMcpTool
-            prefs[Keys.speechMcpTextParam] = next.speechMcpTextParam
-            prefs[Keys.speechMcpArgs] = next.speechMcpArgs
             prefs[Keys.earVoice] = next.earVoice
+            // The MCP tool that could make the voice, gone with it.
+            for (name in listOf("speech_mcp_server", "speech_mcp_tool", "speech_mcp_text_param", "speech_mcp_args")) {
+                prefs.remove(stringPreferencesKey(name))
+            }
         }
     }
 
@@ -297,6 +302,12 @@ class SettingsRepository(private val context: Context) {
 }
 
 private val tuningJson = Json { ignoreUnknownKeys = true }
+
+/** The voice picked on each service, as JSON: {"minimax": "female-shaonv", …}. */
+internal fun encodeVoices(voices: Map<String, String>): String = tuningJson.encodeToString(voices)
+
+internal fun decodeVoices(raw: String?): Map<String, String> =
+    if (raw.isNullOrBlank()) emptyMap() else runCatching { tuningJson.decodeFromString<Map<String, String>>(raw) }.getOrDefault(emptyMap())
 
 // Stored by enum name, so a part removed in some later version is skipped, not an error.
 internal fun encodeTuning(map: Map<GlassPart, GlassTuning>): String =
