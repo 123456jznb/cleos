@@ -196,6 +196,9 @@ private data class Face(val file: String?, val letter: String)
 private data class Faces(val me: Face, val ai: Face)
 
 private val LocalFaces = compositionLocalOf<Faces?> { null }
+
+/** The chat's text: its size from settings, and the line height that goes with it. */
+private val LocalChatType = compositionLocalOf { ChatType(ChatType.DEFAULT) }
 private val AvatarSize = 34.dp
 private val AvatarGap = 8.dp
 
@@ -730,7 +733,8 @@ fun ChatTab(
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
-        CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook) {
+        val chatType = remember(state.chatTextSize) { ChatType(state.chatTextSize) }
+        CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook, LocalChatType provides chatType) {
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
@@ -906,10 +910,17 @@ fun ChatTab(
 @Composable
 private fun bubbleMaxWidth(): Dp {
     val width = LocalConfiguration.current.screenWidthDp
-    // With avatars: the list's side padding, an avatar on one side, and as much space
-    // left open on the other, so a long bubble never runs up against the far edge.
-    return if (LocalFaces.current != null) width.dp - 24.dp - AvatarSlot * 2 else (width * 0.78f).dp
+    // At most 70% of the screen: a bubble running nearly edge to edge reads like a page, not a
+    // message. With avatars, also no wider than leaves an avatar's room on the far side.
+    val most = (width * BUBBLE_SHARE).dp
+    return if (LocalFaces.current != null) minOf(most, width.dp - 24.dp - AvatarSlot * 2) else most
 }
+
+/** How much of the screen's width a bubble may take. */
+private const val BUBBLE_SHARE = 0.7f
+
+/** Room inside a bubble around its words. */
+private val BubblePadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
 
 @Composable
 private fun TimeStamp(at: Long) {
@@ -1053,13 +1064,12 @@ private fun MessageBubble(
                                         ),
                                     style = if (mine) palette.bubbleMine else palette.bubble,
                                     shape = GlassShape.Rounded(20.dp),
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                                    contentPadding = BubblePadding,
                                 ) {
                                     Text(
                                         piece.text,
                                         color = if (mine) palette.mineContent else palette.content,
-                                        fontSize = 16.sp,
-                                        lineHeight = 23.sp,
+                                        style = LocalChatType.current.body,
                                     )
                                 }
                             }
@@ -1184,7 +1194,7 @@ private fun VoiceBubble(
             .combinedClickable(interactionSource = null, indication = null, onClick = onClick, onLongClick = onLongClick),
         style = if (mine) palette.bubbleMine else palette.bubble,
         shape = GlassShape.Rounded(20.dp),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        contentPadding = BubblePadding,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1198,7 +1208,7 @@ private fun VoiceBubble(
                 Text(Voice.duration(audio.ms), color = ink, fontSize = 15.sp)
             }
             when {
-                transcript.isNotBlank() -> Text(transcript, color = ink.copy(alpha = 0.85f), fontSize = 14.sp, lineHeight = 20.sp)
+                transcript.isNotBlank() -> Text(transcript, color = ink.copy(alpha = 0.85f), style = LocalChatType.current.small)
                 transcribing -> Text("转文字中…", color = ink.copy(alpha = 0.7f), fontSize = 13.sp)
             }
         }
@@ -1350,7 +1360,7 @@ private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepo
                         GlassSurface(
                             style = palette.bubble,
                             shape = GlassShape.Rounded(20.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                            contentPadding = BubblePadding,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 TypingDots()
@@ -1368,9 +1378,9 @@ private fun LiveBubble(live: StreamingReply, aiName: String, onAnswer: (ChatRepo
                                 modifier = Modifier.widthIn(max = bubbleMaxWidth()),
                                 style = palette.bubble,
                                 shape = GlassShape.Rounded(20.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                                contentPadding = BubblePadding,
                             ) {
-                                Text(piece.text, color = palette.content, fontSize = 16.sp, lineHeight = 23.sp)
+                                Text(piece.text, color = palette.content, style = LocalChatType.current.body)
                             }
                         }
                     }

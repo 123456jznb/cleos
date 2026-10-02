@@ -66,6 +66,8 @@ data class AppSettings(
     val chatAvatars: Boolean = true,
     /** Beside every bubble, the way WeChat does; otherwise once for several in a row from one side. */
     val avatarEachMessage: Boolean = false,
+    /** How big the chat's text is, in sp (ChatType.SIZES). */
+    val chatTextSize: Int = 15,
     /** The colour of the person's own bubbles (ARGB), still glass; null follows the wallpaper. */
     val myBubble: Int? = null,
     /** The notification permission was asked for once already; after that it is theirs to change in settings. */
@@ -164,6 +166,7 @@ class SettingsRepository(private val context: Context) {
         val userAvatar = stringPreferencesKey("user_avatar")
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val avatarEachMessage = booleanPreferencesKey("avatar_each_message")
+        val chatTextSize = intPreferencesKey("chat_text_size")
         val myBubble = intPreferencesKey("my_bubble")
         val notificationsAsked = booleanPreferencesKey("notifications_asked")
         val letterReply = stringPreferencesKey("letter_reply")
@@ -214,6 +217,7 @@ class SettingsRepository(private val context: Context) {
             userAvatar = this[Keys.userAvatar],
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             avatarEachMessage = this[Keys.avatarEachMessage] ?: d.avatarEachMessage,
+            chatTextSize = this[Keys.chatTextSize] ?: d.chatTextSize,
             myBubble = this[Keys.myBubble],
             notificationsAsked = this[Keys.notificationsAsked] ?: d.notificationsAsked,
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
@@ -251,6 +255,7 @@ class SettingsRepository(private val context: Context) {
             if (next.userAvatar != null) prefs[Keys.userAvatar] = next.userAvatar else prefs.remove(Keys.userAvatar)
             prefs[Keys.chatAvatars] = next.chatAvatars
             prefs[Keys.avatarEachMessage] = next.avatarEachMessage
+            prefs[Keys.chatTextSize] = next.chatTextSize
             if (next.myBubble != null) prefs[Keys.myBubble] = next.myBubble else prefs.remove(Keys.myBubble)
             prefs[Keys.notificationsAsked] = next.notificationsAsked
             prefs[Keys.letterReply] = next.letterReply.key

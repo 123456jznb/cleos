@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -42,7 +43,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.CrashLog
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.data.GlassMode
+import com.cleo.cleos.glass.GlassShape
+import com.cleo.cleos.glass.GlassSurface
 import com.cleo.cleos.glass.LocalGlassPalette
+import com.cleo.cleos.ui.chat.ChatType
 import kotlin.math.roundToInt
 
 /** How the person is called, how much of the conversation goes along, and the avatars beside messages. */
@@ -69,6 +73,29 @@ internal fun ChatPage(vm: SettingsViewModel) {
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
+    }
+
+    Section("字号") {
+        val type = ChatType(settings.chatTextSize)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChatType.SIZES.forEach { size ->
+                val label = when (size) {
+                    14 -> "小"
+                    15 -> "标准"
+                    16 -> "大"
+                    else -> "特大"
+                }
+                Chip("$label $size", selected = settings.chatTextSize == size) { vm.setChatTextSize(size) }
+            }
+        }
+        // What a bubble looks like at that size.
+        GlassSurface(
+            style = palette.bubble,
+            shape = GlassShape.Rounded(20.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text("今天也辛苦啦。晚饭吃了吗？我刚才还在想，要不要提醒你早点睡。", color = palette.content, style = type.body)
+        }
     }
 
     // Moved here from the home page, where they sat among the TA's things.

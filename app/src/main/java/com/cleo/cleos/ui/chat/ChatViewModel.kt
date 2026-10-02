@@ -51,6 +51,8 @@ data class ChatUiState(
     val userAvatar: String? = null,
     val chatAvatars: Boolean = false,
     val avatarEachMessage: Boolean = false,
+    /** How big the chat's text is (ChatType). */
+    val chatTextSize: Int = ChatType.DEFAULT,
     val model: String = "",
     /** What the TA keeps of the messages no longer sent verbatim. */
     val recap: String? = null,
@@ -130,6 +132,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 userAvatar = s.userAvatar,
                 chatAvatars = s.chatAvatars,
                 avatarEachMessage = s.avatarEachMessage,
+                chatTextSize = s.chatTextSize,
                 model = ta.apiModel,
                 recap = conversation?.recap,
                 recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },

@@ -277,6 +277,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.appScope.launch { c.companions.setAvatar(id, null, emoji = null) }
     }
 
+    fun setChatTextSize(size: Int) {
+        viewModelScope.launch { c.settings.update { it.copy(chatTextSize = size) } }
+    }
+
     fun setChatAvatars(on: Boolean) {
         viewModelScope.launch { c.settings.update { it.copy(chatAvatars = on) } }
     }
