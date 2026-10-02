@@ -35,7 +35,9 @@ class CallTest {
 
     @Test
     fun aPieceWithHardlyAnyWordsWaitsForTheNext() {
-        assertEquals(listOf("嗯。好的呀，我知道了。"), pieces("嗯。好的呀，我知道了。"))
+        assertEquals(listOf("嗯。好。我知道了。"), pieces("嗯。好。我知道了。"))
+        // A first piece may end at a comma once it has a few words: it starts the talking sooner.
+        assertEquals(listOf("嗯。好的呀，", "我知道了。"), pieces("嗯。好的呀，我知道了。"))
     }
 
     @Test
@@ -99,10 +101,12 @@ class CallTest {
         }
     }
 
-    private fun turns(frames: List<ShortArray>): List<TurnDetector.Ended> {
+    private fun heard(frames: List<ShortArray>): List<TurnDetector.Heard> {
         val d = TurnDetector()
         return frames.mapNotNull { d.feed(it) }
     }
+
+    private fun turns(frames: List<ShortArray>): List<TurnDetector.Ended> = heard(frames).filterIsInstance<TurnDetector.Ended>()
 
     @Test
     fun aTurnEndsAfterAMomentOfQuietWithItsFirstSyllableKept() {
@@ -139,9 +143,31 @@ class CallTest {
         val d = TurnDetector()
         repeat(12) { turn ->
             d.reset()
-            val ended = (syllables(1.6) + sound(2.0, 0.0)).firstNotNullOfOrNull { d.feed(it) }
+            val ended = (syllables(1.6) + sound(2.0, 0.0)).firstNotNullOfOrNull { d.feed(it) as? TurnDetector.Ended }
             assertTrue("turn $turn not heard", ended != null)
         }
+    }
+
+    @Test
+    fun aPauseComesFirstWithTheWordsTheEndWillHave() {
+        val events = heard(sound(1.0, 0.0) + sound(1.0, 600.0) + sound(2.0, 0.0))
+        assertEquals(2, events.size)
+        val paused = events[0] as TurnDetector.Paused
+        val ended = events[1] as TurnDetector.Ended
+        assertTrue(ended.asPaused)
+        assertTrue(paused.pcm.contentEquals(ended.pcm))
+    }
+
+    @Test
+    fun talkingAgainAfterAPauseMakesItsWordsStale() {
+        val events = heard(sound(0.5, 0.0) + sound(0.8, 600.0) + sound(0.8, 0.0) + sound(0.8, 600.0) + sound(2.0, 0.0))
+        val pauses = events.filterIsInstance<TurnDetector.Paused>()
+        val ended = events.last() as TurnDetector.Ended
+        assertEquals(2, pauses.size)
+        // The first pause's words are only the beginning; the second pause has all of them.
+        assertTrue(pauses[0].pcm.size < ended.pcm.size)
+        assertTrue(pauses[1].pcm.contentEquals(ended.pcm))
+        assertTrue(ended.asPaused)
     }
 
     @Test

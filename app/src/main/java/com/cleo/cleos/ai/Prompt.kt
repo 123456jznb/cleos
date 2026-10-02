@@ -82,6 +82,9 @@ object Prompt {
         "（你们正在打电话，你说的每个字都会用你的声音念给对方听。像打电话那样说话：口语，短，一次一两句；" +
             "不发表情包，不用括号写动作，不列条目。对方的话是从语音转成的文字，听着不通顺多半是转错了，没听懂就问一句。）"
 
+    /** The line has been quiet a good while: the TA asks, the way someone on the phone would. */
+    const val CALL_QUIET = "（对方好一会儿没出声了。像打电话那样轻轻问一句还在不在，一句就好。）"
+
     /** Where a call begins, on the person's side: they rang. */
     const val CALL_BEGAN = "（对方给你打来电话，你接了）"
 

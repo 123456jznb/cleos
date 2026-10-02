@@ -20,9 +20,12 @@ import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.AppDatabase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -153,8 +157,20 @@ class Calls(
         }
     }
 
+    /**
+     * Quiet, and the screen says the call has ended, at once; putting it away (the row, the service,
+     * a voice request still on its way back) finishes behind that.
+     */
     fun hangUp() {
-        job?.cancel()
+        val j = job ?: return
+        if (!j.isActive) return
+        Log.i(TAG, "hanging up")
+        player?.stop()
+        mic?.muted = true
+        _state.update {
+            if (it == null || it.phase == CallPhase.Ended) it else it.copy(phase = CallPhase.Ended, endedAt = System.currentTimeMillis(), saying = null)
+        }
+        j.cancel()
     }
 
     /** Cuts the TA off, or stops it before it begins: what it was saying stops, and it is the person's turn. */
@@ -181,7 +197,7 @@ class Calls(
         // Whole or not at all: a call row left half made would keep the conversation busy.
         val callId = withContext(NonCancellable) { chat.beginCall(conversationId) }
         CallService.start(appContext)
-        val heard = Channel<ShortArray>(Channel.CONFLATED)
+        val heard = Channel<TurnDetector.Heard>(Channel.UNLIMITED)
         val mic = CallMic(micSource()) { heard.trySend(it) }
         val player = CallPlayer()
         this.mic = mic
@@ -204,15 +220,54 @@ class Calls(
                 }
                 val ringing = launch { player.ring() }
                 talk(conversationId, callId, s, name, player, ringing, startedAt)
+                // Whether the TA has asked if the person is still there, since they last said anything.
+                var asked = false
                 while (true) {
                     phase(CallPhase.Listening)
                     mic.listen()
-                    val pcm = heard.receive()
-                    phase(CallPhase.Thinking)
-                    val words = transcribe(pcm, s) ?: continue
-                    _state.update { it?.copy(heard = words) }
-                    chat.callLine(conversationId, callId, "user", words)
-                    talk(conversationId, callId, s, name, player, null, startedAt)
+                    var quietSince = SystemClock.elapsedRealtime()
+                    // What a pause was made out as, while it may still turn out to be the end.
+                    var early: Deferred<Words>? = null
+                    var words: Words? = null
+                    var turnEnded = 0L
+                    while (words == null) {
+                        when (val e = withTimeoutOrNull(QUIET_CHECK_MS) { heard.receive() }) {
+                            null -> {
+                                // Muted, someone else's sound, or talking: not quiet on the line.
+                                if (mic.muted || mic.held || mic.hearing) quietSince = SystemClock.elapsedRealtime()
+                                val quiet = SystemClock.elapsedRealtime() - quietSince
+                                if (!asked && quiet >= QUIET_ASK_MS) {
+                                    asked = true
+                                    talk(conversationId, callId, s, name, player, null, SystemClock.elapsedRealtime(), Prompt.CALL_QUIET)
+                                    phase(CallPhase.Listening)
+                                    mic.listen()
+                                    quietSince = SystemClock.elapsedRealtime()
+                                } else if (asked && quiet >= QUIET_HANG_UP_MS) {
+                                    problem("好一会儿没声音，电话先挂了")
+                                    hangUp()
+                                    awaitCancellation()
+                                }
+                            }
+                            is TurnDetector.Paused -> {
+                                early?.cancel()
+                                early = async { makeOut(e.pcm, s) }
+                            }
+                            is TurnDetector.Ended -> {
+                                turnEnded = SystemClock.elapsedRealtime()
+                                phase(CallPhase.Thinking)
+                                val reuse = early?.takeIf { e.asPaused }
+                                if (reuse == null) early?.cancel()
+                                words = reuse?.await() ?: makeOut(e.pcm, s)
+                                Log.i(TAG, "timing: words at +${SystemClock.elapsedRealtime() - turnEnded} ms (made out in the pause: ${reuse != null})")
+                            }
+                        }
+                    }
+                    words.problem?.let(::problem)
+                    val text = words.text ?: continue
+                    asked = false
+                    _state.update { it?.copy(heard = text) }
+                    chat.callLine(conversationId, callId, "user", text)
+                    talk(conversationId, callId, s, name, player, null, turnEnded)
                 }
             }
         } finally {
@@ -225,7 +280,8 @@ class Calls(
                 chat.endCall(conversationId, callId)
                 CallService.stop(appContext)
                 _level.value = 0f
-                _state.update { it?.copy(phase = CallPhase.Ended, endedAt = System.currentTimeMillis(), saying = null) }
+                _state.update { it?.copy(phase = CallPhase.Ended, endedAt = it.endedAt ?: System.currentTimeMillis(), saying = null) }
+                Log.i(TAG, "call put away")
             }
             // The screen says it ended for a moment, then goes.
             scope.launch {
@@ -238,7 +294,9 @@ class Calls(
     /**
      * The TA's turn, as a job of its own that a tap can cut off. [ringing]: the first turn, the TA
      * picking up: the ringing goes on until its first words are ready. It has picked up once the
-     * turn is over, whatever came of it: the person can talk now.
+     * turn is over, whatever came of it: the person can talk now. [since]: when the call began
+     * (picking up), else when the person's turn ended; how long things took is logged from then.
+     * [instruction]: a turn nobody asked for (the line has gone quiet), told the TA unseen.
      */
     private suspend fun talk(
         conversationId: Long,
@@ -247,11 +305,12 @@ class Calls(
         name: String,
         player: CallPlayer,
         ringing: Job?,
-        startedAt: Long,
+        since: Long,
+        instruction: String? = null,
     ) {
         if (ringing == null) phase(CallPhase.Thinking)
         coroutineScope {
-            val t = launch { speak(conversationId, callId, s, name, player, ringing, startedAt) }
+            val t = launch { speak(conversationId, callId, s, name, player, ringing, since, instruction) }
             turn = t
             t.join()
             turn = null
@@ -275,18 +334,27 @@ class Calls(
         name: String,
         player: CallPlayer,
         ringing: Job?,
-        startedAt: Long,
+        since: Long,
+        instruction: String?,
     ) {
         val said = StringBuilder()
         var whole = false
+        fun mark(what: String) = Log.i(TAG, "timing: $what at +${SystemClock.elapsedRealtime() - since} ms")
         try {
             coroutineScope {
                 val pieces = Channel<String>(Channel.UNLIMITED)
                 val sounds = Channel<Piece>(1)
                 val writing = launch {
                     val cut = Sentences()
+                    var first = true
                     try {
-                        chat.callReply(conversationId, callId) { delta -> cut.add(delta).forEach { pieces.trySend(it) } }
+                        chat.callReply(conversationId, callId, instruction) { delta ->
+                            if (first) {
+                                first = false
+                                mark("first words written")
+                            }
+                            cut.add(delta).forEach { pieces.trySend(it) }
+                        }
                         cut.end()?.let { pieces.trySend(it) }
                     } catch (e: CancellationException) {
                         throw e
@@ -303,10 +371,15 @@ class Calls(
                     }
                     sounds.close()
                 }
+                var heardYet = false
                 for (piece in sounds) {
+                    if (!heardYet) {
+                        heardYet = true
+                        mark("first sound ready")
+                    }
                     if (ringing != null && ringing.isActive) {
                         // A ring at least: a phone picked up at once sounds like nobody was there yet.
-                        delay((startedAt + MIN_RING_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0))
+                        delay((since + MIN_RING_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0))
                         ringing.cancelAndJoin()
                         player.stop()
                         answered(callId)
@@ -357,8 +430,10 @@ class Calls(
         Piece(words, null, 0, e.message ?: e.javaClass.simpleName)
     }
 
-    /** What the person said, in words; null (with the reason shown) when nothing could be made of it. */
-    private suspend fun transcribe(pcm: ShortArray, s: AppSettings): String? {
+    /** What the person said: in words, or why nothing could be made of it (shown only once it is used). */
+    private class Words(val text: String?, val problem: String? = null)
+
+    private suspend fun makeOut(pcm: ShortArray, s: AppSettings): Words {
         val file = File(dir, "heard_${System.nanoTime()}.wav")
         return try {
             withContext(Dispatchers.IO) {
@@ -366,15 +441,9 @@ class Calls(
                 writeWav(file, pcm)
             }
             val text = transcriber.transcribe(s.voiceBaseUrl, s.voiceModel, file).trim()
-            if (text.none { it.isLetterOrDigit() }) {
-                problem("没听清，再说一次？")
-                null
-            } else {
-                text
-            }
+            if (text.none { it.isLetterOrDigit() }) Words(null, "没听清，再说一次？") else Words(text)
         } catch (e: ChatException) {
-            problem("没听清：${e.message.orEmpty().lineSequence().first()}")
-            null
+            Words(null, "没听清：${e.message.orEmpty().lineSequence().first()}")
         } finally {
             withContext(NonCancellable + Dispatchers.IO) { file.delete() }
         }
@@ -445,6 +514,15 @@ class Calls(
         const val PROBLEM_SHOWN_MS = 4000L
         const val ENDED_SHOWN_MS = 1500L
         const val READ_MS_PER_CHAR = 160
+
+        /** How often a quiet line is looked at. */
+        const val QUIET_CHECK_MS = 5_000L
+
+        /** Nothing said for this long: the TA asks whether the person is still there. */
+        const val QUIET_ASK_MS = 120_000L
+
+        /** And nothing for this long after it asked: it hangs up. */
+        const val QUIET_HANG_UP_MS = 60_000L
     }
 }
 
@@ -505,7 +583,7 @@ class Sentences {
         const val PAUSES = "，,：:"
         const val CLOSERS = "」』”’）)】》\"'"
         const val MIN_WORDS = 4
-        const val FIRST_PAUSE_WORDS = 6
+        const val FIRST_PAUSE_WORDS = 4
         const val LONG_WORDS = 28
     }
 }
@@ -565,14 +643,21 @@ object CallSpeech {
  * level (the floor, followed while nobody talks): speech is a run of frames well above it, and
  * [END_MS] of quiet after it ends the turn. A little from before the first loud frame is kept, so
  * the first syllable isn't clipped, and a turn with too little voice in it (a cough, a knock on
- * the table) is let go.
+ * the table) is let go. Halfway there ([PAUSE_MS]) it says so, with what was said so far: making
+ * it out can start then, and the wait for the end hides most of what that takes.
  *
  * The levels are relative because phones differ: Android asks for a 90 dB tone to come out of
  * the voice-recognition microphone at an RMS of 2500, which puts speech at arm's length near 150
  * and a quiet room near 10, but phones are only roughly there.
  */
 class TurnDetector {
-    class Ended(val pcm: ShortArray)
+    sealed interface Heard
+
+    /** Quiet long enough that the turn may be over: what was said so far, to start making out. */
+    class Paused(val pcm: ShortArray) : Heard
+
+    /** The turn is over. [asPaused]: nothing was said since the last [Paused], whose words these are too. */
+    class Ended(val pcm: ShortArray, val asPaused: Boolean) : Heard
 
     private var floor = -1.0
     private var peak = 0.0
@@ -584,6 +669,9 @@ class TurnDetector {
     private var quiet = 0
     private var voiced = 0
 
+    /** A [Paused] went out, and nothing has been said since. */
+    private var paused = false
+
     /** How loud the last frame was, 0 to 1, on a scale that suits the eye. */
     var level = 0f
         private set
@@ -591,8 +679,8 @@ class TurnDetector {
     /** Whether someone is talking: a turn is under way. */
     val speaking: Boolean get() = turn != null
 
-    /** One frame ([n] samples of it); the turn, when this frame ended one. */
-    fun feed(frame: ShortArray, n: Int = frame.size): Ended? {
+    /** One frame ([n] samples of it); a pause or the end of the turn, when this frame made one. */
+    fun feed(frame: ShortArray, n: Int = frame.size): Heard? {
         val rms = rms(frame, n)
         level = ((20 * log10(max(rms, 1.0)) - 20) / 50).coerceIn(0.0, 1.0).toFloat()
         if (floor < 0) floor = min(rms, FLOOR_START_MAX)
@@ -612,6 +700,7 @@ class TurnDetector {
                 onset.clear()
                 quiet = 0
                 voiced = ONSET_FRAMES
+                paused = false
                 peak = rms
             } else if (!loud) {
                 // The room, while nobody talks: followed down quickly, up slowly. A loud frame is
@@ -635,18 +724,23 @@ class TurnDetector {
         if (rms > maxOf(floor * VOICED_RATIO, VOICED_MIN, peak * PEAK_SHARE)) {
             voiced++
             quiet = 0
+            paused = false
         } else {
             quiet++
             // The pauses show the room too: when someone starts talking the moment it is their
             // turn, they are where its level is learned.
             if (rms < floor) floor = max(FLOOR_MIN, floor + (rms - floor) * 0.2)
         }
+        // The quiet at the end, but for a little of it: the same frames at the pause and at the end.
+        fun said() = join(current.subList(0, current.size - max(0, quiet - TAIL_FRAMES)))
         if (quiet * FRAME_MS >= END_MS || current.size * FRAME_MS >= Voice.MAX_MS) {
             turn = null
             if (voiced * FRAME_MS < MIN_VOICED_MS) return null
-            // The quiet at the end, but for a little of it.
-            val keep = current.size - max(0, quiet - TAIL_FRAMES)
-            return Ended(join(current.subList(0, keep)))
+            return Ended(said(), asPaused = paused)
+        }
+        if (quiet * FRAME_MS == PAUSE_MS && voiced * FRAME_MS >= MIN_VOICED_MS) {
+            paused = true
+            return Paused(said())
         }
         return null
     }
@@ -684,7 +778,10 @@ class TurnDetector {
         const val FRAME_MS = 20
 
         /** Quiet this long ends a turn: long enough for a pause to think, short enough not to wait on. */
-        const val END_MS = 1500
+        const val END_MS = 1200
+
+        /** Quiet this long and the turn may be over: what was said starts being made out. */
+        const val PAUSE_MS = 600
         private const val PRE_FRAMES = 15
         private const val ONSET_WINDOW = 6
         private const val ONSET_FRAMES = 4
@@ -783,10 +880,10 @@ private class PretendMic(private val file: File) : MicSource {
 
 /**
  * The microphone through a call: read all along on a thread of its own, but judged (TurnDetector)
- * only while it is the person's turn, they haven't muted it, and no other app holds the sound. A
- * turn heard goes to [onTurn], and it stops listening until [listen] again.
+ * only while it is the person's turn, they haven't muted it, and no other app holds the sound.
+ * Pauses and the end of the turn go to [onHeard]; after the end it stops listening until [listen] again.
  */
-private class CallMic(private val source: MicSource, private val onTurn: (ShortArray) -> Unit) {
+private class CallMic(private val source: MicSource, private val onHeard: (TurnDetector.Heard) -> Unit) {
     @Volatile
     var muted = false
 
@@ -851,14 +948,14 @@ private class CallMic(private val source: MicSource, private val onTurn: (ShortA
                 continue
             }
             judging = true
-            val ended = detector.feed(frame, n)
+            val heard = detector.feed(frame, n)
             level = detector.level
             hearing = detector.speaking
-            if (ended != null) {
+            if (heard is TurnDetector.Ended) {
                 listening = false
                 hearing = false
-                onTurn(ended.pcm)
             }
+            if (heard != null) onHeard(heard)
         }
     }
 }

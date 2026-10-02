@@ -387,10 +387,13 @@ class Speaker(
             .build(),
     )
 
-    /** One request whose answer is the audio; an answer that isn't says why, where it can. */
-    private suspend fun fetch(request: Request): Pair<ByteArray, String?> = withContext(Dispatchers.IO) {
+    /**
+     * One request whose answer is the audio; an answer that isn't says why, where it can. Given up at
+     * once when the caller is cancelled (fetch): a call is hung up while a sentence is being made.
+     */
+    private suspend fun fetch(request: Request): Pair<ByteArray, String?> =
         try {
-            http.newCall(request).execute().use { r ->
+            http.fetch(request) { r ->
                 val type = r.header("Content-Type")
                 if (!r.isSuccessful) throw SpeechException(describe(r.code, r.body.string()))
                 if (type != null && (type.startsWith("application/json") || type.startsWith("text/"))) {
@@ -401,12 +404,11 @@ class Speaker(
         } catch (e: IOException) {
             throw SpeechException("网络出错：${e.message ?: e.javaClass.simpleName}")
         }
-    }
 
-    /** One request whose answer is JSON, as text. */
-    private suspend fun text(request: Request): String = withContext(Dispatchers.IO) {
+    /** One request whose answer is JSON, as text; given up likewise. */
+    private suspend fun text(request: Request): String =
         try {
-            http.newCall(request).execute().use { r ->
+            http.fetch(request) { r ->
                 val body = r.body.string()
                 if (!r.isSuccessful) throw SpeechException(describe(r.code, body))
                 body
@@ -414,7 +416,6 @@ class Speaker(
         } catch (e: IOException) {
             throw SpeechException("网络出错：${e.message ?: e.javaClass.simpleName}")
         }
-    }
 
     private fun describe(code: Int, body: String): String {
         val hint = when (code) {

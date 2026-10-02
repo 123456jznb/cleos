@@ -530,9 +530,10 @@ class ChatRepository(
      * sentence by sentence. Tools as in a reply, those that make sense on the phone (CALL_TOOLS),
      * their calls and results stored as the call's, since they happened. The words aren't stored
      * here: the call stores what of them was heard (callLine). No thinking: on the phone a silence
-     * that long is a dropped line. Returns all it said; throws ChatException when there is no answer.
+     * that long is a dropped line. [instruction]: a turn nobody asked for (the line went quiet), told
+     * the TA unseen, the way a wake is. Returns all it said; throws ChatException when there is no answer.
      */
-    suspend fun callReply(conversationId: Long, callId: Long, say: (String) -> Unit): String {
+    suspend fun callReply(conversationId: Long, callId: Long, instruction: String? = null, say: (String) -> Unit): String {
         val s = settings.current()
         val ta = taOf(conversationId)
         val key = secrets.key(ta.apiBaseUrl)?.takeIf { it.isNotBlank() } ?: throw ChatException("还没有填 API Key")
@@ -547,7 +548,7 @@ class ChatRepository(
         val calls = callsOutside(history)
         fun build() = Prompt.messages(
             s, ta, history, ZonedDateTime.now(), groups, false, memories, conversation.recap, stickers = stickers, call = callId, calls = calls,
-        )
+        ).let { if (instruction != null) Prompt.withWake(it, instruction) else it }
         var messages = build()
         val said = StringBuilder()
         var rounds = 0

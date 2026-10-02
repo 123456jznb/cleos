@@ -90,6 +90,7 @@ object Voice {
 class Transcriber(http: OkHttpClient, private val secrets: SecretStore) {
     private val http = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
 
+    /** Given up at once when the caller is cancelled (fetch): a call hung up mid-transcription ends then. */
     suspend fun transcribe(baseUrl: String, model: String, file: File): String = withContext(Dispatchers.IO) {
         val key = secrets.key(baseUrl)?.takeIf { it.isNotBlank() }
             ?: throw ChatException("语音转文字的服务还没有填 Key，去设置「发语音」里填上。")
@@ -104,7 +105,7 @@ class Transcriber(http: OkHttpClient, private val secrets: SecretStore) {
             .post(body)
             .build()
         try {
-            http.newCall(request).execute().use { response ->
+            http.fetch(request) { response ->
                 val text = response.body.string()
                 if (!response.isSuccessful) throw ChatException(describe(response.code, text), response.code)
                 Voice.text(text) ?: throw ChatException("服务回的不是转写结果：${text.take(80)}")
