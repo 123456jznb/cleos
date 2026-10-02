@@ -115,7 +115,7 @@ internal fun SettingsDirectory(vm: SettingsViewModel, onOpen: (SettingsPage) -> 
     val settings by vm.settings.collectAsStateWithLifecycle()
     val servers by vm.mcpServers.collectAsStateWithLifecycle()
     val companions by vm.companions.collectAsStateWithLifecycle()
-    val hasKey by vm.hasKey.collectAsStateWithLifecycle()
+    val hasKey by vm.chat.hasKey.collectAsStateWithLifecycle()
     val ta = companions.firstOrNull { it.id == vm.companionId }
     val name = vm.aiName.trim().ifEmpty { "TA" }
     var switching by remember { mutableStateOf(false) }
@@ -140,10 +140,11 @@ internal fun SettingsDirectory(vm: SettingsViewModel, onOpen: (SettingsPage) -> 
             onOpen(SettingsPage.Profile)
         }
         RowDivider()
-        val service = ApiPresets.all.firstOrNull { it.baseUrl == vm.baseUrl.trim().trimEnd('/') }?.name ?: host(vm.baseUrl)
-        val model = listOf(service, vm.model.trim()).filter { it.isNotEmpty() }.joinToString(" · ")
+        val service = ApiPresets.all.firstOrNull { it.baseUrl == vm.chat.baseUrl.trim().trimEnd('/') }?.name ?: host(vm.chat.baseUrl)
+        val heard = vm.spoken.model.trim().takeIf { vm.spokenOn && vm.spoken.baseUrl.isNotBlank() }
+        val model = listOfNotNull(service, vm.chat.model.trim(), heard?.let { "电话和语音用 $it" }).filter { it.isNotEmpty() }.joinToString(" · ")
         when {
-            vm.baseUrl.isBlank() -> Entry(Icons.Rounded.Memory, "模型", "还没接上模型", palette.error) { onOpen(SettingsPage.Model) }
+            vm.chat.baseUrl.isBlank() -> Entry(Icons.Rounded.Memory, "模型", "还没接上模型", palette.error) { onOpen(SettingsPage.Model) }
             !hasKey -> Entry(Icons.Rounded.Memory, "模型", "$model · 还没填 Key", palette.error) { onOpen(SettingsPage.Model) }
             else -> Entry(Icons.Rounded.Memory, "模型", model) { onOpen(SettingsPage.Model) }
         }

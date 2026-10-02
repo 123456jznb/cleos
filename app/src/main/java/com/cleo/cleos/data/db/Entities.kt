@@ -34,7 +34,33 @@ data class CompanionEntity(
     /** May note things down to come back to, and say them on its own when they come due (ai/Later.kt). */
     @ColumnInfo(defaultValue = "1")
     val proactive: Boolean = true,
-)
+    /**
+     * Another model for words that are heard: what the TA says on the phone, and its answer to a
+     * voice message. Off, the model above does those too. The address and model stay while it is
+     * off, to switch back to; its key is filed by address, like the chat model's.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val spokenModelOn: Boolean = false,
+    @ColumnInfo(defaultValue = "")
+    val spokenApiBaseUrl: String = "",
+    @ColumnInfo(defaultValue = "")
+    val spokenApiModel: String = "",
+) {
+    /**
+     * The model for this TA's words: its own, or, for words that will be heard, the other one when
+     * that is switched on and filled in. Half filled in counts as off: a blank address or model
+     * can't answer, and the chat model can.
+     */
+    fun modelFor(heard: Boolean): TaModel =
+        if (heard && spokenModelOn && spokenApiBaseUrl.isNotBlank() && spokenApiModel.isNotBlank()) {
+            TaModel(spokenApiBaseUrl.trim(), spokenApiModel.trim(), forHeard = true)
+        } else {
+            TaModel(apiBaseUrl, apiModel, forHeard = false)
+        }
+}
+
+/** Where a TA's words come from (CompanionEntity.modelFor); [forHeard]: the model for words heard, not the chat one. */
+data class TaModel(val baseUrl: String, val model: String, val forHeard: Boolean)
 
 /**
  * Something a TA noted in a conversation to come back to later (ai/Later.kt): what, the

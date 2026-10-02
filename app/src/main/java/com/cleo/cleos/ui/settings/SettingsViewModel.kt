@@ -12,12 +12,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cleo.cleos.AppContainer
-import com.cleo.cleos.ai.ApiEndpoint
 import com.cleo.cleos.ai.ChatException
 import com.cleo.cleos.ai.Habits
 import com.cleo.cleos.ai.ToolGroup
-import com.cleo.cleos.data.ApiPreset
-import com.cleo.cleos.data.ApiPresets
 import android.media.MediaPlayer
 import com.cleo.cleos.ai.Speech
 import com.cleo.cleos.ai.SpeechException
@@ -67,8 +64,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var companionCount by mutableIntStateOf(1)
         private set
     private var deleted = false
-    var baseUrl by mutableStateOf("")
-    var model by mutableStateOf("")
+
+    /** The TA's model, as edited. */
+    val chat = EndpointFields(c, viewModelScope)
+
+    /** The model the TA has for words that are heard (CompanionEntity.spokenModelOn), and whether it is on. */
+    val spoken = EndpointFields(c, viewModelScope)
+    var spokenOn by mutableStateOf(false)
     var aiName by mutableStateOf("")
     var userName by mutableStateOf("")
 
@@ -118,25 +120,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var speechResult by mutableStateOf<String?>(null)
         private set
     private var speechPlayer: MediaPlayer? = null
-    var keyInput by mutableStateOf("")
     var loaded by mutableStateOf(false)
         private set
 
-    var models by mutableStateOf<List<String>?>(null)
-    var checking by mutableStateOf(false)
-        private set
-    var checkResult by mutableStateOf<String?>(null)
-        private set
     var wallpaperBusy by mutableStateOf(false)
         private set
     var wallpaperError by mutableStateOf<String?>(null)
         private set
 
-    /** Whether the address being edited has a key yet: keys are filed by address. */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val hasKey: StateFlow<Boolean> = snapshotFlow { baseUrl }
-        .flatMapLatest { c.secrets.hasKey(it) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val settings: StateFlow<AppSettings> = c.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
     /** What came of this TA's last note coming due (ai/Later.kt), for the line under its switch. */
@@ -205,7 +196,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     private suspend fun watch() {
         snapshotFlow {
             listOf(
-                baseUrl, model, aiName, userName, historySize, weatherCity, voiceBaseUrl, voiceModel,
+                chat.baseUrl, chat.model, spokenOn, spoken.baseUrl, spoken.model,
+                aiName, userName, historySize, weatherCity, voiceBaseUrl, voiceModel,
                 voiceService, speechVoices.toMap(), minimaxGlobal, speechBaseUrl, speechModel, speechVoice, elevenVoice, elevenModel,
             )
         }
@@ -217,15 +209,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** Which TA the fields edit. Everything is set in one go, with nothing in between. */
     private fun load(ta: CompanionEntity) {
         companionId = ta.id
-        baseUrl = ta.apiBaseUrl
-        model = ta.apiModel
+        chat.load(ta.apiBaseUrl, ta.apiModel)
+        spokenOn = ta.spokenModelOn
+        spoken.load(ta.spokenApiBaseUrl, ta.spokenApiModel)
         aiName = ta.name
         persona = ta.persona
         deepThinking = ta.deepThinking
         proactive = ta.proactive
-        keyInput = ""
-        models = null
-        checkResult = null
     }
 
     private suspend fun persist() {
@@ -233,8 +223,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         // Read before suspending: the fields can be loaded with another TA meanwhile (an
         // import), and the old TA must not get the new one's values.
         val id = companionId
-        val url = baseUrl.trim()
-        val m = model.trim()
+        val url = chat.baseUrl.trim()
+        val m = chat.model.trim()
+        val heardOn = spokenOn
+        val heardUrl = spoken.baseUrl.trim()
+        val heardModel = spoken.model.trim()
         val name = aiName.trim()
         val user = userName.trim()
         val history = historySize
@@ -242,7 +235,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val voiceUrl = voiceBaseUrl.trim()
         val voiceM = voiceModel.trim()
         // Not the persona: written on its own page, it must not be put back as it was when this one opened.
-        c.companions.update(id) { it.copy(apiBaseUrl = url, apiModel = m, name = name) }
+        c.companions.update(id) {
+            it.copy(apiBaseUrl = url, apiModel = m, name = name, spokenModelOn = heardOn, spokenApiBaseUrl = heardUrl, spokenApiModel = heardModel)
+        }
         val speech = speechSettings()
         c.settings.update {
             speech(it.copy(userName = user, historySize = history, weatherCity = city, voiceBaseUrl = voiceUrl, voiceModel = voiceM))
@@ -255,11 +250,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
      */
     fun switchCompanion(id: Long) {
         if (id == companionId) return
-        val pendingKey = keyInput.trim()
-        val address = baseUrl
+        val pending = listOfNotNull(chat.pendingKey(), spoken.pendingKey())
         viewModelScope.launch {
             persist()
-            if (pendingKey.isNotEmpty()) c.secrets.setKey(address, pendingKey)
+            for ((address, key) in pending) c.secrets.setKey(address, key)
             c.companions.select(id)
             load(c.companions.current())
         }
@@ -507,59 +501,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch { c.settings.update { it.copy(letterEveryDays = days) } }
     }
 
-    fun applyPreset(p: ApiPreset) {
-        baseUrl = p.baseUrl
-        model = p.defaultModel
-        // A service that lists no models: the ones it is known to have, to pick from at once.
-        models = p.models.ifEmpty { null }
-        checkResult = null
-    }
-
-    fun saveKey() {
-        val k = keyInput.trim()
-        if (k.isEmpty()) return
-        viewModelScope.launch {
-            c.secrets.setKey(baseUrl, k)
-            keyInput = ""
-        }
-    }
-
-    fun clearKey() {
-        viewModelScope.launch { c.secrets.setKey(baseUrl, null) }
-    }
-
-    /** Lists the endpoint's models; that the list comes back at all is the connection test. */
-    fun check() {
-        viewModelScope.launch {
-            checking = true
-            checkResult = null
-            val key = keyInput.trim().ifEmpty { c.secrets.key(baseUrl).orEmpty() }
-            if (key.isEmpty()) {
-                checkResult = "先填 API Key"
-                checking = false
-                return@launch
-            }
-            checkResult = try {
-                val list = c.chatClient.models(ApiEndpoint(baseUrl, key, model))
-                models = list
-                if (list.isEmpty()) "连上了，但这个地址没有列出模型" else "连上了，有 ${list.size} 个模型可选"
-            } catch (e: ChatException) {
-                // No such page, past the key's check (a wrong key is a 401): connected, to a service
-                // that lists no models (智谱). Its known ones instead.
-                val known = ApiPresets.at(baseUrl)?.models.orEmpty()
-                if (e.status in NO_LIST && known.isNotEmpty()) {
-                    models = known
-                    "连上了。这家不列出模型，下面是它常用的几个"
-                } else {
-                    e.message
-                }
-            } catch (e: Exception) {
-                "出错了：${e.message ?: e.javaClass.simpleName}"
-            }
-            checking = false
-        }
-    }
-
     fun setWallpaper(uri: Uri) {
         viewModelScope.launch {
             wallpaperBusy = true
@@ -719,14 +660,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     override fun onCleared() {
         speechPlayer?.release()
         speechPlayer = null
-        val pendingKey = keyInput.trim()
-        val address = baseUrl
+        val pending = listOfNotNull(chat.pendingKey(), spoken.pendingKey())
         c.appScope.launch {
             persist()
-            if (pendingKey.isNotEmpty() && !deleted) c.secrets.setKey(address, pendingKey)
+            if (!deleted) for ((address, key) in pending) c.secrets.setKey(address, key)
         }
     }
 }
-
-/** How an address answers being asked for its models when it keeps no list: no such page, or not asked that way. */
-private val NO_LIST = setOf(404, 405)

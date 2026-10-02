@@ -133,46 +133,18 @@ internal fun ProfilePage(vm: SettingsViewModel, onOpenPersona: () -> Unit, onLea
     }
 }
 
-/** Which service the TA talks through, its key and its model. */
+/**
+ * Which service the TA talks through, its key and its model; and, if wanted, another model for
+ * the words that are heard: on the phone, and answering a voice message.
+ */
 @Composable
 internal fun ModelPage(vm: SettingsViewModel) {
     val palette = LocalGlassPalette.current
-    val hasKey by vm.hasKey.collectAsStateWithLifecycle()
-    var pickingModel by remember { mutableStateOf(false) }
 
-    Section("用谁家的") {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ApiPresets.all.forEach { p ->
-                Chip(p.name, selected = vm.baseUrl.trimEnd('/') == p.baseUrl) { vm.applyPreset(p) }
-            }
-        }
-    }
+    Section("用谁家的") { ServiceChips(vm.chat) }
 
     Section("连接") {
-        Field("接口地址", vm.baseUrl, { vm.baseUrl = it }, keyboardType = KeyboardType.Uri)
-        OutlinedTextField(
-            value = vm.keyInput,
-            onValueChange = { vm.keyInput = it },
-            label = { Text("API Key") },
-            placeholder = { if (hasKey) Text("已保存（不再显示）；要换就重新填") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (vm.keyInput.isNotBlank()) Chip("保存 Key", selected = true) { vm.saveKey() }
-            if (hasKey && vm.keyInput.isBlank()) {
-                Text("Key 已加密保存在这台手机上", color = palette.contentSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                Chip("清除", selected = false) { vm.clearKey() }
-            }
-        }
-        Field("模型", vm.model, { vm.model = it })
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Chip(if (vm.checking) "正在连接…" else "测试并列出模型", selected = false) { if (!vm.checking) vm.check() }
-            if (!vm.models.isNullOrEmpty()) Chip("从列表里选", selected = false) { pickingModel = true }
-        }
-        vm.checkResult?.let { Text(it, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 19.sp) }
+        ConnectionFields(vm.chat)
         Text(
             "每个 TA 用自己的模型。Key 跟着接口地址存：同一个地址的几个 TA 共用一个 Key，填一次就够。",
             color = palette.contentSecondary,
@@ -181,21 +153,84 @@ internal fun ModelPage(vm: SettingsViewModel) {
         )
     }
 
+    ListCard {
+        ExplainedSwitch(
+            "打电话、发语音时换个模型",
+            "电话里和回你语音时，用另一个模型",
+            "打开后，打电话时 TA 说的话，和你发语音过去后 TA 回的那一条，由下面这个模型来写，比如想让 Claude 来说。" +
+                "平时打字、主动找你、写信、前情提要还是用上面那个。TA 自己想发的语音条，话在打字时就写好了，所以也还是上面那个。",
+            vm.spokenOn,
+        ) { vm.spokenOn = it }
+    }
+
+    if (vm.spokenOn) {
+        Section("电话和语音用的模型") {
+            ServiceChips(vm.spoken)
+            ConnectionFields(vm.spoken)
+            if (vm.spoken.baseUrl.isBlank() || vm.spoken.model.isBlank()) {
+                Text("地址和模型都填好才会换，之前还用上面那个。", color = palette.contentSecondary, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+        }
+    }
+}
+
+/** The services there are presets for, the one in use marked. */
+@Composable
+private fun ServiceChips(fields: EndpointFields) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ApiPresets.all.forEach { p ->
+            Chip(p.name, selected = fields.baseUrl.trimEnd('/') == p.baseUrl) { fields.applyPreset(p) }
+        }
+    }
+}
+
+/** Address, key and model, and the test that lists the address's models to pick from. */
+@Composable
+private fun ConnectionFields(fields: EndpointFields) {
+    val palette = LocalGlassPalette.current
+    val hasKey by fields.hasKey.collectAsStateWithLifecycle()
+    var pickingModel by remember { mutableStateOf(false) }
+
+    Field("接口地址", fields.baseUrl, { fields.baseUrl = it }, keyboardType = KeyboardType.Uri)
+    OutlinedTextField(
+        value = fields.keyInput,
+        onValueChange = { fields.keyInput = it },
+        label = { Text("API Key") },
+        placeholder = { if (hasKey) Text("已保存（不再显示）；要换就重新填") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (fields.keyInput.isNotBlank()) Chip("保存 Key", selected = true) { fields.saveKey() }
+        if (hasKey && fields.keyInput.isBlank()) {
+            Text("Key 已加密保存在这台手机上", color = palette.contentSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Chip("清除", selected = false) { fields.clearKey() }
+        }
+    }
+    Field("模型", fields.model, { fields.model = it })
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Chip(if (fields.checking) "正在连接…" else "测试并列出模型", selected = false) { if (!fields.checking) fields.check() }
+        if (!fields.models.isNullOrEmpty()) Chip("从列表里选", selected = false) { pickingModel = true }
+    }
+    fields.checkResult?.let { Text(it, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 19.sp) }
+
     if (pickingModel) {
         AlertDialog(
             onDismissRequest = { pickingModel = false },
             title = { Text("选一个模型") },
             text = {
                 LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(vm.models.orEmpty()) { id ->
+                    items(fields.models.orEmpty()) { id ->
                         Text(
                             id,
                             fontSize = 15.sp,
-                            fontWeight = if (id == vm.model) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (id == fields.model) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    vm.model = id
+                                    fields.model = id
                                     pickingModel = false
                                 }
                                 .padding(vertical = 10.dp),

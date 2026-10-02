@@ -536,9 +536,12 @@ class ChatRepository(
     suspend fun callReply(conversationId: Long, callId: Long, instruction: String? = null, say: (String) -> Unit): String {
         val s = settings.current()
         val ta = taOf(conversationId)
-        val key = secrets.key(ta.apiBaseUrl)?.takeIf { it.isNotBlank() } ?: throw ChatException("还没有填 API Key")
+        // Everything said on the phone is heard: the model the TA has for that, when it has one.
+        val use = ta.modelFor(heard = true)
+        val key = secrets.key(use.baseUrl)?.takeIf { it.isNotBlank() }
+            ?: throw ChatException(if (use.forHeard) "打电话用的模型还没有填 API Key" else "还没有填 API Key")
         val conversation = db.conversations().get(conversationId) ?: throw ChatException("这段对话已经删了")
-        val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
+        val endpoint = ApiEndpoint(use.baseUrl, key, use.model)
         val endpointKey = endpoint.chatUrl + "|" + endpoint.model
         val history = Recap.sent(recaps.live(conversation), s.historySize)
         var groups = if (endpointKey in refusesTools) emptySet() else groupsFor(s, ta) intersect CALL_TOOLS
@@ -831,7 +834,13 @@ class ChatRepository(
         val startedAt = System.currentTimeMillis()
         val s = settings.current()
         val ta = taOf(conversationId)
-        val key = secrets.key(ta.apiBaseUrl)
+        // What isn't folded into the recap yet, as much of it as the window takes. The recap
+        // stands in for everything before.
+        val conversation = db.conversations().get(conversationId)
+        val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
+        // Something said aloud is answered by the model the TA has for words heard, when it has one.
+        val use = ta.modelFor(heard = history.lastOrNull { it.role == "user" }?.audio != null)
+        val key = secrets.key(use.baseUrl)
         if (key.isNullOrBlank()) {
             db.messages().insert(
                 MessageEntity(
@@ -839,7 +848,7 @@ class ChatRepository(
                     role = "assistant",
                     content = "",
                     createdAt = System.currentTimeMillis(),
-                    error = "还没有填 API Key。去设置里填上，就能聊了。",
+                    error = if (use.forHeard) "回语音用的模型还没有填 API Key。去设置 ›「模型」里填上。" else "还没有填 API Key。去设置里填上，就能聊了。",
                 ),
             )
             return
@@ -849,12 +858,8 @@ class ChatRepository(
         // a reply is coming, with stop.
         show(StreamingReply(conversationId, "", thinking = false))
         try {
-            val endpoint = ApiEndpoint(ta.apiBaseUrl, key, ta.apiModel)
+            val endpoint = ApiEndpoint(use.baseUrl, key, use.model)
             val endpointKey = endpoint.chatUrl + "|" + endpoint.model
-            // What isn't folded into the recap yet, as much of it as the window takes. The recap
-            // stands in for everything before.
-            val conversation = db.conversations().get(conversationId)
-            val history = if (conversation == null) emptyList() else Recap.sent(recaps.live(conversation), s.historySize)
             // What this reply takes in: whatever the person sends from here on is answered after it.
             history.lastOrNull { it.role == "user" }?.let { m -> answeredUpTo.merge(conversationId, m.createdAt) { a, b -> maxOf(a, b) } }
             val recap = conversation?.recap

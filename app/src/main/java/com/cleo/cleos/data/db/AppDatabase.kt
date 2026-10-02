@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WakeEntity::class,
         StickerEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
     autoMigrations = [
         // 1 -> 2: tool calls on messages (four nullable columns, nothing rewritten).
@@ -58,6 +58,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 13, to = 14),
         // 14 -> 15: which phone call a message was said in (a nullable column).
         AutoMigration(from = 14, to = 15),
+        // 15 -> 16: a second model for each TA's words that are heard, on the phone and answering
+        // voice messages (off to begin with, its address and model empty).
+        AutoMigration(from = 15, to = 16),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {

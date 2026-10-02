@@ -68,13 +68,21 @@ class Companions(
     }
 
     /**
-     * A new TA, chosen right away. They start on the current TA's service and model, so the
-     * key is already there; name and persona start empty, to be written by the person.
+     * A new TA, chosen right away. They start on the current TA's service and model (and its model
+     * for words heard, if it has one), so the keys are already there; name and persona start empty,
+     * to be written by the person.
      */
     suspend fun add(): Long {
         val from = current()
         val id = db.companions().insert(
-            CompanionEntity(apiBaseUrl = from.apiBaseUrl, apiModel = from.apiModel, createdAt = System.currentTimeMillis()),
+            CompanionEntity(
+                apiBaseUrl = from.apiBaseUrl,
+                apiModel = from.apiModel,
+                spokenModelOn = from.spokenModelOn,
+                spokenApiBaseUrl = from.spokenApiBaseUrl,
+                spokenApiModel = from.spokenApiModel,
+                createdAt = System.currentTimeMillis(),
+            ),
         )
         select(id)
         return id
