@@ -161,7 +161,47 @@ class ChatClient(private val http: OkHttpClient) {
         awaitClose { call.cancel() }
     }
 
-    /** Lists model ids the endpoint serves. Doubles as "is the address and key right". */
+    /**
+     * Asks for a single token, the same way the chat does. **This is the connection test.**
+     *
+     * Listing models used to be the test, and that was wrong twice over: a service can chat
+     * perfectly well and keep no list at all, and — worse — a wrong address can answer the
+     * list politely while being unable to chat. Only the road actually travelled proves
+     * anything, so this sends one real message down it.
+     *
+     * ## ⚠️ 2xx is not success here
+     *
+     * 智谱's older `/api/paas/v1` and `/v3` answer **HTTP 200** to anything, including a
+     * request with no key at all, with `{"code":1001,"msg":"…"}` in the body. An endpoint
+     * like that passes every check that only looks at the status line. A reply with no
+     * `choices` is a failure however cheerful the status code, and whatever the service
+     * said in the body is worth repeating — it is usually the real answer.
+     */
+    suspend fun probe(endpoint: ApiEndpoint) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(endpoint.chatUrl)
+            .header("Authorization", "Bearer ${endpoint.apiKey}")
+            .post(probeBody(endpoint.model).toString().toRequestBody(JSON_TYPE))
+            .build()
+        try {
+            http.newCall(request).execute().use { response ->
+                val text = response.body.string()
+                if (!response.isSuccessful) throw ChatException(describeHttpError(response.code, text), response.code)
+                val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                    ?: throw ChatException("地址能连上，但回的不是 JSON，多半不是聊天接口。")
+                if (root["choices"] == null) throw ChatException(notAChatReply(root))
+            }
+        } catch (e: IOException) {
+            throw ChatException(describeNetworkError(e))
+        }
+    }
+
+    /**
+     * Lists model ids the endpoint serves, to fill the picker.
+     *
+     * **Not the connection test** — that is [probe]. Plenty of services chat fine and serve
+     * no list; failing here means only that there is nothing to show.
+     */
     suspend fun models(endpoint: ApiEndpoint): List<String> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(endpoint.modelsUrl)
@@ -176,7 +216,11 @@ class ChatClient(private val http: OkHttpClient) {
                 root["data"]?.jsonArray
                     ?.mapNotNull { (it as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull }
                     ?.sorted()
-                    ?: throw ChatException("地址能连上，但返回的不是模型列表。检查地址是不是填到了 /v1 这一层。")
+                    // No "check whether it is /v1": 智谱 is /v4 and DeepSeek is /v1, so that
+                    // advice was wrong half the time — and following it landed people on an
+                    // address that answers 200 to everything, where the real fault (a bad
+                    // key) could no longer be reported. Say what is missing, nothing more.
+                    ?: throw ChatException("这个地址没有给出模型列表。有的服务就是不提供，模型名直接填也能用。")
             }
         } catch (e: IOException) {
             throw ChatException(describeNetworkError(e))
@@ -252,6 +296,43 @@ object Thinking {
  * reasoning goes back at all (as DeepSeek's own plugin does it). [effort]: how hard a model that
  * always thinks should (reasoning_effort); its reasoning goes back as with the switch left out.
  */
+/**
+ * The smallest thing that still counts as using the service: one word, one token back.
+ *
+ * Deliberately **not** streamed and deliberately not built by [requestBody] — a test should
+ * ask for as little as possible, and should not quietly inherit whatever the real chat path
+ * grows later (thinking switches, tools, pictures). A model that cannot answer "hi" in one
+ * token is not going to carry a conversation.
+ */
+internal fun probeBody(model: String): JsonObject = buildJsonObject {
+    put("model", model)
+    put("stream", false)
+    put("max_tokens", 1)
+    putJsonArray("messages") {
+        addJsonObject {
+            put("role", "user")
+            put("content", "hi")
+        }
+    }
+}
+
+/**
+ * What to say about a 200 that is not a reply.
+ *
+ * Services disagree about where they put the complaint — 智谱's old endpoints use `msg`,
+ * OpenAI-shaped ones nest it under `error`, some just use `message`. Whichever it is, the
+ * service's own words beat anything guessed here, so they are passed straight through.
+ */
+internal fun notAChatReply(root: JsonObject): String {
+    val said = (root["msg"] ?: root["message"])?.jsonPrimitive?.contentOrNull
+        ?: root["error"]?.let { errorText(it) }
+    return if (said.isNullOrBlank()) {
+        "地址能连上，但它没有按聊天接口回话。多半是地址填到了别的层级。"
+    } else {
+        "地址能连上，但它没有按聊天接口回话：$said"
+    }
+}
+
 internal fun requestBody(
     model: String,
     messages: List<ApiMessage>,

@@ -74,7 +74,16 @@ class EndpointFields(private val c: AppContainer, private val scope: CoroutineSc
         scope.launch { c.secrets.setKey(baseUrl, null) }
     }
 
-    /** Lists the endpoint's models; that the list comes back at all is the connection test. */
+    /**
+     * Sends one real message and reports whether a reply came back. Filling the model
+     * picker happens after that, and only as a convenience.
+     *
+     * The test used to be "can this address list its models", which sent at least one
+     * person round in circles: her address was right and her key was missing half of
+     * itself, but the list came back in an unexpected shape, so the app talked about the
+     * address and never once about the key. Asking the chat endpoint directly lets a bad
+     * key say "bad key".
+     */
     fun check() {
         scope.launch {
             checking = true
@@ -85,27 +94,40 @@ class EndpointFields(private val c: AppContainer, private val scope: CoroutineSc
                 checking = false
                 return@launch
             }
+            val endpoint = ApiEndpoint(baseUrl, key, model)
             checkResult = try {
-                val list = c.chatClient.models(ApiEndpoint(baseUrl, key, model))
-                models = list
-                if (list.isEmpty()) "连上了，但这个地址没有列出模型" else "连上了，有 ${list.size} 个模型可选"
-            } catch (e: ChatException) {
-                // No such page, past the key's check (a wrong key is a 401): connected, to a service
-                // that lists no models (智谱). Its known ones instead.
-                val known = ApiPresets.at(baseUrl)?.models.orEmpty()
-                if (e.status in NO_LIST && known.isNotEmpty()) {
-                    models = known
-                    "连上了。这家不列出模型，下面是它常用的几个"
+                if (model.isBlank()) {
+                    // Nothing to send a message *as* yet. Offer the list so there is
+                    // something to pick from, and say plainly that this was not the test.
+                    fillModels(endpoint)
+                    "先填一个模型名再测一次——没有模型名就发不出消息，也就试不出来"
                 } else {
-                    e.message
+                    c.chatClient.probe(endpoint)
+                    val n = fillModels(endpoint)
+                    if (n == null) "连上了，说得上话。这家不给模型列表，模型名自己填就行"
+                    else "连上了，说得上话。有 $n 个模型可选"
                 }
+            } catch (e: ChatException) {
+                e.message
             } catch (e: Exception) {
                 "出错了：${e.message ?: e.javaClass.simpleName}"
             }
             checking = false
         }
     }
-}
 
-/** How an address answers being asked for its models when it keeps no list: no such page, or not asked that way. */
-private val NO_LIST = setOf(404, 405)
+    /**
+     * Fills the model picker if anything can fill it, and says with how many.
+     *
+     * Never throws, and never decides the verdict: listing models and chatting are two
+     * different endpoints, and a service is allowed to serve only the second. Falls back
+     * to the models a preset already knows of (智谱 keeps no list).
+     */
+    private suspend fun fillModels(endpoint: ApiEndpoint): Int? {
+        val list = runCatching { c.chatClient.models(endpoint) }.getOrNull()?.takeIf { it.isNotEmpty() }
+            ?: ApiPresets.at(baseUrl)?.models?.takeIf { it.isNotEmpty() }
+            ?: return null
+        models = list
+        return list.size
+    }
+}
