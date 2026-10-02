@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.CrashLog
 import com.cleo.cleos.R
+import com.cleo.cleos.Releases
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.glass.GlassShape
@@ -401,6 +402,7 @@ internal fun AboutPage() {
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() }
     var releasesHint by remember { mutableStateOf<String?>(null) }
     var showNotices by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Section("Cleos ${version.orEmpty()}") {
         Text(
@@ -413,14 +415,20 @@ internal fun AboutPage() {
         Chip("去蓝奏云看新版", selected = false) {
             // The page asks for the code once; it is on the clipboard by then.
             context.getSystemService(ClipboardManager::class.java)
-                ?.setPrimaryClip(ClipData.newPlainText("提取码", RELEASES_CODE))
-            val opened = runCatching {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }.isSuccess
-            releasesHint = if (opened) {
-                "提取码 $RELEASES_CODE 已经复制好了，页面让输密码时粘贴就行。"
-            } else {
-                "没找到能打开网页的浏览器。地址是 $RELEASES_URL ，提取码 $RELEASES_CODE（已复制）。"
+                ?.setPrimaryClip(ClipData.newPlainText("提取码", Releases.CODE))
+            releasesHint = "正在找能打开的地址…"
+            // On whichever of 蓝奏云's domains still exists: one of them going away stranded every copy of an
+            // older version on a page that never loads.
+            scope.launch {
+                val url = Releases.reachableUrl()
+                val opened = runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.isSuccess
+                releasesHint = if (opened) {
+                    "提取码 ${Releases.CODE} 已经复制好了，页面让输密码时粘贴就行。"
+                } else {
+                    "没找到能打开网页的浏览器。地址是 $url ，提取码 ${Releases.CODE}（已复制）。"
+                }
             }
         }
         releasesHint?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }

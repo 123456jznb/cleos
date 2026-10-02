@@ -90,7 +90,7 @@ class AppContainer(context: Context) {
 
     /** What the phone is playing, and its words: the chat's 一起听 bar, a reply's line about it, music_control. */
     val music = PhoneMusic(context)
-    val lyrics = Lyrics(http, "Cleos/$version (https://wwbnf.lanzouc.com/b01gicbubg)", appScope)
+    val lyrics = Lyrics(http, "Cleos/$version (${Releases.url(Releases.HOSTS.first())})", appScope)
     // Typed: its note_for_later reaches [later], which is made further down from what uses this.
     val tools: ToolBox = ToolBox(
         db.todos(),

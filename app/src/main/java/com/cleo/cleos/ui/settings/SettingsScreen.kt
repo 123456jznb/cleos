@@ -257,12 +257,8 @@ internal fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Where every release goes: a 蓝奏云 folder, so the link stays the same from one version to the next. */
-internal const val RELEASES_URL = "https://wwbnf.lanzouc.com/b01gicbubg"
-
 /** What 「看许可全文」 shows: where the ear's data comes from, and the licence of the code it was ported from. */
 internal val NOTICES = listOf("hrir/README.txt", "licenses/binaural-voice.txt")
-internal const val RELEASES_CODE = "5y4u"
 
 /** How much of the persona the profile page shows: a few lines' worth, never all of it. */
 internal const val PERSONA_PREVIEW = 200
