@@ -35,7 +35,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -130,7 +129,7 @@ class TodoViewModel(private val c: AppContainer) : ViewModel() {
 }
 
 @Composable
-fun TodoTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
+fun TodoTab(bottomInset: Dp) {
     val vm = appViewModel { TodoViewModel(it) }
     val state by vm.state.collectAsStateWithLifecycle()
     val palette = LocalGlassPalette.current
@@ -178,7 +177,6 @@ fun TodoTab(bottomInset: Dp, onOpenSettings: () -> Unit) {
                     else -> "还有 ${state.pending.size} 件"
                 },
                 backdrop = page,
-                trailing = { GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page) },
             )
             Column(
                 Modifier

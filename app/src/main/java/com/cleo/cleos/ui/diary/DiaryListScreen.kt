@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -99,7 +98,7 @@ private enum class DiaryFilter(val label: String, val empty: String, val hint: S
 }
 
 @Composable
-fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit, onOpenSettings: () -> Unit) {
+fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit) {
     val c = appContainer()
     val palette = LocalGlassPalette.current
     var filter by rememberSaveable { mutableStateOf(DiaryFilter.All) }
@@ -120,7 +119,6 @@ fun DiaryTab(bottomInset: Dp, onOpenEntry: (id: Long, secret: Boolean) -> Unit, 
                 title = "日记",
                 subtitle = if (count > 0) "$count 篇" else null,
                 backdrop = page,
-                trailing = { GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page) },
             )
             // Writing from the secrets page starts locked: that page is where secrets are kept.
             val secret = filter == DiaryFilter.Secrets

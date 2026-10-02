@@ -195,8 +195,8 @@ fun MainScreen(
                     holder.SaveableStateProvider(index) {
                         when (index) {
                             0 -> ChatTab(bottomInset, onOpenSettings, onOpenSettingsPage, onOpenConversations, onOpenImage)
-                            1 -> DiaryTab(bottomInset, onOpenDiaryEntry, onOpenSettings)
-                            2 -> TodoTab(bottomInset, onOpenSettings)
+                            1 -> DiaryTab(bottomInset, onOpenDiaryEntry)
+                            2 -> TodoTab(bottomInset)
                             else -> HomeTab(bottomInset, onOpenSettings, onOpenLetters, onOpenMemory)
                         }
                     }

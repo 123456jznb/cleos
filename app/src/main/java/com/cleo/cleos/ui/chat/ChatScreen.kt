@@ -77,7 +77,6 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -125,7 +124,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -526,6 +524,8 @@ fun ChatTab(
     }
     // The calls something was said in: only those have words to open.
     val callsSaid = remember(state.messages) { state.messages.mapNotNullTo(HashSet()) { it.call } }
+    // The chat's text, for the bubbles and for what is being typed alike.
+    val chatType = remember(state.chatTextSize) { ChatType(state.chatTextSize) }
     val faces = if (!state.chatAvatars) {
         null
     } else {
@@ -622,7 +622,6 @@ fun ChatTab(
                 trailing = {
                     GlassIconButton(Icons.Rounded.Call, "打电话", { startCall() }, page)
                     GlassIconButton(Icons.Rounded.AddComment, "新对话", vm::newConversation, page)
-                    GlassIconButton(Icons.Rounded.Settings, "设置", onOpenSettings, page)
                 },
                 onTitleClick = { switching = true },
                 titleMenu = {
@@ -672,6 +671,7 @@ fun ChatTab(
             }
             ChatInputBar(
                 backdrop = page,
+                type = chatType,
                 text = input,
                 onTextChange = { input = it },
                 attachments = vm.attachments,
@@ -733,7 +733,6 @@ fun ChatTab(
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
-        val chatType = remember(state.chatTextSize) { ChatType(state.chatTextSize) }
         CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook, LocalChatType provides chatType) {
             LazyColumn(
                 state = listState,
@@ -1750,6 +1749,7 @@ private fun TypingDots() {
 @Composable
 private fun ChatInputBar(
     backdrop: Backdrop,
+    type: ChatType,
     text: String,
     onTextChange: (String) -> Unit,
     attachments: List<MessageImage>,
@@ -1849,12 +1849,12 @@ private fun ChatInputBar(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (text.isEmpty()) {
-                    Text("说点什么…", color = palette.contentSecondary, fontSize = 16.sp)
+                    Text("说点什么…", color = palette.contentSecondary, style = type.body)
                 }
                 BasicTextField(
                     value = text,
                     onValueChange = onTextChange,
-                    textStyle = TextStyle(color = palette.content, fontSize = 16.sp, lineHeight = 22.sp),
+                    textStyle = type.body.copy(color = palette.content),
                     cursorBrush = SolidColor(palette.accentContent),
                     maxLines = 6,
                     // The placeholder above is drawn beside the field, so a screen reader
