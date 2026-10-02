@@ -2,11 +2,16 @@ package com.cleo.cleos.ui.settings
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,10 +35,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -41,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cleo.cleos.CrashLog
+import com.cleo.cleos.R
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.glass.GlassShape
@@ -48,6 +57,9 @@ import com.cleo.cleos.glass.GlassSurface
 import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.ui.chat.ChatType
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** How the person is called, how much of the conversation goes along, and the avatars beside messages. */
 @Composable
@@ -327,6 +339,60 @@ internal fun DataPage(vm: SettingsViewModel) {
     }
 }
 
+/**
+ * The WeChat code to pay the developer through. A phone can't scan its own screen, so the code
+ * can be kept in the gallery, and picked from there in WeChat's scanner.
+ */
+@Composable
+private fun TipDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var said by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("请开发者喝杯奶茶") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Image(
+                    painterResource(R.drawable.tip_qr),
+                    contentDescription = "微信收款码",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                )
+                Text(
+                    said ?: "在这台手机上付的话：先存到相册，再打开微信「扫一扫」，点右上角的相册选这张图。",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { scope.launch { said = saveTipCode(context) } }) { Text("存到相册") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
+}
+
+/** Copies the code into the gallery, under Pictures/Cleos; what to tell the person comes back. */
+private suspend fun saveTipCode(context: Context): String = withContext(Dispatchers.IO) {
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, "Cleos-milk-tea.png")
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Cleos")
+        // Hidden from the gallery until it is all there.
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+    }
+    val uri = runCatching { resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) }.getOrNull()
+        ?: return@withContext "相册没让存。截个图也一样能扫。"
+    runCatching {
+        resolver.openOutputStream(uri)!!.use { out -> context.resources.openRawResource(R.drawable.tip_qr).use { it.copyTo(out) } }
+        resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+        "存好了，在相册的「Cleos」里。打开微信「扫一扫」，点右上角的相册选它就行。"
+    }.getOrElse {
+        runCatching { resolver.delete(uri, null, null) }
+        "没存上（${it.message ?: it.javaClass.simpleName}）。截个图也一样能扫。"
+    }
+}
+
 /** The version and where new ones are, the last crash when there was one, privacy, and credits. */
 @Composable
 internal fun AboutPage() {
@@ -359,6 +425,19 @@ internal fun AboutPage() {
         }
         releasesHint?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
     }
+
+    // For whoever wants to give something back. Only here: nothing in the app ever asks for it.
+    var showTip by remember { mutableStateOf(false) }
+    Section("请开发者喝杯奶茶") {
+        Text(
+            "Cleos 是一个人做的，一直免费。觉得好用、想请开发者喝杯奶茶的话，可以用微信扫一下。",
+            color = palette.contentSecondary,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+        )
+        Chip("看收款码", selected = false) { showTip = true }
+    }
+    if (showTip) TipDialog { showTip = false }
 
     // The last crash, to send to whoever makes the app (CrashLog): there only after one.
     var crash by remember { mutableStateOf(CrashLog.read(context)) }
