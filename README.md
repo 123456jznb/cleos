@@ -185,4 +185,5 @@ keyPassword=...
 - 语音绕着头走的做法移植自 [binaural-voice](https://github.com/Saekisui/binaural-voice)，MIT 许可，Copyright (c) 2026 Saekisui；
   许可全文在 `app/src/main/assets/licenses/binaural-voice.txt`，App 里同样能看到。
 - 表情包的做法参考了 [cute-chat-stickers](https://github.com/Anko3o/cute-chat-stickers) 的思路（没用它的代码和数据）。
+
 © 2026 Cleo. All rights reserved
