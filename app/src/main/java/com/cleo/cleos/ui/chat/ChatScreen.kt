@@ -151,6 +151,8 @@ import com.cleo.cleos.ai.Prompt
 import com.cleo.cleos.ai.Recap
 import com.cleo.cleos.ai.SecretRequest
 import com.cleo.cleos.ai.SecretRequests
+import com.cleo.cleos.ai.Speech
+import com.cleo.cleos.ai.SpeechException
 import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.data.MessageAudio
@@ -183,7 +185,10 @@ import com.cleo.cleos.ui.common.appViewModel
 import com.cleo.cleos.ui.common.avatarLetter
 import com.cleo.cleos.ui.common.fadeUnderTopBar
 import com.cleo.cleos.ui.settings.SettingsPage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -423,6 +428,54 @@ fun ChatTab(
                 p.release()
                 playing = null
                 voiceHint = "这段语音放不了"
+            }
+        }
+    }
+
+    // 朗读: a message read aloud in the TA's voice. Asked for a voice first when there is none.
+    var askRead by remember { mutableStateOf(false) }
+
+    /**
+     * Reads [text] aloud, a piece at a time: the next is being made while one plays. Made once and
+     * kept (Speaker.reading), so a second time is instant. While it goes, [playing] is the
+     * message's mark, so the menu says 停止朗读 and another tap stops it.
+     */
+    fun readAloud(messageId: Long, text: String) {
+        val mark = readingMark(messageId)
+        val again = playing == mark
+        stopPlaying()
+        if (again) return
+        if (!state.speechReady) {
+            askRead = true
+            return
+        }
+        val parts = Speech.readParts(text)
+        if (parts.pieces.isEmpty()) return
+        val dir = File(context.cacheDir, "read")
+        val settingsNow = appSettings
+        playing = mark
+        preparing[0] = playScope.launch {
+            try {
+                if (parts.cut) voiceHint = "太长了，只读前面一部分"
+                coroutineScope {
+                    var next = async { c.speaker.reading(settingsNow, parts.pieces[0], dir) }
+                    for (i in parts.pieces.indices) {
+                        val file = next.await()
+                        if (i + 1 < parts.pieces.size) next = async { c.speaker.reading(settingsNow, parts.pieces[i + 1], dir) }
+                        playToEnd(file) { player[0] = it }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SpeechException) {
+                voiceHint = e.message ?: "没读出来"
+            } catch (e: Exception) {
+                voiceHint = "这段读不出来"
+            } finally {
+                if (playing == mark) {
+                    playing = null
+                    preparing[0] = null
+                }
             }
         }
     }
@@ -849,6 +902,7 @@ fun ChatTab(
                                         },
                                         highlighted = m.id == flashed,
                                         onReact = { vm.react(m.id, it) },
+                                        onRead = { readAloud(m.id, it) },
                                     )
                                 }
                             }
@@ -888,6 +942,22 @@ fun ChatTab(
                 }) { Text("去设置") }
             },
             dismissButton = { TextButton(onClick = { askVoiceSetup = false }) { Text("算了") } },
+        )
+    }
+
+    if (askRead) {
+        val ai = state.aiName.ifBlank { "TA" }
+        AlertDialog(
+            onDismissRequest = { askRead = false },
+            title = { Text("先给${ai}选一个声音") },
+            text = { Text("朗读要用${ai}的声音。在设置「TA 的声音」里选一个服务和音色就能用。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    askRead = false
+                    onOpenSettingsPage(SettingsPage.Voice)
+                }) { Text("去设置") }
+            },
+            dismissButton = { TextButton(onClick = { askRead = false }) { Text("算了") } },
         )
     }
 
@@ -1055,6 +1125,7 @@ private fun MessageBubble(
     onQuote: () -> Unit = {},
     highlighted: Boolean = false,
     onReact: (String) -> Unit = {},
+    onRead: (String) -> Unit = {},
 ) {
     val palette = LocalGlassPalette.current
     val mine = message.role == "user"
@@ -1150,6 +1221,16 @@ private fun MessageBubble(
                             menu = false
                             scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", words))) }
                         })
+                    }
+                    // The TA's words, read aloud in its voice; a voice message is already a sound.
+                    if (!mine && message.error == null && audio == null && words.isNotBlank()) {
+                        DropdownMenuItem(
+                            text = { Text(if (playingFile == readingMark(message.id)) "停止朗读" else "朗读") },
+                            onClick = {
+                                menu = false
+                                onRead(words)
+                            },
+                        )
                     }
                     if (message.error == null && MessageQuotes.of(message) != null) {
                         DropdownMenuItem(text = { Text("引用") }, onClick = {

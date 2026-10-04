@@ -20,7 +20,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -126,6 +128,55 @@ object Speech {
 
     /** A voice message says a sentence or two; longer is cut here rather than billed. */
     const val MAX_CHARS = 300
+
+    /** A message read aloud (朗读): in pieces of one voice message's length, and no more than this many. */
+    const val READ_PARTS_MAX = 4
+
+    /** What [readParts] makes of a message: the pieces to speak in order, and whether the rest was left out. */
+    data class ReadParts(val pieces: List<String>, val cut: Boolean)
+
+    private val sentenceEnd = Regex("(?<=[。！？!?；;…\\n])")
+
+    /**
+     * A message cut into what a voice can say at a time: at the ends of sentences, each at most
+     * [MAX_CHARS], at most [READ_PARTS_MAX] of them. Marks that are only there for the eye (the
+     * asterisks round an action, a heading's #, a quote's >) are not said.
+     */
+    fun readParts(text: String): ReadParts {
+        val clean = text.lineSequence()
+            .map { it.trim().removePrefix(">").trim() }
+            .joinToString("\n")
+            .replace(Regex("[*#`_~]+"), "")
+            .replace(Regex("\\n{2,}"), "\n")
+            .trim()
+        if (clean.isEmpty()) return ReadParts(emptyList(), false)
+        val pieces = ArrayList<String>()
+        val now = StringBuilder()
+        fun flush() {
+            now.toString().trim().takeIf { it.isNotEmpty() }?.let { pieces += it }
+            now.setLength(0)
+        }
+        for (sentence in clean.split(sentenceEnd)) {
+            // One sentence longer than a piece is cut where it must be.
+            for (chunk in sentence.chunked(MAX_CHARS)) {
+                if (now.length + chunk.length > MAX_CHARS) flush()
+                now.append(chunk)
+            }
+        }
+        flush()
+        return ReadParts(pieces.take(READ_PARTS_MAX), pieces.size > READ_PARTS_MAX)
+    }
+
+    /**
+     * What a piece read aloud is kept under: the words, and everything that changes how they sound
+     * (which service, voice and model), so the same piece in the same voice is made once, and a
+     * changed voice makes it again.
+     */
+    fun readKey(s: AppSettings, service: VoiceService, text: String): String {
+        val of = listOf(service.key, voice(s, service), s.speechBaseUrl.trim(), s.speechModel.trim(), s.elevenModel.trim(), s.minimaxGlobal.toString(), text)
+            .joinToString("\u0000")
+        return MessageDigest.getInstance("SHA-1").digest(of.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -339,6 +390,28 @@ class Speaker(
     }
 
     /**
+     * One piece of a message read aloud (see [Speech.readParts]), as a file in [dir]: made the
+     * first time, and found there after, by what it says and the voice that says it. Old ones
+     * go, so it stays small. Throws [SpeechException].
+     */
+    suspend fun reading(s: AppSettings, text: String, dir: File): File {
+        val service = Speech.service(s) ?: throw SpeechException("还没选 TA 的声音：在设置「TA 的声音」里选一个")
+        val name = "tts_" + Speech.readKey(s, service, text)
+        withContext(Dispatchers.IO) {
+            dir.mkdirs()
+            dir.listFiles { f -> f.name.startsWith("$name.") && f.length() > 0 }?.firstOrNull()
+        }?.let { return it.also { f -> f.setLastModified(System.currentTimeMillis()) } }
+        val (bytes, mime) = sound(s, text)
+        return withContext(Dispatchers.IO) {
+            File(dir, "$name.${Speech.extension(mime)}").also { it.writeBytes(bytes) }.also { prune(dir) }
+        }
+    }
+
+    private fun prune(dir: File) {
+        dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(READ_KEPT)?.forEach { it.delete() }
+    }
+
+    /**
      * [text] spoken, as the service sent it: the bytes and their type (MP3 mostly). Kept nowhere: a
      * phone call plays it and lets it go. Throws [SpeechException].
      */
@@ -470,5 +543,8 @@ class Speaker(
 
     private companion object {
         val JSON = "application/json".toMediaType()
+
+        /** How many pieces read aloud are kept (a message is a few of them). */
+        const val READ_KEPT = 60
     }
 }
