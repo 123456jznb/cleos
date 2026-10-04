@@ -370,7 +370,12 @@ class ChatClient(private val http: OkHttpClient) {
                 http.newCall(request).execute().use { response ->
                     val text = response.body.string()
                     if (!response.isSuccessful) throw httpFailure(response.code, text)
-                    val root = json.parseToJsonElement(text).jsonObject
+                    // A web page where a list should be is the address's fault like any other,
+                    // and the list is behind /v1 for exactly the same relays the chat is —
+                    // which matters more here than elsewhere: the names in that list are the
+                    // only way to know what a service calls its models.
+                    val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                        ?: throw ChatException("地址能连上，但回的不是 JSON，多半不是聊天接口。", wrongEndpoint = true)
                     root["data"]?.jsonArray
                         ?.mapNotNull { (it as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull }
                         ?.sorted()

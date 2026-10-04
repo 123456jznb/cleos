@@ -352,6 +352,28 @@ class AddressFallbackOverHttpTest {
     }
 
     @Test
+    fun `the model list is found behind the page too`() = runBlocking {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val relay = server { path ->
+            seen += path
+            // The names a service goes by are only knowable from this list, so it is the one
+            // place the second try matters most — hers answered the bare path with a page.
+            if (path == "/v1/models") {
+                200 to """{"data":[{"id":"claude-sonnet-4-6"},{"id":"claude-opus-4-6"}]}"""
+            } else {
+                200 to "<!doctype html><html><body>Just a moment...</body></html>"
+            }
+        }
+        try {
+            val listed = client.models(endpoint(relay.address.port))
+            assertEquals(listOf("claude-opus-4-6", "claude-sonnet-4-6"), listed)
+            assertEquals(listOf("/models", "/v1/models"), seen)
+        } finally {
+            relay.stop(0)
+        }
+    }
+
+    @Test
     fun `a 404 carrying the service's own complaint is the one reported`() = runBlocking {
         val api = server { path ->
             if (path == "/v1/chat/completions") {

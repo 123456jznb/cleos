@@ -108,7 +108,13 @@ class EndpointFields(private val c: AppContainer, private val scope: CoroutineSc
                     else "连上了，说得上话。有 $n 个模型可选"
                 }
             } catch (e: ChatException) {
-                e.message
+                // Saying hello fails for things that leave the address and the key both right,
+                // and a model name the service has never heard of is the usual one — a relay
+                // answers those with a 404 and its own complaint. The names it does know are
+                // then the answer to "so what is it called here?", so they are fetched and
+                // offered; the verdict stays what the test found, not what the list says.
+                val n = fillModels(endpoint)
+                if (n == null) e.message else "${e.message}\n\n它认的模型名，可以从上面「从列表里选」里挑一个。"
             } catch (e: Exception) {
                 "出错了：${e.message ?: e.javaClass.simpleName}"
             }
