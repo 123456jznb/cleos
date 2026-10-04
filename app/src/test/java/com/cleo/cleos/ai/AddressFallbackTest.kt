@@ -1,0 +1,221 @@
+package com.cleo.cleos.ai
+
+import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.net.InetSocketAddress
+import java.util.Collections
+
+/**
+ * The second try at an address that only looks wrong.
+ *
+ * A user of a relay was told "地址能连上，但回的不是 JSON，多半不是聊天接口" and had no way to
+ * know the answer was `/v1`: what she had typed was the host the relay's front page lives on,
+ * and that page answers *every* path under it — `POST /chat/completions` included — with its
+ * own HTML under HTTP 200. So the app tries again one level down, but only when the failure
+ * says the address is the thing at fault: a refused key or an empty balance comes from an
+ * endpoint that was found, and moving the path under it would hide the real problem instead
+ * of reporting it.
+ */
+class AddressFallbackTest {
+
+    private fun endpoint(written: String) = ApiEndpoint(written, "key", "glm-4.7")
+
+    @Test
+    fun `an address with no version segment gets one put underneath`() {
+        assertEquals(
+            "https://stable.monkeyapi.net/v1",
+            endpoint("https://stable.monkeyapi.net/").withV1?.baseUrl,
+        )
+        assertEquals("https://api.deepseek.com/v1", endpoint("https://api.deepseek.com").withV1?.baseUrl)
+        // A port is not a path segment.
+        assertEquals("https://x.com:8443/v1", endpoint("https://x.com:8443").withV1?.baseUrl)
+        // Whatever path it does have is kept: this is one level down, not a rewrite.
+        assertEquals("https://x.com/openai/v1", endpoint("https://x.com/openai").withV1?.baseUrl)
+    }
+
+    @Test
+    fun `an address that already names a version is left alone`() {
+        for (written in listOf(
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://api.openai.com/v1",
+            "https://relay.example.com/v1/",
+            "https://relay.example.com/v1/chat/completions",
+            "https://relay.example.com/v1beta",
+            "https://relay.example.com/V1",
+        )) {
+            assertNull(written, endpoint(written).withV1)
+        }
+    }
+
+    @Test
+    fun `the address as typed is tried first, the fallback only when the address is what failed`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val remembered = HashMap<String, String>()
+        val answer = atRightAddress(endpoint("https://relay.example.com"), remembered) { to ->
+            tried += to.chatUrl
+            if (tried.size == 1) throw ChatException("回的不是 JSON", wrongEndpoint = true)
+            "连上了"
+        }
+        assertEquals("连上了", answer)
+        assertEquals(
+            listOf(
+                "https://relay.example.com/chat/completions",
+                "https://relay.example.com/v1/chat/completions",
+            ),
+            tried,
+        )
+        assertEquals("https://relay.example.com/v1", remembered["https://relay.example.com"])
+    }
+
+    @Test
+    fun `the address that worked is remembered, so the next message goes straight there`() = runBlocking {
+        val remembered = HashMap<String, String>()
+        val tried = mutableListOf<String>()
+        val talk: suspend (ApiEndpoint) -> String = { to ->
+            tried += to.chatUrl
+            if (!to.baseUrl.endsWith("/v1")) throw ChatException("回的不是 JSON", wrongEndpoint = true)
+            "连上了"
+        }
+        atRightAddress(endpoint("https://relay.example.com"), remembered, talk)
+        atRightAddress(endpoint("https://relay.example.com"), remembered, talk)
+        assertEquals(
+            listOf(
+                "https://relay.example.com/chat/completions",
+                "https://relay.example.com/v1/chat/completions",
+                // The second message pays for nothing: one request, at the address that answers.
+                "https://relay.example.com/v1/chat/completions",
+            ),
+            tried,
+        )
+    }
+
+    @Test
+    fun `a refused key is never answered by moving the path`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val refused = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
+                tried += to.chatUrl
+                throw ChatException("API Key 不对，或者已经失效了", 401)
+            }
+        }.exceptionOrNull() as ChatException
+        assertEquals("API Key 不对，或者已经失效了", refused.message)
+        assertEquals(listOf("https://relay.example.com/chat/completions"), tried)
+    }
+
+    @Test
+    fun `when neither address answers, the one complained about is the one that was typed`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val failed = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
+                tried += to.chatUrl
+                throw ChatException("回的不是 JSON：" + to.chatUrl, wrongEndpoint = true)
+            }
+        }.exceptionOrNull() as ChatException
+        assertEquals(2, tried.size)
+        assertTrue(
+            "${failed.message}",
+            failed.message!!.endsWith("https://relay.example.com/chat/completions"),
+        )
+    }
+
+    @Test
+    fun `when the fallback answers with a complaint of its own, that is the one reported`() = runBlocking {
+        val remembered = HashMap<String, String>()
+        val failed = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), remembered) { to ->
+                if (to.baseUrl.endsWith("/v1")) throw ChatException("账户余额不足", 402)
+                throw ChatException("回的不是 JSON", wrongEndpoint = true)
+            }
+        }.exceptionOrNull() as ChatException
+        assertEquals("账户余额不足", failed.message)
+        // That address is the endpoint after all: later requests go straight to it.
+        assertEquals("https://relay.example.com/v1", remembered["https://relay.example.com"])
+    }
+
+    @Test
+    fun `a page where a reply should be is the address's fault, a complaint is not`() {
+        val page = runCatching { StreamParser().wholeReply("<html><body>Just a moment...</body></html>") }
+            .exceptionOrNull() as ChatException
+        assertTrue(page.wrongEndpoint)
+        val empty = runCatching { StreamParser().wholeReply("  \n") }.exceptionOrNull() as ChatException
+        assertTrue(empty.wrongEndpoint)
+        // The service answered as itself: it is found, so this is about the key or the model.
+        val complained = runCatching { StreamParser().feed("""{"error":{"message":"context too long"}}""") }
+            .exceptionOrNull() as ChatException
+        assertFalse(complained.wrongEndpoint)
+    }
+}
+
+/**
+ * The same thing end to end, against a real server on the loopback: `probe` is the connection
+ * test the settings screen runs, so it is the road that has to be walked.
+ */
+class AddressFallbackOverHttpTest {
+
+    private val client = ChatClient(OkHttpClient())
+
+    /** A server that answers what [reply] says it answers. */
+    private fun server(reply: (String) -> Pair<Int, String>): HttpServer =
+        HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { exchange ->
+                val (code, body) = reply(exchange.requestURI.path)
+                val bytes = body.toByteArray()
+                exchange.sendResponseHeaders(code, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+            start()
+        }
+
+    @Test
+    fun `the connection test finds the API behind the page the address was copied from`() = runBlocking {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val relay = server { path ->
+            seen += path
+            // What a relay's front page does with anything you ask it, including this.
+            if (path == "/v1/chat/completions") {
+                200 to """{"choices":[{"message":{"role":"assistant","content":"hi"}}]}"""
+            } else {
+                200 to "<!doctype html><html><body>Just a moment...</body></html>"
+            }
+        }
+        try {
+            val typed = endpoint(relay.address.port)
+            client.probe(typed)
+            assertEquals(listOf("/chat/completions", "/v1/chat/completions"), seen)
+
+            // Tested a second time, it goes straight to the address that answered.
+            client.probe(typed)
+            assertEquals(
+                listOf("/chat/completions", "/v1/chat/completions", "/v1/chat/completions"),
+                seen,
+            )
+        } finally {
+            relay.stop(0)
+        }
+    }
+
+    @Test
+    fun `a service that refuses the key is not asked again somewhere else`() = runBlocking {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val api = server { path ->
+            seen += path
+            401 to """{"error":{"message":"invalid api key"}}"""
+        }
+        try {
+            val failed = runCatching { client.probe(endpoint(api.address.port)) }
+                .exceptionOrNull() as ChatException
+            assertTrue("${failed.message}", failed.message!!.contains("API Key"))
+            assertEquals(listOf("/chat/completions"), seen)
+        } finally {
+            api.stop(0)
+        }
+    }
+
+    private fun endpoint(port: Int) = ApiEndpoint("http://127.0.0.1:$port", "key", "glm-4.7")
+}

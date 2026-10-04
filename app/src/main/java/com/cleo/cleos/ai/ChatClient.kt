@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -18,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -49,10 +51,33 @@ data class ApiMessage(
 
 /** Where to send a conversation. [baseUrl] may or may not already end in /chat/completions. */
 data class ApiEndpoint(val baseUrl: String, val apiKey: String, val model: String) {
+    /** The address as written, with the one trailing thing people leave on taken off. */
+    private val base: String get() = baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions")
+
     val chatUrl: String
-        get() = baseUrl.trim().trimEnd('/').let { if (it.endsWith("/chat/completions")) it else "$it/chat/completions" }
+        get() = "$base/chat/completions"
     val modelsUrl: String
-        get() = baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions") + "/models"
+        get() = "$base/models"
+
+    /**
+     * The same endpoint one level down, for an address typed without the version segment it
+     * hangs off — `https://host` for what is really `https://host/v1`. Null when the last
+     * segment already is one (…/v1, …/v4, …/v1beta): there is nothing to put back.
+     *
+     * Addresses come in every shape there is. OpenAI is /v1, DeepSeek is bare,
+     * 智谱 is /api/paas/v4, and a relay's API host is not the host its front page is on —
+     * so this is only ever a second guess, made after the address as typed has failed.
+     */
+    val withV1: ApiEndpoint?
+        get() {
+            val path = base.substringAfter("://", "").substringAfter('/', "")
+            if (VERSION.matches(path.trimEnd('/').substringAfterLast('/'))) return null
+            return copy(baseUrl = "$base/v1")
+        }
+
+    private companion object {
+        val VERSION = Regex("v\\d+[a-z]*", RegexOption.IGNORE_CASE)
+    }
 }
 
 sealed interface ChatEvent {
@@ -69,8 +94,64 @@ sealed interface ChatEvent {
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent
 }
 
-/** A failure with a message already worded for the person using the app. */
-class ChatException(message: String, val status: Int? = null) : Exception(message)
+/**
+ * A failure with a message already worded for the person using the app.
+ *
+ * [wrongEndpoint] marks the one kind of failure that says *this address is not a chat
+ * endpoint at all* — a web page came back, or there is nothing at that path. Those are worth
+ * one more try a level down ([ApiEndpoint.withV1]). A refused key, an empty balance, a 500
+ * are not: they come from an endpoint that was found, and moving the path would hide them.
+ */
+class ChatException(
+    message: String,
+    val status: Int? = null,
+    val wrongEndpoint: Boolean = false,
+) : Exception(message)
+
+/**
+ * Calls [attempt] with the address as it was typed, and — only when what failed is the
+ * address itself — once more with `/v1` put back under it.
+ *
+ * People copy an address out of a browser, and what they copy is the site, not the API: a
+ * relay's front page answers *every* path, including `POST /chat/completions`, with its own
+ * HTML under HTTP 200, so a missing `/v1` arrives looking like a service that is up and
+ * speaking nonsense. 智谱 is `/api/paas/v4` and DeepSeek is bare, so this can only ever be a
+ * second guess made after the address as typed has already failed.
+ *
+ * The address that worked is remembered in [remembered] (`base as typed` → `base to use`),
+ * so the price is one wasted round trip for the first message, not for every message. It is
+ * deliberately not written back to the stored address: the address is also what the key is
+ * filed under (see `SecretStore.addressOf`), and moving it would lose the key.
+ */
+internal suspend fun <T> atRightAddress(
+    endpoint: ApiEndpoint,
+    remembered: MutableMap<String, String>,
+    attempt: suspend (ApiEndpoint) -> T,
+): T {
+    val key = baseAsTyped(endpoint)
+    remembered[key]?.let { return attempt(endpoint.copy(baseUrl = it)) }
+    try {
+        return attempt(endpoint)
+    } catch (first: ChatException) {
+        val under = endpoint.withV1
+        if (under == null || !first.wrongEndpoint) throw first
+        try {
+            val done = attempt(under)
+            remembered[key] = under.baseUrl
+            return done
+        } catch (second: ChatException) {
+            // /v1 answered for real — a rejected key, no credit. That is the endpoint, so go
+            // there from now on, and let the service's own complaint be the one reported.
+            if (!second.wrongEndpoint) {
+                remembered[key] = under.baseUrl
+                throw second
+            }
+            throw first
+        }
+    }
+}
+
+private fun baseAsTyped(endpoint: ApiEndpoint): String = endpoint.baseUrl.trim().trimEnd('/')
 
 /**
  * OpenAI-compatible chat completions with streaming (DeepSeek, OpenAI, SiliconFlow,
@@ -91,6 +172,13 @@ class ChatClient(private val http: OkHttpClient) {
     private val refusesOff = ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * Addresses as typed that turned out to live one level down, in this run of the app
+     * (see [atRightAddress]). Held for the run only, and never written over the stored
+     * address: that address is also what the key is filed under.
+     */
+    private val underV1 = ConcurrentHashMap<String, String>()
+
+    /**
      * [thinking]: ask the model to think first (see [requestBody]). Without it, a model that thinks
      * unless told otherwise ([Thinking.canSwitchOff]) is told not to: the wait and the tokens are
      * for nothing then. One that can't stop thinking ([Thinking.thinksAlways]) is told to think
@@ -104,14 +192,14 @@ class ChatClient(private val http: OkHttpClient) {
     ): Flow<ChatEvent> = callbackFlow {
         val key = endpoint.chatUrl + "|" + endpoint.model
         val always = Thinking.thinksAlways(endpoint.model)
-        fun request(off: Boolean) = http.newCall(
+        fun request(to: ApiEndpoint, off: Boolean) = http.newCall(
             Request.Builder()
-                .url(endpoint.chatUrl)
-                .header("Authorization", "Bearer ${endpoint.apiKey}")
+                .url(to.chatUrl)
+                .header("Authorization", "Bearer ${to.apiKey}")
                 .header("Accept", "text/event-stream")
                 .post(
                     requestBody(
-                        endpoint.model,
+                        to.model,
                         messages,
                         tools,
                         thinking = if (thinking) true else if (off && !always) false else null,
@@ -121,20 +209,26 @@ class ChatClient(private val http: OkHttpClient) {
                 .build(),
         )
         val off = !thinking && (always || Thinking.canSwitchOff(endpoint.model)) && key !in refusesOff
-        var call = request(off)
+        var call: Call? = null
 
         launch(Dispatchers.IO) {
-            try {
-                var answer = call.execute()
+            // One whole request and the reading of its answer. Nothing has been sent when this
+            // throws, which is what lets atRightAddress run it a second time at another address.
+            suspend fun sendFrom(to: ApiEndpoint, off: Boolean) {
+                if (!isActive) return
+                var c = request(to, off)
+                call = c
+                var answer = c.execute()
                 if (off && answer.code in REFUSED) {
                     answer.close()
                     refusesOff += key
-                    call = request(off = false)
-                    answer = call.execute()
+                    c = request(to, off = false)
+                    call = c
+                    answer = c.execute()
                 }
                 answer.use { response ->
                     if (!response.isSuccessful) {
-                        throw ChatException(describeHttpError(response.code, response.body.string()), response.code)
+                        throw httpFailure(response.code, response.body.string())
                     }
                     val source = response.body.source()
                     val parser = StreamParser()
@@ -157,16 +251,19 @@ class ChatClient(private val http: OkHttpClient) {
                     for (event in parser.finish()) send(event)
                     parser.toolCalls().takeIf { it.isNotEmpty() }?.let { send(ChatEvent.ToolCalls(it)) }
                 }
+            }
+            try {
+                atRightAddress(endpoint, underV1) { to -> sendFrom(to, off) }
                 close()
             } catch (e: ChatException) {
                 close(e)
             } catch (e: IOException) {
-                close(if (call.isCanceled()) e else ChatException(describeNetworkError(e)))
+                close(if (call?.isCanceled() == true) e else ChatException(describeNetworkError(e)))
             } catch (e: Exception) {
                 close(e)
             }
         }
-        awaitClose { call.cancel() }
+        awaitClose { call?.cancel() }
     }
 
     /**
@@ -186,21 +283,23 @@ class ChatClient(private val http: OkHttpClient) {
      * said in the body is worth repeating — it is usually the real answer.
      */
     suspend fun probe(endpoint: ApiEndpoint) = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(endpoint.chatUrl)
-            .header("Authorization", "Bearer ${endpoint.apiKey}")
-            .post(probeBody(endpoint.model).toString().toRequestBody(JSON_TYPE))
-            .build()
-        try {
-            http.newCall(request).execute().use { response ->
-                val text = response.body.string()
-                if (!response.isSuccessful) throw ChatException(describeHttpError(response.code, text), response.code)
-                val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
-                    ?: throw ChatException("地址能连上，但回的不是 JSON，多半不是聊天接口。")
-                if (root["choices"] == null) throw ChatException(notAChatReply(root))
+        atRightAddress(endpoint, underV1) { to ->
+            val request = Request.Builder()
+                .url(to.chatUrl)
+                .header("Authorization", "Bearer ${to.apiKey}")
+                .post(probeBody(to.model).toString().toRequestBody(JSON_TYPE))
+                .build()
+            try {
+                http.newCall(request).execute().use { response ->
+                    val text = response.body.string()
+                    if (!response.isSuccessful) throw httpFailure(response.code, text)
+                    val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                        ?: throw ChatException("地址能连上，但回的不是 JSON，多半不是聊天接口。", wrongEndpoint = true)
+                    if (root["choices"] == null) throw ChatException(notAChatReply(root), wrongEndpoint = true)
+                }
+            } catch (e: IOException) {
+                throw ChatException(describeNetworkError(e))
             }
-        } catch (e: IOException) {
-            throw ChatException(describeNetworkError(e))
         }
     }
 
@@ -211,29 +310,38 @@ class ChatClient(private val http: OkHttpClient) {
      * no list; failing here means only that there is nothing to show.
      */
     suspend fun models(endpoint: ApiEndpoint): List<String> = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(endpoint.modelsUrl)
-            .header("Authorization", "Bearer ${endpoint.apiKey}")
-            .get()
-            .build()
-        try {
-            http.newCall(request).execute().use { response ->
-                val text = response.body.string()
-                if (!response.isSuccessful) throw ChatException(describeHttpError(response.code, text), response.code)
-                val root = json.parseToJsonElement(text).jsonObject
-                root["data"]?.jsonArray
-                    ?.mapNotNull { (it as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull }
-                    ?.sorted()
-                    // No "check whether it is /v1": 智谱 is /v4 and DeepSeek is /v1, so that
-                    // advice was wrong half the time — and following it landed people on an
-                    // address that answers 200 to everything, where the real fault (a bad
-                    // key) could no longer be reported. Say what is missing, nothing more.
-                    ?: throw ChatException("这个地址没有给出模型列表。有的服务就是不提供，模型名直接填也能用。")
+        atRightAddress(endpoint, underV1) { to ->
+            val request = Request.Builder()
+                .url(to.modelsUrl)
+                .header("Authorization", "Bearer ${to.apiKey}")
+                .get()
+                .build()
+            try {
+                http.newCall(request).execute().use { response ->
+                    val text = response.body.string()
+                    if (!response.isSuccessful) throw httpFailure(response.code, text)
+                    val root = json.parseToJsonElement(text).jsonObject
+                    root["data"]?.jsonArray
+                        ?.mapNotNull { (it as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull }
+                        ?.sorted()
+                        // No "check whether it is /v1": 智谱 is /v4 and DeepSeek is /v1, so that
+                        // advice was wrong half the time — and following it landed people on an
+                        // address that answers 200 to everything, where the real fault (a bad
+                        // key) could no longer be reported. Say what is missing, nothing more.
+                        ?: throw ChatException("这个地址没有给出模型列表。有的服务就是不提供，模型名直接填也能用。")
+                }
+            } catch (e: IOException) {
+                throw ChatException(describeNetworkError(e))
             }
-        } catch (e: IOException) {
-            throw ChatException(describeNetworkError(e))
         }
     }
+
+    /**
+     * A non-2xx answer, worded for the person. 404 and 405 are the two that say the path
+     * itself is not there, which is what [atRightAddress] is allowed to answer with a second try.
+     */
+    private fun httpFailure(code: Int, body: String) =
+        ChatException(describeHttpError(code, body), code, wrongEndpoint = code == 404 || code == 405)
 
     private fun describeHttpError(code: Int, body: String): String {
         val detail = runCatching { errorText(json.parseToJsonElement(body).jsonObject["error"]!!) }

@@ -56,15 +56,21 @@ internal class StreamParser {
      * relays then send the reply as one JSON (shown as it is), or an error as one (thrown, as it is
      * in a stream); others send nothing, or a web page. Silently dropping those left an empty chat
      * with no word on why, so what can't be read as a reply says what it was instead.
+     *
+     * Both failures are marked [ChatException.wrongEndpoint]: nothing that answers like this is
+     * the chat endpoint, so it is worth one more try a level down (see [atRightAddress]).
      */
     fun wholeReply(body: String): List<ChatEvent> {
         val text = body.trim()
         if (text.isEmpty()) {
-            throw ChatException("连上了，但服务什么内容都没回。多半是中转站不支持流式、这个模型名没开通，或者额度有问题。")
+            throw ChatException(
+                "连上了，但服务什么内容都没回。多半是中转站不支持流式、这个模型名没开通，或者额度有问题。",
+                wrongEndpoint = true,
+            )
         }
         val events = feed(text) + finish()
         if (events.isEmpty() && toolCalls().isEmpty()) {
-            throw ChatException("服务回的不是聊天内容：" + text.take(120))
+            throw ChatException("服务回的不是聊天内容：" + text.take(120), wrongEndpoint = true)
         }
         return events
     }
