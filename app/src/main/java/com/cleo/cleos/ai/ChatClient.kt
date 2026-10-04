@@ -110,6 +110,14 @@ interface EndpointFailure {
      * endpoint that was found, and moving the path under it would hide the real problem.
      */
     val wrongEndpoint: Boolean
+
+    /**
+     * The service itself answered, in words it wrote ("no such model: …"), rather than the app
+     * finding a web page where an API should be. The two kinds of wrongness are not worth the
+     * same: a page says nothing about what is really wrong, so where both addresses above have
+     * failed it is the one that got words out of a service that is reported.
+     */
+    val serviceSpoke: Boolean get() = false
 }
 
 /** A failure with a message already worded for the person using the app. */
@@ -117,6 +125,7 @@ class ChatException(
     message: String,
     val status: Int? = null,
     override val wrongEndpoint: Boolean = false,
+    override val serviceSpoke: Boolean = false,
 ) : Exception(message), EndpointFailure
 
 /** Whether [code] is one of the two that say the path itself is not there. */
@@ -131,6 +140,9 @@ internal fun noSuchPath(code: Int): Boolean = code == 404 || code == 405
  * HTML under HTTP 200, so a missing `/v1` arrives looking like a service that is up and
  * speaking nonsense. 智谱 is `/api/paas/v4` and DeepSeek is bare, so this can only ever be a
  * second guess made after the address as typed has already failed.
+ *
+ * Both failing is not the same as both failures being worth reading: see
+ * [EndpointFailure.serviceSpoke] for which one gets reported then.
  *
  * The address that worked is remembered in [remembered] (`base as typed` → `base to use`),
  * so the price is one wasted round trip for the first message, not for every message. It is
@@ -154,12 +166,14 @@ internal suspend fun <T> atRightAddress(
             remembered[key] = under.baseUrl
             return done
         } catch (second: Exception) {
-            // /v1 answered for real — a rejected key, no credit. That is the endpoint, so go
-            // there from now on, and let the service's own complaint be the one reported.
-            if (!isWrongEndpoint(second)) {
-                remembered[key] = under.baseUrl
-                throw second
-            }
+            // A rejected key, an empty balance: /v1 is the endpoint after all — not an address
+            // that might move — so later requests go straight there.
+            if (!isWrongEndpoint(second)) remembered[key] = under.baseUrl
+            // Either way it is /v1's failure that is reported, it being the one that got
+            // closer: a service complaining there about the model says something the front
+            // page above it never did. When both are only pages the wording is the same, and
+            // when the address typed was the one that spoke, that is the one kept.
+            if (spokeAsService(second) || !spokeAsService(first)) throw second
             throw first
         }
     }
@@ -171,6 +185,9 @@ internal suspend fun <T> atRightAddress(
  * back out.
  */
 private fun isWrongEndpoint(e: Exception): Boolean = e is EndpointFailure && e.wrongEndpoint
+
+/** Whether [e] is a service answering in its own words, and not a page answering for one. */
+private fun spokeAsService(e: Exception): Boolean = e is EndpointFailure && e.serviceSpoke
 
 private fun baseAsTyped(endpoint: ApiEndpoint): String = endpoint.baseUrl.trim().trimEnd('/')
 
@@ -320,9 +337,15 @@ class ChatClient(private val http: OkHttpClient) {
                 http.newCall(request).execute().use { response ->
                     val text = response.body.string()
                     if (!response.isSuccessful) throw httpFailure(response.code, text)
+                    // Not JSON at all: a web page, which says nothing about what is wrong.
                     val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
                         ?: throw ChatException("地址能连上，但回的不是 JSON，多半不是聊天接口。", wrongEndpoint = true)
-                    if (root["choices"] == null) throw ChatException(notAChatReply(root), wrongEndpoint = true)
+                    if (root["choices"] == null) {
+                        // JSON, but no reply in it: this is a service, and what it said about
+                        // the model or the key ("no such model") is worth more than the page
+                        // that answered at the address typed (see EndpointFailure.serviceSpoke).
+                        throw ChatException(notAChatReply(root), wrongEndpoint = true, serviceSpoke = saidBy(root) != null)
+                    }
                 }
             } catch (e: IOException) {
                 throw ChatException(describeNetworkError(e))
@@ -367,8 +390,18 @@ class ChatClient(private val http: OkHttpClient) {
      * A non-2xx answer, worded for the person. 404 and 405 are the two that say the path
      * itself is not there, which is what [atRightAddress] is allowed to answer with a second try.
      */
-    private fun httpFailure(code: Int, body: String) =
-        ChatException(describeHttpError(code, body), code, wrongEndpoint = noSuchPath(code))
+    private fun httpFailure(code: Int, body: String) = ChatException(
+        describeHttpError(code, body),
+        code,
+        wrongEndpoint = noSuchPath(code),
+        // An error code with a complaint written into it is a service that was found
+        // ("no such model: …"); the same code with a page for a body is not.
+        serviceSpoke = complainedIn(body),
+    )
+
+    /** Whether [body] is JSON with the service's own complaint in it. */
+    private fun complainedIn(body: String): Boolean =
+        runCatching { errorText(json.parseToJsonElement(body).jsonObject["error"]!!) }.getOrNull()?.isNotBlank() == true
 
     private fun describeHttpError(code: Int, body: String): String {
         val detail = runCatching { errorText(json.parseToJsonElement(body).jsonObject["error"]!!) }
@@ -469,9 +502,13 @@ internal fun probeBody(model: String): JsonObject = buildJsonObject {
  * OpenAI-shaped ones nest it under `error`, some just use `message`. Whichever it is, the
  * service's own words beat anything guessed here, so they are passed straight through.
  */
-internal fun notAChatReply(root: JsonObject): String {
-    val said = (root["msg"] ?: root["message"])?.jsonPrimitive?.contentOrNull
+/** The service's own words in an answer, if it wrote any: 智谱's `msg`, an OpenAI `error`, a bare `message`. */
+internal fun saidBy(root: JsonObject): String? =
+    (root["msg"] ?: root["message"])?.jsonPrimitive?.contentOrNull
         ?: root["error"]?.let { errorText(it) }
+
+internal fun notAChatReply(root: JsonObject): String {
+    val said = saidBy(root)
     return if (said.isNullOrBlank()) {
         "地址能连上，但它没有按聊天接口回话。多半是地址填到了别的层级。"
     } else {

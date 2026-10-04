@@ -109,7 +109,7 @@ class AddressFallbackTest {
     }
 
     @Test
-    fun `when neither address answers, the one complained about is the one that was typed`() = runBlocking {
+    fun `when neither address answers, the one complained about is the lower of the two`() = runBlocking {
         val tried = mutableListOf<String>()
         val failed = runCatching {
             atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
@@ -118,9 +118,11 @@ class AddressFallbackTest {
             }
         }.exceptionOrNull() as ChatException
         assertEquals(2, tried.size)
+        // Both are pages, so neither says more than the other — but /v1 is where the app ended
+        // up, and it is that address, not the one abandoned on the way, that is being reported.
         assertTrue(
             "${failed.message}",
-            failed.message!!.endsWith("https://relay.example.com/chat/completions"),
+            failed.message!!.endsWith("https://relay.example.com/v1/chat/completions"),
         )
     }
 
@@ -149,6 +151,35 @@ class AddressFallbackTest {
         val complained = runCatching { StreamParser().feed("""{"error":{"message":"context too long"}}""") }
             .exceptionOrNull() as ChatException
         assertFalse(complained.wrongEndpoint)
+    }
+
+    @Test
+    fun `when both addresses are wrong, the one that got words out of a service is reported`() = runBlocking {
+        // A relay whose front page answers everything, and whose /v1 is the real API: there it
+        // is a model name the API has never heard of. Reporting the page above it ("回的不是
+        // JSON") sends the person to check an address that was right all along.
+        val failed = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
+                if (!to.baseUrl.endsWith("/v1")) throw ChatException("地址能连上，但回的不是 JSON。", wrongEndpoint = true)
+                throw ChatException(
+                    "地址能连上，但它没有按聊天接口回话：no such model: claude-x",
+                    wrongEndpoint = true,
+                    serviceSpoke = true,
+                )
+            }
+        }.exceptionOrNull() as ChatException
+        assertTrue("${failed.message}", failed.message!!.contains("no such model"))
+    }
+
+    @Test
+    fun `when it is the address typed that spoke, its words are the ones kept`() = runBlocking {
+        val failed = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
+                if (to.baseUrl.endsWith("/v1")) throw ChatException("地址能连上，但回的不是 JSON。", wrongEndpoint = true)
+                throw ChatException("没有这个模型：claude-x", wrongEndpoint = true, serviceSpoke = true)
+            }
+        }.exceptionOrNull() as ChatException
+        assertEquals("没有这个模型：claude-x", failed.message)
     }
 
     @Test
@@ -295,6 +326,44 @@ class AddressFallbackOverHttpTest {
                 .exceptionOrNull() as ChatException
             assertTrue("${failed.message}", failed.message!!.contains("API Key"))
             assertEquals(listOf("/chat/completions"), seen)
+        } finally {
+            api.stop(0)
+        }
+    }
+
+    @Test
+    fun `a model the relay behind the page does not know is reported as that, not as a bad address`() = runBlocking {
+        val relay = server { path ->
+            // Exactly what stable.monkeyapi.net does: the SPA answers any path with itself,
+            // and /v1 is the API — which here says the model name is not one of its own.
+            if (path == "/v1/chat/completions") {
+                200 to """{"error":{"message":"no such model: Calude-sonnet-4.6"}}"""
+            } else {
+                200 to "<!doctype html><html><body>Just a moment...</body></html>"
+            }
+        }
+        try {
+            val failed = runCatching { client.probe(endpoint(relay.address.port)) }
+                .exceptionOrNull() as ChatException
+            assertTrue("${failed.message}", failed.message!!.contains("no such model"))
+        } finally {
+            relay.stop(0)
+        }
+    }
+
+    @Test
+    fun `a 404 carrying the service's own complaint is the one reported`() = runBlocking {
+        val api = server { path ->
+            if (path == "/v1/chat/completions") {
+                404 to """{"error":{"message":"model_not_found"}}"""
+            } else {
+                200 to "<!doctype html><html><body>Just a moment...</body></html>"
+            }
+        }
+        try {
+            val failed = runCatching { client.probe(endpoint(api.address.port)) }
+                .exceptionOrNull() as ChatException
+            assertTrue("${failed.message}", failed.message!!.contains("model_not_found"))
         } finally {
             api.stop(0)
         }
