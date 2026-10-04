@@ -105,6 +105,7 @@ class AppContainer(context: Context) {
         alarms = PhoneClock(context) { visible },
         calendar = calendar,
         music = music,
+        patBack = { id, suffix -> chat.patBack(id, suffix) },
     )
     val recaps = Recaps(db, settings, secrets, chatClient, appScope)
     val mcp = McpHub(

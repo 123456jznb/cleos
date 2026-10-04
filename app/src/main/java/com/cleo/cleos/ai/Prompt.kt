@@ -292,6 +292,8 @@ object Prompt {
         for (m in history) {
             if (m.role != "pat") continue
             val record = Pats.decode(m.content) ?: continue
+            // The TA's own pats are in its own calls; a heavy run is a turn of its own (toApi).
+            if (record.who == Pats.FROM_AI || Pats.heavy(record)) continue
             val next = theirs.firstOrNull { it.createdAt > m.createdAt }?.id ?: continue
             out.getOrPut(next) { mutableListOf() } += Pats.forModel(record)
         }
@@ -433,7 +435,9 @@ object Prompt {
         }
         "tool" -> if (withTools && toolCallId != null) ApiMessage("tool", content, toolCallId = toolCallId) else null
         // "note" lines and "request" cards are for the person reading the chat, not for the model;
-        // a "pat" is told with the person's next message (reactions()).
+        // a "pat" is told with the person's next message (reactions()), unless there were so many
+        // that the TA answers them: then it is a turn of its own, with the answer after it.
+        "pat" -> Pats.decode(content)?.takeIf(Pats::heavy)?.let { ApiMessage("user", Pats.forModel(it)) }
         else -> null
     }
 

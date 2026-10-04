@@ -14,6 +14,7 @@ import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageReactions
 import com.cleo.cleos.data.MessageThought
 import com.cleo.cleos.data.MessageThoughts
+import com.cleo.cleos.data.PatRecord
 import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
@@ -436,12 +437,51 @@ class ChatRepository(
                 val record = Pats.again(Pats.decode(last?.content), last?.createdAt ?: 0L, who, verb, suffix, now)
                 if (last != null && record.count > 1) {
                     db.messages().setPat(last.id, Pats.encode(record), now)
+                    if (record.count == Pats.HEAVY_AT) answerHeavyPats(conversationId, last.id)
                 } else {
                     db.messages().insert(
                         MessageEntity(conversationId = conversationId, role = "pat", content = Pats.encode(record), createdAt = now),
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * The TA patting the person (pat_user): a line in the chat, after what it has said so far.
+     * The person's phone buzzes for it (the chat does that when the line appears).
+     */
+    suspend fun patBack(conversationId: Long, suffix: String) {
+        val verb = settings.current().patVerb
+        withContext(NonCancellable) {
+            db.messages().insert(
+                MessageEntity(
+                    conversationId = conversationId,
+                    role = "pat",
+                    content = Pats.encode(PatRecord(Pats.FROM_AI, 1, verb, Pats.cleanSuffix(suffix))),
+                    createdAt = stamp(),
+                ),
+            )
+        }
+    }
+
+    /**
+     * Patted so many times in a row ([Pats.HEAVY_AT]): once they have stopped, a word or two back.
+     * Not if they have written something meanwhile (that gets its own answer, with the pats before
+     * it), if the TA is already answering, or if the TA may not pat back (its switch).
+     */
+    private fun answerHeavyPats(conversationId: Long, patId: Long) {
+        scope.launch {
+            if (ToolGroup.Pat !in settings.current().tools) return@launch
+            while (true) {
+                val row = db.messages().newest(conversationId, 1).firstOrNull()?.takeIf { it.id == patId && it.role == "pat" } ?: return@launch
+                val quietFor = System.currentTimeMillis() - row.createdAt
+                if (quietFor >= Pats.STREAK_MS + 500) break
+                delay(Pats.STREAK_MS + 500 - quietFor)
+            }
+            val ta = taOf(conversationId)
+            if (secrets.key(ta.modelFor(heard = false).baseUrl).isNullOrBlank()) return@launch
+            start(conversationId) { reply(conversationId) }
         }
     }
 

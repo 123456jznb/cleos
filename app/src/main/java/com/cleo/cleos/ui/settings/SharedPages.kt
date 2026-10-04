@@ -124,6 +124,14 @@ internal fun AbilitiesPage(vm: SettingsViewModel, onOpenVoice: () -> Unit) {
                 "所以名字起得像在说那张图最好。这个不需要模型支持工具。",
             on(ToolGroup.Stickers),
         ) { vm.setTool(ToolGroup.Stickers, it) }
+        RowDivider(inset = 0.dp)
+        ExplainedSwitch(
+            "拍回来",
+            "你拍 TA 之后，TA 有时会拍回来",
+            "TA 回你话的时候，偶尔会拍你一下，聊天里多一行“TA 拍了拍我”，手机震一下。你连着拍了很多下，TA 也会回一两句。" +
+                "拍回来要模型支持工具，连拍之后的那一句不用；关了这个开关，两样都停。",
+            on(ToolGroup.Pat),
+        ) { vm.setTool(ToolGroup.Pat, it) }
     }
 
     ListCard("记东西") {

@@ -539,6 +539,18 @@ fun ChatTab(
     val haptics = LocalHapticFeedback.current
     var editingPat by remember { mutableStateOf(false) }
     val buzz = state.patBuzz
+    // The TA patting back (pat_user): the phone buzzes once when its line has just come in. One from before
+    // (the chat opened later) doesn't.
+    val lastPat = state.messages.lastOrNull { it.role == "pat" }
+    var buzzedPat by remember { mutableStateOf(-1L) }
+    LaunchedEffect(lastPat?.id) {
+        val p = lastPat ?: return@LaunchedEffect
+        val fresh = System.currentTimeMillis() - p.createdAt < 5_000
+        if (buzz && fresh && p.id != buzzedPat && Pats.decode(p.content)?.who == Pats.FROM_AI) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            buzzedPat = p.id
+        }
+    }
     val patActions = remember(buzz) {
         PatActions(
             pat = { ai ->

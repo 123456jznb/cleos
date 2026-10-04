@@ -4,6 +4,7 @@ import com.cleo.cleos.data.AppSettings
 import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.DiaryBlock
 import com.cleo.cleos.data.DiaryBlocks
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.db.DiaryDao
 import com.cleo.cleos.data.db.DiaryEntryEntity
 import com.cleo.cleos.data.db.LetterEntity
@@ -42,7 +43,7 @@ import java.util.Locale
  * writes a sticker's name into what it says, so it is told about apart from the tools, and a model
  * that takes no tools sends them too.
  */
-enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar, Music, Stickers }
+enum class ToolGroup { Todos, Diary, AiDiary, Secrets, Avatar, Weather, Messages, Letters, Memory, Location, Speak, Later, Alarm, Calendar, Music, Stickers, Pat }
 
 /**
  * A function offered to the model, when any of its [groups] is on. [parameters] is a
@@ -312,8 +313,21 @@ object ToolSpecs {
         ),
     )
 
+    // Declared above `quiet`, which names it: an object's properties are initialized in the
+    // order they are written, so one that is read by an earlier one has to come first.
+    val patUser = ToolSpec(
+        name = "pat_user",
+        groups = setOf(ToolGroup.Pat),
+        action = "拍一拍",
+        description = "拍一拍对方，像聊天软件里双击头像：对方的手机会轻轻震一下，聊天里多一行“你拍了拍我”。" +
+            "对方拍了你、想撒娇、打招呼、逗一逗的时候用，用来代替一句话也行。要用就在回复之间用，一次回复最多一下，别回回都拍。",
+        parameters = schema(
+            "suffix" to prop("string", "拍在哪儿，接在“我”后面，比如 的头、的脸蛋，最多 12 个字；不填就是直接拍了拍我"),
+        ),
+    )
+
     /** Tools that leave no trace in the chat, neither a line nor "在…" while they run. */
-    val quiet = setOf(noteForLater.name)
+    val quiet = setOf(noteForLater.name, patUser.name)
 
     val setAlarm = ToolSpec(
         name = "set_alarm",
@@ -428,6 +442,7 @@ object ToolSpecs {
         updateEvent,
         deleteEvent,
         musicControl,
+        patUser,
     )
     val byName = all.associateBy { it.name }
 
@@ -503,6 +518,8 @@ class ToolBox(
     private val calendar: CalendarSource? = null,
     /** Whatever the phone is playing, for music_control. */
     private val music: MusicSource? = null,
+    /** Leaves a pat from the TA in a conversation (pat_user); the chat shows it, so the tool has no line of its own. */
+    private val patBack: suspend (conversationId: Long, suffix: String) -> Unit = { _, _ -> },
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) {
@@ -553,6 +570,7 @@ class ToolBox(
                 ToolSpecs.updateEvent.name -> updateEvent(args, today)
                 ToolSpecs.deleteEvent.name -> deleteEvent(args, today)
                 ToolSpecs.musicControl.name -> musicControl(args)
+                ToolSpecs.patUser.name -> patUser(args, conversationId)
                 else -> getWeather(args, settings)
             }
         } catch (f: ToolFailure) {
@@ -711,6 +729,11 @@ class ToolBox(
         EventDraft.NO_REMINDER -> "，不再提醒"
         0 -> "，到点提醒"
         else -> "，提前 ${LaterRules.span(minutes.toLong())}提醒"
+    }
+
+    private suspend fun patUser(a: JsonObject, conversationId: Long): ToolOutcome {
+        patBack(conversationId, Pats.cleanSuffix(ToolArgs.text(a, "suffix").orEmpty()))
+        return ToolOutcome("拍了拍对方，对方的手机会震一下，聊天里已经有这一行了，不用再说明。", "")
     }
 
     private suspend fun noteForLater(a: JsonObject, conversationId: Long, companionId: Long): ToolOutcome {
