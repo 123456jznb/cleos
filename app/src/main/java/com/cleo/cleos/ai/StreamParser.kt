@@ -32,7 +32,9 @@ internal class StreamParser {
     fun feed(data: String): List<ChatEvent> {
         val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return emptyList()
         obj["error"]?.let { throw ChatException("服务端报错：" + errorText(it)) }
-        val delta = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("delta") as? JsonObject
+        // A relay that ignores stream:true sends the whole reply as one JSON, under "message".
+        val choice = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+        val delta = (choice?.get("delta") ?: choice?.get("message")) as? JsonObject
             ?: return emptyList()
         val events = ArrayList<ChatEvent>(2)
         fun text(key: String) = (delta[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
@@ -46,6 +48,24 @@ internal class StreamParser {
         }
         text("content")?.let { events += think.split(it) }
         (delta["tool_calls"] as? JsonArray)?.forEach { piece -> (piece as? JsonObject)?.let(::addPiece) }
+        return events
+    }
+
+    /**
+     * What came back when it wasn't a stream at all: no `data:` line in the whole answer. Some
+     * relays then send the reply as one JSON (shown as it is), or an error as one (thrown, as it is
+     * in a stream); others send nothing, or a web page. Silently dropping those left an empty chat
+     * with no word on why, so what can't be read as a reply says what it was instead.
+     */
+    fun wholeReply(body: String): List<ChatEvent> {
+        val text = body.trim()
+        if (text.isEmpty()) {
+            throw ChatException("连上了，但服务什么内容都没回。多半是中转站不支持流式、这个模型名没开通，或者额度有问题。")
+        }
+        val events = feed(text) + finish()
+        if (events.isEmpty() && toolCalls().isEmpty()) {
+            throw ChatException("服务回的不是聊天内容：" + text.take(120))
+        }
         return events
     }
 

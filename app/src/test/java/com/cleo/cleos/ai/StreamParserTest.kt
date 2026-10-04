@@ -151,6 +151,37 @@ class StreamParserTest {
     fun anErrorInTheStreamThrows() {
         StreamParser().feed("""{"error":{"message":"context too long"}}""")
     }
+
+    @Test
+    fun aRelayThatIgnoresStreamingSendsTheWholeReplyAsOneJson() {
+        val events = StreamParser().wholeReply(
+            """{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"你好呀"},"finish_reason":"stop"}]}""",
+        )
+        assertEquals(listOf(ChatEvent.Delta("你好呀")), events)
+        // Pretty-printed over several lines, as it arrives line by line.
+        val p = StreamParser()
+        assertEquals(listOf(ChatEvent.Delta("嗯")), p.wholeReply("{\n \"choices\": [\n {\"message\": {\"content\": \"嗯\"}}\n ]\n}\n"))
+    }
+
+    @Test
+    fun aWholeReplyThatCallsAToolKeepsTheCall() {
+        val p = StreamParser()
+        val events = p.wholeReply(
+            """{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"add_todo","arguments":"{\"title\":\"x\"}"}}]}}]}""",
+        )
+        assertTrue(events.isEmpty())
+        assertEquals(listOf(ToolCall("call_1", "add_todo", """{"title":"x"}""")), p.toolCalls())
+    }
+
+    @Test
+    fun anAnswerThatIsNothingLikeAReplySaysSo() {
+        val empty = runCatching { StreamParser().wholeReply("  \n") }.exceptionOrNull() as ChatException
+        assertTrue(empty.message!!.contains("什么内容都没回"))
+        val page = runCatching { StreamParser().wholeReply("<html><body>Just a moment...</body></html>") }.exceptionOrNull() as ChatException
+        assertTrue(page.message!!.contains("Just a moment"))
+        val error = runCatching { StreamParser().wholeReply("""{"error":{"message":"model not found"}}""") }.exceptionOrNull() as ChatException
+        assertTrue(error.message!!.contains("model not found"))
+    }
 }
 
 class RequestBodyTest {

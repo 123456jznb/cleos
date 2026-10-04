@@ -138,14 +138,22 @@ class ChatClient(private val http: OkHttpClient) {
                     }
                     val source = response.body.source()
                     val parser = StreamParser()
+                    // What isn't a `data:` line is kept (a little of it): if the answer turns out not to be a stream at all, it is the answer.
+                    val stray = StringBuilder()
+                    var streamed = false
                     while (true) {
                         val line = source.readUtf8Line() ?: break
-                        if (!line.startsWith("data:")) continue
+                        if (!line.startsWith("data:")) {
+                            if (stray.length < STRAY_MAX) stray.append(line).append('\n')
+                            continue
+                        }
+                        streamed = true
                         val data = line.substring(5).trim()
                         if (data.isEmpty()) continue
                         if (data == "[DONE]") break
                         for (event in parser.feed(data)) send(event)
                     }
+                    if (!streamed) for (event in parser.wholeReply(stray.toString())) send(event)
                     for (event in parser.finish()) send(event)
                     parser.toolCalls().takeIf { it.isNotEmpty() }?.let { send(ChatEvent.ToolCalls(it)) }
                 }
@@ -255,6 +263,9 @@ class ChatClient(private val http: OkHttpClient) {
 
         /** How endpoints turn down a field they don't take: 400, 404 (OpenRouter), 422. */
         val REFUSED = setOf(400, 404, 422)
+
+        /** How much of an answer that isn't a stream is kept to be read as one (characters). */
+        const val STRAY_MAX = 200_000
     }
 }
 
