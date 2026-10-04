@@ -17,6 +17,7 @@ import com.cleo.cleos.ai.StreamingReply
 import com.cleo.cleos.data.MessageImage
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.PickedSticker
 import com.cleo.cleos.data.StickerException
 import com.cleo.cleos.data.db.MessageEntity
@@ -53,6 +54,10 @@ data class ChatUiState(
     val avatarEachMessage: Boolean = false,
     /** How big the chat's text is (ChatType). */
     val chatTextSize: Int = ChatType.DEFAULT,
+    /** 拍一拍 (Pats): the verb, what follows the TA's name, and whether the phone buzzes. */
+    val patVerb: String = Pats.VERB,
+    val patSuffix: String = "",
+    val patBuzz: Boolean = true,
     val model: String = "",
     /** What the TA keeps of the messages no longer sent verbatim. */
     val recap: String? = null,
@@ -133,6 +138,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 chatAvatars = s.chatAvatars,
                 avatarEachMessage = s.avatarEachMessage,
                 chatTextSize = s.chatTextSize,
+                patVerb = s.patVerb,
+                patSuffix = s.patSuffix,
+                patBuzz = s.patBuzz,
                 model = ta.apiModel,
                 recap = conversation?.recap,
                 recapUntil = conversation?.let { cv -> cv.recapUntilAt?.let { at -> at to (cv.recapUntilId ?: Long.MAX_VALUE) } },
@@ -201,6 +209,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (!c.chat.sendSticker(id, sticker.name, quoting)) return false
         quoting = null
         return true
+    }
+
+    /** 拍一拍: pats the TA ([ai]) or the person themself. A line in the chat, and no answer. */
+    fun pat(ai: Boolean) {
+        val s = state.value
+        val id = s.conversationId ?: return
+        c.chat.pat(id, if (ai) Pats.AI else Pats.ME, s.patVerb, s.patSuffix)
+    }
+
+    fun savePat(verb: String, suffix: String, buzz: Boolean) {
+        viewModelScope.launch {
+            c.settings.update { it.copy(patVerb = Pats.cleanVerb(verb), patSuffix = Pats.cleanSuffix(suffix), patBuzz = buzz) }
+        }
     }
 
     /** Puts [emoji] on one of the TA's messages, or takes it off again. */

@@ -7,6 +7,7 @@ import com.cleo.cleos.data.MessageImages
 import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageReactions
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.StickerBook
 import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.CompanionEntity
@@ -268,10 +269,11 @@ object Prompt {
     }
 
     /**
-     * What the person stuck on the TA's messages, by the message of theirs that came next: that is
-     * when the TA hears of it, in the order things happened, and there it stays from one request to
-     * the next (the cached prefix with it). One put on after their last message waits for the next.
-     * Only what is in [history] is told: a reaction on a message long gone from it is let go.
+     * What the person stuck on the TA's messages, and the pats (拍一拍) they gave, by the message
+     * of theirs that came next: that is when the TA hears of it, in the order things happened, and
+     * there it stays from one request to the next (the cached prefix with it). One put on after
+     * their last message waits for the next. Only what is in [history] is told: a reaction on a
+     * message long gone from it is let go.
      */
     private fun reactions(history: List<MessageEntity>): Map<Long, List<String>> {
         // The person's messages the model gets to read: one with nothing in it yet (a voice
@@ -286,6 +288,12 @@ object Prompt {
             list.groupBy { r -> theirs.firstOrNull { it.createdAt > r.at }?.id }.forEach { (next, put) ->
                 if (next != null) out.getOrPut(next) { mutableListOf() } += reactedLine(m, put.map { it.emoji })
             }
+        }
+        for (m in history) {
+            if (m.role != "pat") continue
+            val record = Pats.decode(m.content) ?: continue
+            val next = theirs.firstOrNull { it.createdAt > m.createdAt }?.id ?: continue
+            out.getOrPut(next) { mutableListOf() } += Pats.forModel(record)
         }
         return out
     }
@@ -424,7 +432,8 @@ object Prompt {
             }
         }
         "tool" -> if (withTools && toolCallId != null) ApiMessage("tool", content, toolCallId = toolCallId) else null
-        // "note" lines and "request" cards are for the person reading the chat, not for the model.
+        // "note" lines and "request" cards are for the person reading the chat, not for the model;
+        // a "pat" is told with the person's next message (reactions()).
         else -> null
     }
 

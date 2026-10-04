@@ -14,6 +14,7 @@ import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageReactions
 import com.cleo.cleos.data.MessageThought
 import com.cleo.cleos.data.MessageThoughts
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.SecretStore
 import com.cleo.cleos.data.SettingsRepository
 import com.cleo.cleos.data.StickerBook
@@ -416,6 +417,30 @@ class ChatRepository(
                 val m = db.messages().get(messageId)?.takeIf { it.role == "assistant" } ?: return@withLock
                 val next = MessageReactions.toggle(MessageReactions.decode(m.reactions), emoji, stamp())
                 db.messages().setReactions(messageId, MessageReactions.encode(next))
+            }
+        }
+    }
+
+    private val patting = Mutex()
+
+    /**
+     * 拍一拍: leaves a line in [conversationId], or adds one to the run of pats just before it.
+     * Nothing is answered: the TA hears of it with the person's next message (Prompt).
+     * [who] is [Pats.AI] or [Pats.ME].
+     */
+    fun pat(conversationId: Long, who: String, verb: String, suffix: String) {
+        scope.launch {
+            patting.withLock {
+                val last = db.messages().newest(conversationId, 1).firstOrNull()?.takeIf { it.role == "pat" }
+                val now = stamp()
+                val record = Pats.again(Pats.decode(last?.content), last?.createdAt ?: 0L, who, verb, suffix, now)
+                if (last != null && record.count > 1) {
+                    db.messages().setPat(last.id, Pats.encode(record), now)
+                } else {
+                    db.messages().insert(
+                        MessageEntity(conversationId = conversationId, role = "pat", content = Pats.encode(record), createdAt = now),
+                    )
+                }
             }
         }
     }

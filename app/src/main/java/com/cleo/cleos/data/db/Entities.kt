@@ -223,7 +223,8 @@ data class MessageEntity(
      * model asking to see a little secret; [content] is a SecretRequest as JSON, and the
      * card is for the person only) or "call" (a phone call with the TA, where it began;
      * [content] is a CallRecord as JSON, and what was said in it are the rows whose [call] is
-     * this row's id).
+     * this row's id) or "pat" (a 拍一拍 line; [content] is a PatRecord as JSON, and the TA hears
+     * of it with the person's next message).
      */
     val role: String,
     /** For "tool": the result exactly as the model saw it. */

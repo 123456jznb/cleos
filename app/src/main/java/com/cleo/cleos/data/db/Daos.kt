@@ -155,6 +155,10 @@ interface MessageDao {
     @Query("UPDATE messages SET reactions = :reactions WHERE id = :id")
     suspend fun setReactions(id: Long, reactions: String?)
 
+    /** A run of pats grown by one: its record, and the time it was last patted. */
+    @Query("UPDATE messages SET content = :content, createdAt = :at WHERE id = :id")
+    suspend fun setPat(id: Long, content: String, at: Long)
+
     /** The newest [limit] messages, newest first. Callers reverse them for the API. */
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC, id DESC LIMIT :limit")
     suspend fun newest(conversationId: Long, limit: Int): List<MessageEntity>

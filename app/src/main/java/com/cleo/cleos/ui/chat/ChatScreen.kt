@@ -113,6 +113,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -120,6 +121,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -159,6 +161,7 @@ import com.cleo.cleos.data.MessageQuote
 import com.cleo.cleos.data.MessageQuotes
 import com.cleo.cleos.data.MessageReactions
 import com.cleo.cleos.data.MessageThoughts
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.StickerBook
 import com.cleo.cleos.data.StickerText
 import com.cleo.cleos.data.db.MessageEntity
@@ -268,6 +271,8 @@ private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long
     val rows = ArrayList<ChatRow>(messages.size + 8)
     var newerSide: Boolean? = null
     var marked = false
+    // A pat (拍一拍) after the TA's last reply must not take its retry button away.
+    val last = messages.indexOfLast { it.role != "pat" }
     for (i in messages.indices.reversed()) {
         val m = messages[i]
         if (recapUntil != null && !marked && m.foldedBy(recapUntil)) {
@@ -277,7 +282,7 @@ private fun buildRows(messages: List<MessageEntity>, recapUntil: Pair<Long, Long
         }
         if (m.silent()) continue
         val side = m.side()
-        rows += ChatRow.Message(m, isLast = i == messages.lastIndex, showFace = eachFace || side == null || side != newerSide)
+        rows += ChatRow.Message(m, isLast = i == last, showFace = eachFace || side == null || side != newerSide)
         newerSide = side
         val prev = messages.getOrNull(i - 1)
         val gap = prev == null || m.createdAt - prev.createdAt > TIME_GAP_MS
@@ -530,6 +535,19 @@ fun ChatTab(
     val callsSaid = remember(state.messages) { state.messages.mapNotNullTo(HashSet()) { it.call } }
     // The chat's text, for the bubbles and for what is being typed alike.
     val chatType = remember(state.chatTextSize) { ChatType(state.chatTextSize) }
+    // 拍一拍 (Pats): a double tap on an avatar; the phone buzzes once unless that is switched off.
+    val haptics = LocalHapticFeedback.current
+    var editingPat by remember { mutableStateOf(false) }
+    val buzz = state.patBuzz
+    val patActions = remember(buzz) {
+        PatActions(
+            pat = { ai ->
+                if (buzz) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                vm.pat(ai)
+            },
+            edit = { editingPat = true },
+        )
+    }
     val faces = if (!state.chatAvatars) {
         null
     } else {
@@ -737,7 +755,20 @@ fun ChatTab(
         },
     ) {
         val inputTop = inputBottom + with(density) { inputHeight.toDp() }
-        CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook, LocalChatType provides chatType) {
+        CompositionLocalProvider(LocalFaces provides faces, LocalStickers provides stickerBook, LocalChatType provides chatType, LocalPat provides patActions) {
+            if (editingPat) {
+                PatDialog(
+                    aiName = state.aiName,
+                    verb = state.patVerb,
+                    suffix = state.patSuffix,
+                    buzz = state.patBuzz,
+                    onSave = { v, s, b ->
+                        vm.savePat(v, s, b)
+                        editingPat = false
+                    },
+                    onDismiss = { editingPat = false },
+                )
+            }
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
@@ -779,6 +810,7 @@ fun ChatTab(
                                 }
                                 // The person's answer to a request: their turn, drawn as a line on their side.
                                 m.role == "user" && note != null -> ToolNote(note, Icons.Rounded.Key, mine = true)
+                                m.role == "pat" -> PatLine(Pats.decode(m.content), state.aiName)
                                 m.thoughtOnly() -> {
                                     val thought = remember(m.thought) { MessageThoughts.decode(m.thought) }
                                     if (thought != null) ThoughtLine(thought.text, thought.ms, key = m.id)
@@ -1035,7 +1067,7 @@ private fun MessageBubble(
         // Without its face, the bubble still keeps the face's room: a run lines up.
         if (faces != null && !mine) {
             if (showFace) {
-                Avatar(faces.ai.file, faces.ai.letter, AvatarSize)
+                Avatar(faces.ai.file, faces.ai.letter, AvatarSize, Modifier.pattable(ai = true))
                 Spacer(Modifier.width(AvatarGap))
             } else {
                 Spacer(Modifier.width(AvatarSlot))
@@ -1176,7 +1208,7 @@ private fun MessageBubble(
         if (faces != null && mine) {
             if (showFace) {
                 Spacer(Modifier.width(AvatarGap))
-                Avatar(faces.me.file, faces.me.letter, AvatarSize)
+                Avatar(faces.me.file, faces.me.letter, AvatarSize, Modifier.pattable(ai = false))
             } else {
                 Spacer(Modifier.width(AvatarSlot))
             }

@@ -68,6 +68,10 @@ data class AppSettings(
     val avatarEachMessage: Boolean = false,
     /** How big the chat's text is, in sp (ChatType.SIZES). */
     val chatTextSize: Int = 15,
+    /** 拍一拍 (Pats): the verb's one character, what follows the TA's name, and whether the phone buzzes. */
+    val patVerb: String = Pats.VERB,
+    val patSuffix: String = "",
+    val patBuzz: Boolean = true,
     /** The colour of the person's own bubbles (ARGB), still glass; null follows the wallpaper. */
     val myBubble: Int? = null,
     /** The notification permission was asked for once already; after that it is theirs to change in settings. */
@@ -167,6 +171,9 @@ class SettingsRepository(private val context: Context) {
         val chatAvatars = booleanPreferencesKey("chat_avatars")
         val avatarEachMessage = booleanPreferencesKey("avatar_each_message")
         val chatTextSize = intPreferencesKey("chat_text_size")
+        val patVerb = stringPreferencesKey("pat_verb")
+        val patSuffix = stringPreferencesKey("pat_suffix")
+        val patBuzz = booleanPreferencesKey("pat_buzz")
         val myBubble = intPreferencesKey("my_bubble")
         val notificationsAsked = booleanPreferencesKey("notifications_asked")
         val letterReply = stringPreferencesKey("letter_reply")
@@ -218,6 +225,9 @@ class SettingsRepository(private val context: Context) {
             chatAvatars = this[Keys.chatAvatars] ?: d.chatAvatars,
             avatarEachMessage = this[Keys.avatarEachMessage] ?: d.avatarEachMessage,
             chatTextSize = this[Keys.chatTextSize] ?: d.chatTextSize,
+            patVerb = this[Keys.patVerb]?.takeIf { it.isNotBlank() } ?: d.patVerb,
+            patSuffix = this[Keys.patSuffix] ?: d.patSuffix,
+            patBuzz = this[Keys.patBuzz] ?: d.patBuzz,
             myBubble = this[Keys.myBubble],
             notificationsAsked = this[Keys.notificationsAsked] ?: d.notificationsAsked,
             letterReply = ReplyWhen.of(this[Keys.letterReply]),
@@ -256,6 +266,9 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.chatAvatars] = next.chatAvatars
             prefs[Keys.avatarEachMessage] = next.avatarEachMessage
             prefs[Keys.chatTextSize] = next.chatTextSize
+            prefs[Keys.patVerb] = next.patVerb
+            prefs[Keys.patSuffix] = next.patSuffix
+            prefs[Keys.patBuzz] = next.patBuzz
             if (next.myBubble != null) prefs[Keys.myBubble] = next.myBubble else prefs.remove(Keys.myBubble)
             prefs[Keys.notificationsAsked] = next.notificationsAsked
             prefs[Keys.letterReply] = next.letterReply.key
