@@ -78,6 +78,11 @@ class SpeechTest {
         assertEquals("mp3", mm["audio_setting"]!!.jsonObject["format"]!!.jsonPrimitive.content)
         assertEquals("hex", mm["output_format"]!!.jsonPrimitive.content)
         assertEquals(Speech.ELEVENLABS_MODEL, obj(Speech.elevenLabsBody("", "晚安"))["model_id"]!!.jsonPrimitive.content)
+        // Zhipu's GLM-TTS has no mp3: wav there, mp3 everywhere else.
+        assertEquals("wav", Speech.speechFormat("https://open.bigmodel.cn/api/paas/v4", "glm-tts"))
+        assertEquals("wav", Speech.speechFormat("https://relay.example.com/v1", "GLM-TTS"))
+        assertEquals("mp3", Speech.speechFormat("https://relay.example.com/v1", "tts-1"))
+        assertEquals("wav", obj(Speech.openAiBody("glm-tts", "tongtong", "晚安", format = "wav"))["response_format"]!!.jsonPrimitive.content)
         assertEquals("https://api.example.com/v1/audio/speech", Speech.speechUrl("https://api.example.com/v1/"))
         assertEquals("https://api.example.com/v1/audio/speech", Speech.speechUrl("https://api.example.com/v1/chat/completions"))
         assertEquals("wav", Speech.extension("audio/wav; charset=binary"))

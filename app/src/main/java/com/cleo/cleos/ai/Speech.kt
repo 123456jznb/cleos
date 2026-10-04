@@ -170,12 +170,29 @@ object Speech {
     fun speechUrl(baseUrl: String): String =
         baseUrl.trim().trimEnd('/').removeSuffix("/chat/completions").let { if (it.endsWith("/audio/speech")) it else "$it/audio/speech" }
 
+    /**
+     * The audio format to ask a hand-filled OpenAI-shaped service for: mp3 almost everywhere, but
+     * Zhipu's GLM-TTS (open.bigmodel.cn, api.z.ai) only has wav and pcm, and answers 400 / 1214
+     * ("不支持当前response_format值") to mp3. pcm has no header and can't be played as a file, so wav.
+     */
+    fun speechFormat(baseUrl: String, model: String): String {
+        val host = baseUrl.trim().substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+        val zhipu = host == "bigmodel.cn" || host.endsWith(".bigmodel.cn") || host == "z.ai" || host.endsWith(".z.ai")
+        return if (zhipu || model.trim().lowercase().startsWith("glm-tts")) "wav" else "mp3"
+    }
+
     /** OpenAI's /audio/speech, which SiliconFlow and Mossland take too: Mossland wants the voice as voice_id. */
-    fun openAiBody(model: String, voice: String, text: String, voiceField: String = "voice"): String = buildJsonObject {
+    fun openAiBody(
+        model: String,
+        voice: String,
+        text: String,
+        voiceField: String = "voice",
+        format: String = "mp3",
+    ): String = buildJsonObject {
         put("model", model.trim())
         put("input", text)
         if (voice.isNotBlank()) put(voiceField, voice.trim())
-        put("response_format", "mp3")
+        put("response_format", format)
     }.toString()
 
     fun elevenLabsBody(model: String, text: String): String = buildJsonObject {
@@ -328,7 +345,11 @@ class Speaker(
             VoiceService.SiliconFlow -> openAi(Speech.SILICONFLOW_BASE, key, Speech.openAiBody(Speech.SILICONFLOW_MODEL, voice, words))
             VoiceService.OpenAI -> openAi(Speech.OPENAI_BASE, key, Speech.openAiBody(Speech.OPENAI_MODEL, voice, words))
             VoiceService.Mossland -> openAi(Speech.MOSSLAND_BASE, key, Speech.openAiBody(Speech.MOSSLAND_MODEL, voice, words, voiceField = "voice_id"))
-            VoiceService.Other -> openAi(s.speechBaseUrl, key, Speech.openAiBody(s.speechModel, voice, words))
+            VoiceService.Other -> openAi(
+                s.speechBaseUrl,
+                key,
+                Speech.openAiBody(s.speechModel, voice, words, format = Speech.speechFormat(s.speechBaseUrl, s.speechModel)),
+            )
             VoiceService.ElevenLabs -> fetch(
                 Request.Builder()
                     .url("${Speech.ELEVENLABS_BASE}/text-to-speech/$voice")
