@@ -46,7 +46,15 @@ enum class VoiceService(val key: String, val label: String) {
 /** One voice a service offers: what goes in the request, and what the person reads. */
 data class VoiceOption(val id: String, val label: String)
 
-class SpeechException(message: String) : Exception(message)
+/**
+ * A failure with a message already worded for the person using the app. [wrongEndpoint] is the
+ * same flag the chat's [ChatException] carries: a page came back, or nothing is at that path,
+ * so the address is worth one more try a level down (see [atRightAddress]).
+ */
+class SpeechException(
+    message: String,
+    override val wrongEndpoint: Boolean = false,
+) : Exception(message), EndpointFailure
 
 /** The TA's voice: each service's request and answer. Nothing here touches the network. */
 object Speech {
@@ -345,11 +353,16 @@ class Speaker(
             VoiceService.SiliconFlow -> openAi(Speech.SILICONFLOW_BASE, key, Speech.openAiBody(Speech.SILICONFLOW_MODEL, voice, words))
             VoiceService.OpenAI -> openAi(Speech.OPENAI_BASE, key, Speech.openAiBody(Speech.OPENAI_MODEL, voice, words))
             VoiceService.Mossland -> openAi(Speech.MOSSLAND_BASE, key, Speech.openAiBody(Speech.MOSSLAND_MODEL, voice, words, voiceField = "voice_id"))
-            VoiceService.Other -> openAi(
-                s.speechBaseUrl,
-                key,
-                Speech.openAiBody(s.speechModel, voice, words, format = Speech.speechFormat(s.speechBaseUrl, s.speechModel)),
-            )
+            // A hand-filled address is the same address the chat uses, so it gets the same
+            // second try when what came back says the path is wrong (see atRightAddress): the
+            // relay that needed /v1 for the chat needs it for the voice too.
+            VoiceService.Other -> atRightAddress(ApiEndpoint(s.speechBaseUrl, key, s.speechModel)) { to ->
+                openAi(
+                    to.baseUrl,
+                    key,
+                    Speech.openAiBody(to.model, voice, words, format = Speech.speechFormat(to.baseUrl, to.model)),
+                )
+            }
             VoiceService.ElevenLabs -> fetch(
                 Request.Builder()
                     .url("${Speech.ELEVENLABS_BASE}/text-to-speech/$voice")
@@ -416,9 +429,13 @@ class Speaker(
         try {
             http.fetch(request) { r ->
                 val type = r.header("Content-Type")
-                if (!r.isSuccessful) throw SpeechException(describe(r.code, r.body.string()))
+                if (!r.isSuccessful) {
+                    throw SpeechException(describe(r.code, r.body.string()), wrongEndpoint = noSuchPath(r.code))
+                }
                 if (type != null && (type.startsWith("application/json") || type.startsWith("text/"))) {
-                    throw SpeechException("回来的不是声音：${r.body.string().take(120)}")
+                    // A page or an API's complaint where audio should be: whatever was asked
+                    // for is not at this address.
+                    throw SpeechException("回来的不是声音：${r.body.string().take(120)}", wrongEndpoint = true)
                 }
                 r.body.bytes() to type
             }

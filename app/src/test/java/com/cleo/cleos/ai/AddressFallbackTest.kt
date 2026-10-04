@@ -150,6 +150,89 @@ class AddressFallbackTest {
             .exceptionOrNull() as ChatException
         assertFalse(complained.wrongEndpoint)
     }
+
+    @Test
+    fun `an address nobody has typed a host into gets no second try`() {
+        assertNull(endpoint("").withV1)
+        assertNull(endpoint("   ").withV1)
+        // No scheme: OkHttp would not take it either, so there is nothing to hang /v1 under.
+        assertNull(endpoint("monkeyapi.net").withV1)
+    }
+
+    @Test
+    fun `the voice too is asked again a level down`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val say: suspend (ApiEndpoint) -> String = { to ->
+            tried += Speech.speechUrl(to.baseUrl)
+            if (tried.size == 1) throw SpeechException("回来的不是声音：<html>…</html>", wrongEndpoint = true)
+            "声音"
+        }
+        assertEquals("声音", atRightAddress(endpoint("https://relay.example.com"), HashMap(), say))
+        assertEquals(
+            listOf(
+                "https://relay.example.com/audio/speech",
+                "https://relay.example.com/v1/audio/speech",
+            ),
+            tried,
+        )
+    }
+
+    @Test
+    fun `a transcription is asked for at the same two addresses`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val hear: suspend (ApiEndpoint) -> String = { to ->
+            tried += Voice.url(to.baseUrl)
+            if (tried.size == 1) throw ChatException("服务回的不是转写结果：<html>…</html>", wrongEndpoint = true)
+            "听到了"
+        }
+        assertEquals("听到了", atRightAddress(endpoint("https://relay.example.com"), HashMap(), hear))
+        assertEquals(
+            listOf(
+                "https://relay.example.com/audio/transcriptions",
+                "https://relay.example.com/v1/audio/transcriptions",
+            ),
+            tried,
+        )
+    }
+
+    @Test
+    fun `a voice service that turns the key down is not asked again somewhere else`() = runBlocking {
+        val tried = mutableListOf<String>()
+        val failed = runCatching {
+            atRightAddress(endpoint("https://relay.example.com"), HashMap()) { to ->
+                tried += Speech.speechUrl(to.baseUrl)
+                throw SpeechException("Key 不对，或者已经失效了", wrongEndpoint = false)
+            }
+        }.exceptionOrNull() as SpeechException
+        assertEquals("Key 不对，或者已经失效了", failed.message)
+        assertEquals(listOf("https://relay.example.com/audio/speech"), tried)
+    }
+
+    @Test
+    fun `what the chat learned, the voice does not pay for again`() = runBlocking {
+        // A host of its own: the learned addresses are shared by the whole app for the run
+        // (AddressMemory), which is the point — the voice goes to the address the chat is set to.
+        val typed = endpoint("https://learned-${System.nanoTime()}.example.com")
+        val tried = mutableListOf<String>()
+        val chat: suspend (ApiEndpoint) -> String = { to ->
+            tried += to.chatUrl
+            if (!to.baseUrl.endsWith("/v1")) throw ChatException("回的不是 JSON", wrongEndpoint = true)
+            "连上了"
+        }
+        atRightAddress(typed, attempt = chat)
+        atRightAddress(typed) { to ->
+            tried += Speech.speechUrl(to.baseUrl)
+            "声音"
+        }
+        assertEquals(
+            listOf(
+                typed.chatUrl,
+                "${typed.baseUrl}/v1/chat/completions",
+                "${typed.baseUrl}/v1/audio/speech",
+            ),
+            tried,
+        )
+    }
 }
 
 /**

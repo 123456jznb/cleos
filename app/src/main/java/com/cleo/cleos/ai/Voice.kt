@@ -94,21 +94,32 @@ class Transcriber(http: OkHttpClient, private val secrets: SecretStore) {
     suspend fun transcribe(baseUrl: String, model: String, file: File): String = withContext(Dispatchers.IO) {
         val key = secrets.key(baseUrl)?.takeIf { it.isNotBlank() }
             ?: throw ChatException("语音转文字的服务还没有填 Key，去设置「发语音」里填上。")
+        // The same second try the chat makes, for the same reason: an address copied off a
+        // relay's front page can be missing the version segment its API hangs off, and it is
+        // the same address the chat is set to (see atRightAddress). The key stays the one
+        // filed for the address as typed — that is where it is filed.
+        atRightAddress(ApiEndpoint(baseUrl, key, model)) { to -> sendVoiceTo(to, file) }
+    }
+
+    private suspend fun sendVoiceTo(to: ApiEndpoint, file: File): String {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("model", model.trim())
+            .addFormDataPart("model", to.model.trim())
             .addFormDataPart("file", file.name, file.asRequestBody(WAV))
             .build()
         val request = Request.Builder()
-            .url(Voice.url(baseUrl))
-            .header("Authorization", "Bearer $key")
+            .url(Voice.url(to.baseUrl))
+            .header("Authorization", "Bearer ${to.apiKey}")
             .post(body)
             .build()
-        try {
+        return try {
             http.fetch(request) { response ->
                 val text = response.body.string()
-                if (!response.isSuccessful) throw ChatException(describe(response.code, text), response.code)
-                Voice.text(text) ?: throw ChatException("服务回的不是转写结果：${text.take(80)}")
+                if (!response.isSuccessful) {
+                    throw ChatException(describe(response.code, text), response.code, wrongEndpoint = noSuchPath(response.code))
+                }
+                // A page where a transcription should be: the address, not the recording.
+                Voice.text(text) ?: throw ChatException("服务回的不是转写结果：${text.take(80)}", wrongEndpoint = true)
             }
         } catch (e: IOException) {
             throw ChatException(
