@@ -56,6 +56,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
@@ -124,6 +125,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -370,6 +372,8 @@ fun ChatTab(
     // Calls: the settings page that has what is missing before one can begin, and the call whose words are open.
     var askCallSetup by remember { mutableStateOf<SettingsPage?>(null) }
     var readingCall by remember { mutableStateOf<Long?>(null) }
+    // The "tool" row whose call is open: what was asked of the tool, and what it answered.
+    var readingTool by remember { mutableStateOf<Long?>(null) }
     val askMicForCall = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.call() else voiceHint = "要给 Cleos 用话筒的权限，才能打电话"
     }
@@ -765,7 +769,11 @@ fun ChatTab(
                             when {
                                 m.role == "call" -> CallNote(m, said = m.id in callsSaid) { readingCall = m.id }
                                 m.role == "tool" || m.role == "note" ->
-                                    ToolNote(note.orEmpty(), if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome)
+                                    ToolNote(
+                                        note.orEmpty(),
+                                        if (m.role == "note") Icons.Rounded.Info else Icons.Rounded.AutoAwesome,
+                                        onClick = if (m.role == "tool") ({ readingTool = m.id }) else null,
+                                    )
                                 m.role == "request" -> RequestCard(m, state.aiName, enabled = !state.replying) { grant ->
                                     vm.answerSecret(m.id, grant)
                                 }
@@ -876,6 +884,13 @@ fun ChatTab(
                 },
                 onDismiss = { readingCall = null },
             )
+        }
+    }
+
+    readingTool?.let { id ->
+        state.messages.firstOrNull { it.id == id && it.role == "tool" }?.let { row ->
+            val detail = remember(id, state.messages) { ToolDetails.find(state.messages, row) }
+            ToolDetailDialog(detail, onDismiss = { readingTool = null })
         }
     }
 
@@ -1524,7 +1539,7 @@ private fun AskCard(ask: McpAsk, aiName: String, onAnswer: (ChatRepository.Answe
  * own, like the error lines: it sits on the wallpaper.
  */
 @Composable
-private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, mine: Boolean = false) {
+private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, mine: Boolean = false, onClick: (() -> Unit)? = null) {
     val palette = LocalGlassPalette.current
     val slot = if (LocalFaces.current != null) AvatarSlot else 0.dp
     Box(
@@ -1539,7 +1554,10 @@ private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, 
             shape = GlassShape.Rounded(14.dp),
             contentPadding = PaddingValues(start = 10.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
                     icon,
                     contentDescription = null,
@@ -1548,10 +1566,59 @@ private fun ToolNote(text: String, icon: ImageVector, running: Boolean = false, 
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(text, color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 18.sp)
+                if (onClick != null) Text("  ›", color = palette.contentSecondary, fontSize = 13.sp, lineHeight = 18.sp)
             }
         }
     }
 }
+
+/** A tool call opened from its line in the chat: what was asked of the tool, and what it answered, to read and copy. */
+@Composable
+private fun ToolDetailDialog(detail: ToolDetail, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("调用工具: ${detail.name}") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (detail.arguments.isNotBlank()) ToolDetailBlock("参数", detail.arguments)
+                ToolDetailBlock("结果", detail.result.ifBlank { "（空）" })
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关上") } },
+    )
+}
+
+/** One labelled piece of text with a copy button; long ones are cut on screen, and copied whole. */
+@Composable
+private fun ToolDetailBlock(label: String, text: String) {
+    val palette = LocalGlassPalette.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val shown = if (text.length > TOOL_DETAIL_SHOWN) text.take(TOOL_DETAIL_SHOWN) + "\n…（太长，这里只显示前 $TOOL_DETAIL_SHOWN 字，复制的是全文）" else text
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = palette.accentContent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        TextButton(onClick = { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text))) } }) { Text("复制") }
+    }
+    SelectionContainer {
+        Text(
+            shown,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(palette.contentSecondary.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+                .padding(10.dp),
+        )
+    }
+}
+
+private const val TOOL_DETAIL_SHOWN = 20_000
 
 /**
  * A phone call in the chat: one line where it began, saying how long it went on, in place of
