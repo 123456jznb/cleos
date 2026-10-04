@@ -18,8 +18,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -53,10 +56,13 @@ import com.cleo.cleos.R
 import com.cleo.cleos.Releases
 import com.cleo.cleos.ai.Voice
 import com.cleo.cleos.data.GlassMode
+import com.cleo.cleos.data.PatRecord
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.glass.GlassShape
 import com.cleo.cleos.glass.GlassSurface
 import com.cleo.cleos.glass.LocalGlassPalette
 import com.cleo.cleos.ui.chat.ChatType
+import com.cleo.cleos.ui.chat.PatDialog
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -122,6 +128,41 @@ internal fun ChatPage(vm: SettingsViewModel) {
                 "像微信那样每条消息都带头像；关着时，连着的几条只在最后一条旁边放一个。",
                 settings.avatarEachMessage,
             ) { vm.setAvatarEachMessage(it) }
+        }
+    }
+
+    // 拍一拍: a double tap on an avatar says it, and the long press in the chat opens the very
+    // same dialog — here as well, since a double tap is not a thing anyone is told to try.
+    ListCard("拍一拍") {
+        var editing by remember { mutableStateOf(false) }
+        val said = Pats.line(PatRecord(Pats.AI, 1, settings.patVerb, settings.patSuffix), vm.aiName)
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("双击头像拍一下", color = palette.content, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "现在拍出来是「$said」。TA 不会为它单独回话，下次你说话时才知道。",
+                    color = palette.contentSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Chip("改一改", selected = false) { editing = true }
+        }
+        RowDivider(inset = 0.dp)
+        ExplainedSwitch("拍的时候震一下", "拍一下时手机跟着轻轻震一下", null, settings.patBuzz) { vm.setPatBuzz(it) }
+        if (editing) {
+            PatDialog(
+                aiName = vm.aiName,
+                verb = settings.patVerb,
+                suffix = settings.patSuffix,
+                buzz = settings.patBuzz,
+                onSave = { verb, suffix, buzz ->
+                    vm.setPat(verb, suffix, buzz)
+                    editing = false
+                },
+                onDismiss = { editing = false },
+            )
         }
     }
 }

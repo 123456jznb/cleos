@@ -30,6 +30,7 @@ import com.cleo.cleos.data.Companions
 import com.cleo.cleos.data.GlassMode
 import com.cleo.cleos.data.ImportException
 import com.cleo.cleos.data.ImportPlan
+import com.cleo.cleos.data.Pats
 import com.cleo.cleos.data.db.CompanionEntity
 import com.cleo.cleos.data.db.LaterEntity
 import com.cleo.cleos.data.db.WakeEntity
@@ -281,6 +282,19 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun setAvatarEachMessage(on: Boolean) {
         viewModelScope.launch { c.settings.update { it.copy(avatarEachMessage = on) } }
+    }
+
+    /** 拍一拍: the verb, what follows the TA's name, and the buzz — what the chat's dialog edits too. */
+    fun setPat(verb: String, suffix: String, buzz: Boolean) {
+        viewModelScope.launch {
+            c.settings.update {
+                it.copy(patVerb = Pats.cleanVerb(verb), patSuffix = Pats.cleanSuffix(suffix), patBuzz = buzz)
+            }
+        }
+    }
+
+    fun setPatBuzz(on: Boolean) {
+        viewModelScope.launch { c.settings.update { it.copy(patBuzz = on) } }
     }
 
     /** Removes this TA with their conversations and diary; [then] leaves the screen. */
