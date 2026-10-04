@@ -286,6 +286,108 @@ object PhoneAssistantBackup {
 }
 
 /**
+ * Memory as it comes from any file that isn't this app's own backup: a JSON array, a JSON
+ * object wrapping one, or plain text / Markdown. Every entry becomes one topic about the
+ * person ("profile" unless the file says otherwise); what is already here is matched by name.
+ */
+object ForeignMemory {
+    private val NAME_KEYS = listOf("name", "title", "topic", "key", "label")
+    private val SUMMARY_KEYS = listOf("summary", "content", "text", "value", "body", "description", "note", "fact")
+    private val DETAIL_KEYS = listOf("details", "items", "notes", "list", "bullets")
+    private val KIND_KEYS = listOf("kind", "category", "type")
+    private val WRAPPER_KEYS = listOf("memories", "memory", "facts", "items", "list", "data", "entries")
+
+    /** Reads a third-party memory file. Throws [ImportException] when nothing can be read. */
+    fun parse(text: String): List<ImportedMemory> {
+        val body = text.trim()
+        if (body.isEmpty()) throw ImportException("文件是空的")
+        val json = runCatching { Json.parseToJsonElement(body) }.getOrNull()
+        val items = if (json != null) fromJson(json) else fromText(body)
+        if (items.isEmpty()) throw ImportException("没读出来记忆：文件里没有能当成记忆的条目")
+        return items
+    }
+
+    private fun fromJson(root: JsonElement): List<ImportedMemory> {
+        val elements: List<JsonElement> = when (root) {
+            is JsonArray -> root
+            is JsonObject -> WRAPPER_KEYS.firstNotNullOfOrNull { root[it] as? JsonArray } ?: listOf(root)
+            else -> emptyList()
+        }
+        return elements.mapNotNull { element(it) }
+    }
+
+    private fun element(e: JsonElement): ImportedMemory? = when (e) {
+        is JsonPrimitive -> e.contentOrNull?.trim()?.takeIf { it.isNotEmpty() && e.isString }?.let { plain(it) }
+        is JsonObject -> {
+            val name = key(e, NAME_KEYS)
+            val summary = key(e, SUMMARY_KEYS)
+            val details = strings(DETAIL_KEYS.firstNotNullOfOrNull { e[it] })
+            if (name.isNullOrBlank() && summary.isNullOrBlank() && details.isEmpty()) {
+                null
+            } else {
+                ImportedMemory(
+                    kind = MemoryKinds.of(key(e, KIND_KEYS)?.lowercase())?.key ?: "profile",
+                    name = name?.trim().orEmpty().ifEmpty { (summary ?: "").trim().take(NAME_FROM_SUMMARY) },
+                    summary = summary?.trim().orEmpty().ifEmpty { name?.trim().orEmpty() },
+                    details = details,
+                    pinned = (e["pinned"] as? JsonPrimitive)?.booleanOrNull == true,
+                    createdAt = 0L,
+                    updatedAt = 0L,
+                )
+            }
+        }
+        else -> null
+    }
+
+    private fun key(o: JsonObject, keys: List<String>): String? = keys.firstNotNullOfOrNull { k ->
+        (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.ifEmpty { null }
+    }
+
+    private fun strings(e: JsonElement?): List<String> = when (e) {
+        is JsonArray -> e.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.ifEmpty { null } }
+        is JsonPrimitive -> listOfNotNull(e.contentOrNull?.trim()?.ifEmpty { null })
+        else -> emptyList()
+    }
+
+    /** One plain line: "名字: 内容" splits into a name and a summary, anything else is its own. */
+    private fun plain(s: String): ImportedMemory {
+        val m = SPLIT.find(s.trim())
+        val name = m?.groupValues?.get(1)?.trim().orEmpty().ifEmpty { s.trim().take(NAME_FROM_SUMMARY) }
+        val summary = m?.groupValues?.get(2)?.trim().orEmpty().ifEmpty { s.trim() }
+        return ImportedMemory("profile", name, summary, emptyList(), false, 0L, 0L)
+    }
+
+    /** Plain text / Markdown: blank lines and bullets split topics, the rest joins into one. */
+    private fun fromText(text: String): List<ImportedMemory> {
+        val out = mutableListOf<ImportedMemory>()
+        val buffer = StringBuilder()
+        fun flush() {
+            val s = buffer.toString().trim()
+            buffer.setLength(0)
+            if (s.isNotEmpty()) out += plain(s)
+        }
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            if (line.isEmpty()) { flush(); continue }
+            val bullet = BULLET.find(line)
+            if (bullet != null) {
+                flush()
+                val t = line.substring(bullet.value.length).trim()
+                if (t.isNotEmpty()) out += plain(t)
+            } else {
+                buffer.appendLine(line.removePrefix("#").trim())
+            }
+        }
+        flush()
+        return out
+    }
+
+    private const val NAME_FROM_SUMMARY = 12
+    private val SPLIT = Regex("^([^:：]{1,24})[:：]\\s*(.+)$")
+    private val BULLET = Regex("^(?:[-*+•]|\\d+[.、)])\\s+")
+}
+
+/**
  * Brings a backup from another app in as a new TA. Nothing already here is touched, so
  * undoing it is deleting that TA.
  */
@@ -365,6 +467,33 @@ class ForeignImport(
                 val merged = (old + m.details.filter { it !in old }).take(MemoryKinds.DETAILS)
                 if (merged.size > old.size) {
                     // Filling in isn't news: the topic keeps the date it was last noted.
+                    db.memories().update(same.copy(details = MemoryDetails.encode(merged), updatedAt = maxOf(same.updatedAt, m.updatedAt)))
+                    details += merged.size - old.size
+                }
+            }
+        }
+        added to details
+    }
+
+    /** Brings memory in from any third-party file: nothing already here is touched. */
+    suspend fun importForeignMemories(uri: Uri, companionId: Long): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val bytes = resolver.openInputStream(uri)?.use { readAtMost(it, MAX_BYTES) } ?: throw ImportException("打不开这个文件")
+        val imported = ForeignMemory.parse(bytes.decodeToString())
+        var added = 0
+        var details = 0
+        val now = System.currentTimeMillis()
+        db.withTransaction {
+            val have = db.memories().allFor(companionId)
+            for (m in imported) {
+                val same = have.firstOrNull { it.name.trim() == m.name.trim() }
+                if (same == null) {
+                    db.memories().insert(m.entity(companionId, now))
+                    added++
+                    continue
+                }
+                val old = MemoryDetails.decode(same.details)
+                val merged = (old + m.details.filter { it !in old }).take(MemoryKinds.DETAILS)
+                if (merged.size > old.size) {
                     db.memories().update(same.copy(details = MemoryDetails.encode(merged), updatedAt = maxOf(same.updatedAt, m.updatedAt)))
                     details += merged.size - old.size
                 }
