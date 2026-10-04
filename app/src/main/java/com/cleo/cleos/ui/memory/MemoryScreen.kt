@@ -74,6 +74,8 @@ fun MemoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
     val name = ta?.name?.trim()?.ifEmpty { null } ?: "TA"
     var message by remember { mutableStateOf<String?>(null) }
     var filling by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val id = ta?.id
         if (uri != null && id != null) {
@@ -88,6 +90,23 @@ fun MemoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
                     "出错了：${e.message ?: e.javaClass.simpleName}"
                 }
                 filling = false
+            }
+        }
+    }
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val id = ta?.id
+        if (uri != null && id != null) {
+            importing = true
+            scope.launch {
+                note = try {
+                    val (added, details) = c.imports.importForeignMemories(uri, id)
+                    if (added == 0 && details == 0) "都有了，没有要导入的。" else "导入了：新加 $added 件事，$details 条细节。"
+                } catch (e: ImportException) {
+                    e.message
+                } catch (e: Exception) {
+                    "出错了：${e.message ?: e.javaClass.simpleName}"
+                }
+                importing = false
             }
         }
     }
@@ -154,6 +173,31 @@ fun MemoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
                             Text(if (filling) "正在补…" else "从备份补上记忆", color = palette.content, fontSize = 14.sp)
                         }
                         message?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
+                    }
+                }
+            }
+            item(key = "foreign") {
+                GlassSurface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = GlassShape.Rounded(22.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "导入第三方记忆：认 JSON（[\"记忆\", …] 或 [{name,summary,details}] 或 {memories:[…]}）和纯文本 / Markdown（一段一条，或 - 列表；「标题: 内容」拆成名字和内容）。导进当前 TA，同名的合并。",
+                            color = palette.contentSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                        )
+                        Box(
+                            Modifier
+                                .background(palette.content.copy(alpha = 0.07f), CircleShape)
+                                .clickable(interactionSource = null, indication = null) { if (!importing) importPicker.launch(arrayOf("*/*")) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            Text(if (importing) "正在导入…" else "导入记忆文件", color = palette.content, fontSize = 14.sp)
+                        }
+                        note?.let { Text(it, color = palette.content, fontSize = 13.sp, lineHeight = 19.sp) }
                     }
                 }
             }
